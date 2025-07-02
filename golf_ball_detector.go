@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 	"time"
 
 	ort "github.com/microsoft/onnxruntime-go"
@@ -11,7 +12,6 @@ import (
 )
 
 const (
-	// Real golf ball radius in inches
 	actualBallRadius = 2.135
 	// Approximate focal length in pixels
 	focalLength = 800.0
@@ -56,6 +56,10 @@ func computeSpeed(curr, prev BallMeasurement) (float64, float64, float64) {
 	vy := ((curr.CY - prev.CY) / focalLength) * avgZ / dt
 	vz := (curr.Distance - prev.Distance) / dt
 	return vx, vy, vz
+}
+
+func speedMagnitude(vx, vy, vz float64) float64 {
+	return math.Sqrt(vx*vx + vy*vy + vz*vz)
 }
 
 func main() {
@@ -123,11 +127,15 @@ func main() {
 			if prev != nil {
 				vx, vy, vz = computeSpeed(meas, *prev)
 			}
+			speed := speedMagnitude(vx, vy, vz)
+
 			prev = &meas
 
 			rect := image.Rect(int(bestBox[0]), int(bestBox[1]), int(bestBox[2]), int(bestBox[3]))
 			gocv.Rectangle(&img, rect, color.RGBA{0, 255, 0, 0}, 2)
-			info := fmt.Sprintf("Dist:%.2f in Vx:%.2f Vy:%.2f Vz:%.2f", meas.Distance, vx, vy, vz)
+
+			info := fmt.Sprintf("Dist:%.2f cm Vx:%.2f Vy:%.2f Vz:%.2f V:%.2f", meas.Distance, vx, vy, vz, speed)
+
 			gocv.PutText(&img, info, image.Pt(10, 30), gocv.FontHersheySimplex, 0.7, color.RGBA{0, 255, 0, 0}, 2)
 		}
 

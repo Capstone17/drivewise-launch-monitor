@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from ultralytics import YOLO
 
 # Camera parameters and real world constants
-ACTUAL_BALL_RADIUS = 2.135  # inches
+ACTUAL_BALL_RADIUS = 2.135  # centimeters
+
 FOCAL_LENGTH = 800.0        # pixels - approximate webcam focal length
 
 
@@ -40,6 +41,10 @@ def compute_speed(curr: BallMeasurement, prev: BallMeasurement):
     vy = ((curr.cy - prev.cy) / FOCAL_LENGTH) * avg_z / dt
     vz = (curr.distance - prev.distance) / dt
     return vx, vy, vz
+
+def speed_magnitude(vx: float, vy: float, vz: float) -> float:
+    """Return combined speed from its components."""
+    return (vx * vx + vy * vy + vz * vz) ** 0.5
 
 def main():
     model = YOLO('golf_ball_detector.onnx')
@@ -118,11 +123,23 @@ def main():
                 vx, vy, vz = compute_speed(meas, prev_meas)
             else:
                 vx = vy = vz = 0.0
+            speed = speed_magnitude(vx, vy, vz)
             prev_meas = meas
             annotated_frame = results[0].plot()
-            info = f"Dist:{meas.distance:.2f}in Vx:{vx:.2f} Vy:{vy:.2f} Vz:{vz:.2f}"
-            cv2.putText(annotated_frame, info, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.8, (0, 255, 0), 2)
+            info = (
+                f"Dist:{meas.distance:.2f}cm "
+                f"Vx:{vx:.2f} Vy:{vy:.2f} Vz:{vz:.2f} V:{speed:.2f}"
+            )
+            cv2.putText(
+                annotated_frame,
+                info,
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 0),
+                2,
+            )
+
         else:
             annotated_frame = frame
 
