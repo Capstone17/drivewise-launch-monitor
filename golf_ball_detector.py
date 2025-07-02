@@ -1,5 +1,45 @@
 import cv2
+import time
+from dataclasses import dataclass
 from ultralytics import YOLO
+
+# Camera parameters and real world constants
+ACTUAL_BALL_RADIUS = 2.135  # inches
+FOCAL_LENGTH = 800.0        # pixels - approximate webcam focal length
+
+
+@dataclass
+class BallMeasurement:
+    """Stores a single measurement of the ball."""
+    timestamp: float
+    cx: float
+    cy: float
+    radius_px: float
+    distance: float
+
+
+def measure_ball(box) -> BallMeasurement:
+    """Convert a YOLO bounding box to a BallMeasurement."""
+    x1, y1, x2, y2 = box.xyxy[0]
+    w = float(x2 - x1)
+    h = float(y2 - y1)
+    radius_px = (w + h) / 4.0  # average half width and half height
+    cx = float(x1 + x2) / 2.0
+    cy = float(y1 + y2) / 2.0
+    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / radius_px
+    return BallMeasurement(time.time(), cx, cy, radius_px, distance)
+
+
+def compute_speed(curr: BallMeasurement, prev: BallMeasurement):
+    """Compute ball velocity vector from two measurements."""
+    dt = curr.timestamp - prev.timestamp
+    if dt <= 0:
+        return 0.0, 0.0, 0.0
+    avg_z = (curr.distance + prev.distance) / 2.0
+    vx = ((curr.cx - prev.cx) / FOCAL_LENGTH) * avg_z / dt
+    vy = ((curr.cy - prev.cy) / FOCAL_LENGTH) * avg_z / dt
+    vz = (curr.distance - prev.distance) / dt
+    return vx, vy, vz
 
 def main():
     model = YOLO('golf_ball_detector.onnx')
@@ -60,6 +100,8 @@ def main():
     cv2.waitKey(1000)  # Show for 1 second
     cv2.destroyWindow('Webcam Test Frame')
 
+    prev_meas = None
+
     # Main detection loop
     while True:
         ret, frame = cap.read()
@@ -68,7 +110,22 @@ def main():
             break
 
         results = model(frame)
-        annotated_frame = results[0].plot()
+        if results and len(results[0].boxes) > 0:
+            boxes = results[0].boxes
+            best_idx = boxes.conf.argmax()
+            meas = measure_ball(boxes[best_idx])
+            if prev_meas is not None:
+                vx, vy, vz = compute_speed(meas, prev_meas)
+            else:
+                vx = vy = vz = 0.0
+            prev_meas = meas
+            annotated_frame = results[0].plot()
+            info = f"Dist:{meas.distance:.2f}in Vx:{vx:.2f} Vy:{vy:.2f} Vz:{vz:.2f}"
+            cv2.putText(annotated_frame, info, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8, (0, 255, 0), 2)
+        else:
+            annotated_frame = frame
+
         cv2.imshow('Webcam Golf Ball Detection', annotated_frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
