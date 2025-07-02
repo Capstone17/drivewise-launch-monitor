@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	// Real golf ball radius in centimeters
 	actualBallRadius = 2.135
 	// Approximate focal length in pixels
 	focalLength = 800.0
@@ -59,7 +58,6 @@ func computeSpeed(curr, prev BallMeasurement) (float64, float64, float64) {
 	return vx, vy, vz
 }
 
-// speedMagnitude returns the combined speed from its components.
 func speedMagnitude(vx, vy, vz float64) float64 {
 	return math.Sqrt(vx*vx + vy*vy + vz*vz)
 }
@@ -130,11 +128,14 @@ func main() {
 				vx, vy, vz = computeSpeed(meas, *prev)
 			}
 			speed := speedMagnitude(vx, vy, vz)
+
 			prev = &meas
 
 			rect := image.Rect(int(bestBox[0]), int(bestBox[1]), int(bestBox[2]), int(bestBox[3]))
 			gocv.Rectangle(&img, rect, color.RGBA{0, 255, 0, 0}, 2)
+
 			info := fmt.Sprintf("Dist:%.2f cm Vx:%.2f Vy:%.2f Vz:%.2f V:%.2f", meas.Distance, vx, vy, vz, speed)
+
 			gocv.PutText(&img, info, image.Pt(10, 30), gocv.FontHersheySimplex, 0.7, color.RGBA{0, 255, 0, 0}, 2)
 		}
 

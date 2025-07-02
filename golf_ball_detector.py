@@ -5,6 +5,7 @@ from ultralytics import YOLO
 
 # Camera parameters and real world constants
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
+
 FOCAL_LENGTH = 800.0        # pixels - approximate webcam focal length
 
 
@@ -40,7 +41,6 @@ def compute_speed(curr: BallMeasurement, prev: BallMeasurement):
     vy = ((curr.cy - prev.cy) / FOCAL_LENGTH) * avg_z / dt
     vz = (curr.distance - prev.distance) / dt
     return vx, vy, vz
-
 
 def speed_magnitude(vx: float, vy: float, vz: float) -> float:
     """Return combined speed from its components."""
@@ -139,6 +139,7 @@ def main():
                 (0, 255, 0),
                 2,
             )
+
         else:
             annotated_frame = frame
 
