@@ -1,11 +1,3 @@
-# Webcam Golf Ball Detector
-
-This repository contains a small Python application that uses a YOLOv8
-ONNX model to detect golf balls from a webcam stream. Detected golf
-balls are highlighted with bounding boxes in the displayed video.
-The script also estimates the ball's distance and 3‑D velocity using the
-size and movement of the detection box.
-
 ## Requirements
 
 * Python 3.8+
@@ -36,3 +28,22 @@ Press `q` in the display window to exit the application.
 The script uses the default webcam at index `0`. If you have multiple
 cameras, change the index in `cv2.VideoCapture(0)` inside
 `golf_ball_detector.py`.
+
+## Go Implementation
+
+For better performance a Go version of the detector is included. It
+relies on `gocv` for video capture and `onnxruntime-go` for inference.
+
+### Additional Requirements
+
+* Go 1.18+
+* `gocv` and `onnxruntime-go` libraries
+
+### Run the Go detector
+
+```bash
+go run golf_ball_detector.go
+```
+
+The Go application mirrors the Python features, estimating distance and
+3‑D velocity of the detected golf ball.
