@@ -22,6 +22,10 @@ python golf_ball_detector.py
 ```
 
 Press `q` in the display window to exit the application.
+The program also opens a second "Speed Waveform" window that plots
+the ball's total speed over the last five seconds. The graph scales
+to the maximum value seen in that window, but never less than `15`
+so the vertical axis remains usable even at low speeds.
 
 ## Notes
 
