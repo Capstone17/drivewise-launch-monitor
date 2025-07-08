@@ -55,7 +55,8 @@ def main():
     graph_width = 300
     graph_height = 150
     history_sec = 5.0
-    speed_history = deque()
+    # Keep at most graph_width entries to bound memory usage
+    speed_history = deque(maxlen=graph_width)
 
 
     # Scan for a working camera index
