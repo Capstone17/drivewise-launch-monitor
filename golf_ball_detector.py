@@ -1,5 +1,7 @@
 import cv2
 import time
+import numpy as np
+from collections import deque
 from dataclasses import dataclass
 from ultralytics import YOLO
 
@@ -48,6 +50,11 @@ def speed_magnitude(vx: float, vy: float, vz: float) -> float:
 
 def main():
     model = YOLO('golf_ball_detector.onnx')
+
+    # Parameters for speed waveform display
+    graph_width = 300
+    graph_height = 150
+    speed_history = deque(maxlen=graph_width)
 
 
     # Scan for a working camera index
@@ -140,10 +147,27 @@ def main():
                 2,
             )
 
+            # Update speed waveform data
+            speed_history.append(speed)
+
+            graph = np.zeros((graph_height, graph_width, 3), dtype=np.uint8)
+            if speed_history:
+                points = list(speed_history)
+                max_speed = max(max(points), 1.0)
+                offset = graph_width - len(points)
+                for i in range(1, len(points)):
+                    y1 = int(graph_height - (points[i-1] / max_speed) * graph_height)
+                    y2 = int(graph_height - (points[i] / max_speed) * graph_height)
+                    cv2.line(graph, (offset + i - 1, y1), (offset + i, y2), (0, 255, 0), 2)
+                cv2.putText(graph, f"Max:{max_speed:.1f}", (10, 15),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+
         else:
             annotated_frame = frame
+            graph = np.zeros((graph_height, graph_width, 3), dtype=np.uint8)
 
         cv2.imshow('Webcam Golf Ball Detection', annotated_frame)
+        cv2.imshow('Speed Waveform', graph)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
