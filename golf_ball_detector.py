@@ -122,6 +122,9 @@ def main():
             print('Failed to grab frame from webcam.')
             break
 
+        speed = 0.0
+        vx = vy = vz = 0.0
+        annotated_frame = frame
         results = model(frame)
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
@@ -129,10 +132,8 @@ def main():
             meas = measure_ball(boxes[best_idx])
             if prev_meas is not None:
                 vx, vy, vz = compute_speed(meas, prev_meas)
-            else:
-                vx = vy = vz = 0.0
-            speed = speed_magnitude(vx, vy, vz)
             prev_meas = meas
+            speed = speed_magnitude(vx, vy, vz)
             annotated_frame = results[0].plot()
             info = (
                 f"Dist:{meas.distance:.2f}cm "
