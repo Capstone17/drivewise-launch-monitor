@@ -22,6 +22,8 @@ python golf_ball_detector.py
 ```
 
 Press `q` in the display window to exit the application.
+The program also opens a second "Speed Waveform" window that plots
+the ball's total speed over the last five seconds.
 
 ## Notes
 
