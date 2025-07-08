@@ -160,7 +160,7 @@ def main():
         if speed_history:
             start_time = now - history_sec
             times, points = zip(*speed_history)
-            max_speed = max(max(points), 1.0)
+            max_speed = max(max(points), 50.0)
             prev_x = prev_y = None
             for ts, sp in zip(times, points):
                 x = int((ts - start_time) / history_sec * (graph_width - 1))
@@ -168,7 +168,7 @@ def main():
                 if prev_x is not None:
                     cv2.line(graph, (prev_x, prev_y), (x, y), (0, 255, 0), 2)
                 prev_x, prev_y = x, y
-            cv2.putText(graph, f"Max:{max_speed:.1f}", (10, 15),
+            cv2.putText(graph, f"Max:{max_speed:.1f}", (10, 50),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
         cv2.imshow('Webcam Golf Ball Detection', annotated_frame)
