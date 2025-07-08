@@ -1,5 +1,7 @@
 import cv2
 import time
+import numpy as np
+from collections import deque
 from dataclasses import dataclass
 from ultralytics import YOLO
 
@@ -48,6 +50,12 @@ def speed_magnitude(vx: float, vy: float, vz: float) -> float:
 
 def main():
     model = YOLO('golf_ball_detector.onnx')
+
+    # Parameters for speed waveform display
+    graph_width = 300
+    graph_height = 150
+    history_sec = 5.0
+    speed_history = deque()
 
 
     # Scan for a working camera index
@@ -140,10 +148,51 @@ def main():
                 2,
             )
 
+            # Update speed waveform data
+            now = time.time()
+            speed_history.append((now, speed))
+            while speed_history and now - speed_history[0][0] > history_sec:
+                speed_history.popleft()
+
+            graph = np.zeros((graph_height, graph_width, 3), dtype=np.uint8)
+            if speed_history:
+                start_time = now - history_sec
+                times, points = zip(*speed_history)
+                max_speed = max(max(points), 1.0)
+                prev_x = prev_y = None
+                for ts, sp in zip(times, points):
+                    x = int((ts - start_time) / history_sec * (graph_width - 1))
+                    y = int(graph_height - (sp / max_speed) * graph_height)
+                    if prev_x is not None:
+                        cv2.line(graph, (prev_x, prev_y), (x, y), (0, 255, 0), 2)
+                    prev_x, prev_y = x, y
+                cv2.putText(graph, f"Max:{max_speed:.1f}", (10, 15),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+
         else:
             annotated_frame = frame
+            now = time.time()
+            speed_history.append((now, 0.0))
+            while speed_history and now - speed_history[0][0] > history_sec:
+                speed_history.popleft()
+
+            graph = np.zeros((graph_height, graph_width, 3), dtype=np.uint8)
+            if speed_history:
+                start_time = now - history_sec
+                times, points = zip(*speed_history)
+                max_speed = max(max(points), 1.0)
+                prev_x = prev_y = None
+                for ts, sp in zip(times, points):
+                    x = int((ts - start_time) / history_sec * (graph_width - 1))
+                    y = int(graph_height - (sp / max_speed) * graph_height)
+                    if prev_x is not None:
+                        cv2.line(graph, (prev_x, prev_y), (x, y), (0, 255, 0), 2)
+                    prev_x, prev_y = x, y
+                cv2.putText(graph, f"Max:{max_speed:.1f}", (10, 15),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
         cv2.imshow('Webcam Golf Ball Detection', annotated_frame)
+        cv2.imshow('Speed Waveform', graph)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
