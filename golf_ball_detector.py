@@ -8,7 +8,7 @@ from ultralytics import YOLO
 # Camera parameters and real world constants
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
 
-FOCAL_LENGTH = 800.0        # pixels - approximate webcam focal length
+FOCAL_LENGTH = 1000.0        # pixels - approximate webcam focal length
 
 
 @dataclass
