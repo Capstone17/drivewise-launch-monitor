@@ -5,7 +5,7 @@ import json
 import sys
 
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
-FOCAL_LENGTH = 800.0        # pixels
+FOCAL_LENGTH = 1000.0        # pixels
 
 
 def measure_ball(box):
