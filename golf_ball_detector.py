@@ -35,6 +35,26 @@ def measure_ball(box) -> BallMeasurement:
     return BallMeasurement(time.time(), cx, cy, radius_px, distance)
 
 
+def estimate_pose_markers(corners, marker_length, camera_matrix, dist_coeffs):
+    """Fallback for cv2.aruco.estimatePoseSingleMarkers."""
+    object_points = np.array([
+        [-marker_length / 2, marker_length / 2, 0],
+        [marker_length / 2, marker_length / 2, 0],
+        [marker_length / 2, -marker_length / 2, 0],
+        [-marker_length / 2, -marker_length / 2, 0],
+    ], dtype=np.float32)
+    rvecs, tvecs = [], []
+    for c in corners:
+        pts = np.asarray(c, dtype=np.float32).reshape((4, 2))
+        ok, rvec, tvec = cv2.solvePnP(object_points, pts, camera_matrix, dist_coeffs)
+        if not ok:
+            rvec = np.zeros((3, 1), dtype=np.float32)
+            tvec = np.zeros((3, 1), dtype=np.float32)
+        rvecs.append(rvec)
+        tvecs.append(tvec)
+    return np.array(rvecs), np.array(tvecs), None
+
+
 
 def main():
     model = YOLO('golf_ball_detector.onnx')
@@ -133,9 +153,14 @@ def main():
         sticker_positions = []
         if ids is not None and len(ids) > 0:
             cv2.aruco.drawDetectedMarkers(annotated_frame, corners, ids)
-            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                corners, MARKER_SIZE, camera_matrix, dist_coeffs
-            )
+            if hasattr(cv2.aruco, "estimatePoseSingleMarkers"):
+                rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+                    corners, MARKER_SIZE, camera_matrix, dist_coeffs
+                )
+            else:
+                rvecs, tvecs, _ = estimate_pose_markers(
+                    corners, MARKER_SIZE, camera_matrix, dist_coeffs
+                )
             for i, tvec in enumerate(tvecs):
                 cv2.aruco.drawAxis(
                     annotated_frame, camera_matrix, dist_coeffs, rvecs[i], tvec, MARKER_SIZE / 2
