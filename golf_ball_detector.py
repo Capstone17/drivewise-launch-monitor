@@ -2,11 +2,15 @@ import cv2
 import time
 from dataclasses import dataclass
 from ultralytics import YOLO
+import numpy as np
 
 # Camera parameters and real world constants
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
 
 FOCAL_LENGTH = 800.0        # pixels - approximate webcam focal length
+
+# ArUco parameters
+MARKER_SIZE = 5.0  # centimeters, length of one side of the marker
 
 
 @dataclass
@@ -107,6 +111,16 @@ def main():
 
     prev_meas = None
 
+    # Setup ArUco detection
+    h, w = frame.shape[:2]
+    camera_matrix = np.array(
+        [[FOCAL_LENGTH, 0, w / 2.0], [0, FOCAL_LENGTH, h / 2.0], [0, 0, 1]],
+        dtype=np.float32,
+    )
+    dist_coeffs = np.zeros((5, 1), dtype=np.float32)
+    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+    aruco_params = cv2.aruco.DetectorParameters_create()
+
     # Main detection loop
     while True:
         ret, frame = cap.read()
@@ -114,32 +128,51 @@ def main():
             print('Failed to grab frame from webcam.')
             break
 
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        corners, ids, _ = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=aruco_params)
+
         results = model(frame)
+        annotated_frame = frame.copy()
+
+        sticker_positions = []
+        if ids is not None and len(ids) > 0:
+            cv2.aruco.drawDetectedMarkers(annotated_frame, corners, ids)
+            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+                corners, MARKER_SIZE, camera_matrix, dist_coeffs
+            )
+            for i, tvec in enumerate(tvecs):
+                cv2.aruco.drawAxis(
+                    annotated_frame, camera_matrix, dist_coeffs, rvecs[i], tvec, MARKER_SIZE / 2
+                )
+                sticker_positions.append((tvec[0][0], tvec[0][1], tvec[0][2] - 30.0))
+
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
             meas = measure_ball(boxes[best_idx])
-            if prev_meas is not None:
-                vx, vy, vz = compute_speed(meas, prev_meas)
-            else:
-                vx = vy = vz = 0.0
-            speed = speed_magnitude(vx, vy, vz)
-            prev_meas = meas
+            prev_meas = meas if prev_meas is None else prev_meas
+
             annotated_frame = results[0].plot()
-            info = (
-                f"Dist:{meas.distance:.2f}cm "
-                f"Vx:{vx:.2f} Vy:{vy:.2f} Vz:{vz:.2f} V:{speed:.2f}"
-            )
+
+            # Ball position relative to 30 cm origin
+            bx = (meas.cx - w / 2.0) * meas.distance / FOCAL_LENGTH
+            by = (meas.cy - h / 2.0) * meas.distance / FOCAL_LENGTH
+            bz = meas.distance - 30.0
+            ball_pos = (bx, by, bz)
+
+            info = f"Ball:{[round(v,2) for v in ball_pos]}"
+            for idx, pos in enumerate(sticker_positions):
+                info += f" Sticker{idx+1}:{[round(v,2) for v in pos]}"
             cv2.putText(
                 annotated_frame,
                 info,
                 (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
+                0.6,
                 (0, 255, 0),
                 2,
             )
-
+            print(info)
         else:
             annotated_frame = frame
 
