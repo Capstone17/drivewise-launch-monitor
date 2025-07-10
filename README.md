@@ -1,7 +1,7 @@
 ## Requirements
 
 * Python 3.8+
-* OpenCV (`opencv-python`)
+* `imageio` for reading video files
 * The `ultralytics` package for running YOLOv8 models
 * `golf_ball_detector.onnx` (your trained model file) placed in the
   repository root
@@ -9,25 +9,18 @@
 Install the required Python packages with:
 
 ```bash
-pip install opencv-python ultralytics
+pip install imageio ultralytics
 ```
 
 ## Usage
 
-1. Place your `golf_ball_detector.onnx` file in the repository root.
+1. Place your `golf_ball_detector.onnx` file in the repository root and your
+   MP4 video (e.g. `video.mp4`).
 2. Run the detection script:
 
 ```bash
-python golf_ball_detector.py
+python video_ball_detector.py video.mp4 ball_coords.txt
 ```
-
-Press `q` in the display window to exit the application.
-
-## Notes
-
-The script uses the default webcam at index `0`. If you have multiple
-cameras, change the index in `cv2.VideoCapture(0)` inside
-`golf_ball_detector.py`.
 
 ## Go Implementation
 
