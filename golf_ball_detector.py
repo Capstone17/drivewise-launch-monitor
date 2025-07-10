@@ -59,6 +59,14 @@ def estimate_pose_markers(corners, marker_length, camera_matrix, dist_coeffs):
 def main():
     model = YOLO('golf_ball_detector.onnx')
 
+    # Ensure the ArUco module is available
+    if not hasattr(cv2, 'aruco'):
+        print(
+            'OpenCV ArUco module not found. Install opencv-contrib-python '
+            'to enable marker detection.'
+        )
+        return
+
 
     # Scan for a working camera index
     def find_working_camera(max_index=5):
