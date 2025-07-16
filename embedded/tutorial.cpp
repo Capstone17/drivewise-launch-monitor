@@ -6,7 +6,7 @@
 // SIMPLE BUILD
 g++ simple_cam.cpp -o simple_cam -std=c++17 `pkg-config --cflags --libs libcamera`
 
-// OUTPUT FILE AS MP4
+// OUTPUT FILE AS MP4 (NOT WORKING YET)
 g++ simple_cam_record.cpp -o simple_cam_record -std=c++17 `pkg-config --cflags --libs libcamera opencv4`
 
 // THE MESON/TUTORIAL WAY:
@@ -38,9 +38,6 @@ $ ./simple_cam
 $ LIBCAMERA_LOG_LEVELS=0 ./simple_cam
 
 */
-
-
-
 
 
 
