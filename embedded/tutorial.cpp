@@ -3,8 +3,11 @@
 // BUILD AND RUN INSTRUCTIONS
 //--------------------------------------------
 
-// THE MANUAL/EASY WAY:
+// SIMPLE BUILD
 g++ simple_cam.cpp -o simple_cam -std=c++17 `pkg-config --cflags --libs libcamera`
+
+// OUTPUT FILE AS MP4
+g++ simple_cam_record.cpp -o simple_cam_record -std=c++17 `pkg-config --cflags --libs libcamera opencv4`
 
 // THE MESON/TUTORIAL WAY:
 
@@ -103,8 +106,8 @@ int main() {
     std::cout << "Default viewfinder configuration is: " << streamConfig.toString() << std::endl;
 
     // Change the width and height
-    streamConfig.size.width = 224;
-    streamConfig.size.height = 96;
+    streamConfig.size.width = 816;
+    streamConfig.size.height = 144;
 
     // Print the adjusted values to standard out
     config->validate();
@@ -200,7 +203,7 @@ int main() {
     allocator->free(stream);
     std::cout << "Deleting..." << std::endl;
     delete allocator;
-    std::cout << "Releaseing..." << std::endl;
+    std::cout << "Releasing..." << std::endl;
     camera->release();
     std::cout << "Resetting..." << std::endl;
 
