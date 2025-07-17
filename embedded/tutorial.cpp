@@ -9,6 +9,14 @@ g++ tutorial.cpp -o ttl -std=c++17 `pkg-config --cflags --libs libcamera`
 // OUTPUT FILE AS MP4 (NOT WORKING YET)
 g++ tutorial.cpp -o ttl -std=c++17 `pkg-config --cflags --libs libcamera opencv4`
 
+// RUN WITH VALGRIND
+valgrind --leak-check=full --show-leak-kinds=all --suppressions=valgrind_lttng_tls.supp ./ttl
+// If you see either of these:
+//     liblttng-ust.so.1.0.0 – tracing library used for debugging/profiling
+//     allocate_dtv / _dl_allocate_tls – thread-local storage setup
+// These are well-known Valgrind false positives. They are not actual leaks and can be safely ignored or suppressed.
+
+
 // THE MESON/TUTORIAL WAY:
 
 // Adjust the following command to use the pkgconfig directory where libcamera has been installed in your system
@@ -212,7 +220,7 @@ int main() {
     camera.reset();
     std::cout << "Stopping..." << std::endl;
 
-    cm->stop();
+    // cm->stop();  // This line is causing some issues
     
     return 0;
 }
