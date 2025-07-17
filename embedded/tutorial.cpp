@@ -4,10 +4,10 @@
 //--------------------------------------------
 
 // SIMPLE BUILD
-g++ simple_cam.cpp -o simple_cam -std=c++17 `pkg-config --cflags --libs libcamera`
+g++ tutorial.cpp -o ttl -std=c++17 `pkg-config --cflags --libs libcamera`
 
 // OUTPUT FILE AS MP4 (NOT WORKING YET)
-g++ simple_cam_record.cpp -o simple_cam_record -std=c++17 `pkg-config --cflags --libs libcamera opencv4`
+g++ tutorial.cpp -o ttl -std=c++17 `pkg-config --cflags --libs libcamera opencv4`
 
 // THE MESON/TUTORIAL WAY:
 
@@ -54,9 +54,14 @@ using namespace std::chrono_literals;
 //  Global shared pointer variable for the camera to support the event call back later
 static std::shared_ptr<Camera> camera;
 
+// Helper functions
 static void requestComplete(Request *request);
+static void setupMediaConfig();
 
 int main() {
+
+    // Setup media pipeline configuration to run at high fps
+    setupMediaConfig();
     
     std::unique_ptr<CameraManager> cm = std::make_unique<CameraManager>();  // An application must only create a single Camera Manager instance
     cm->start();  // Start the camera manager instance
@@ -103,8 +108,8 @@ int main() {
     std::cout << "Default viewfinder configuration is: " << streamConfig.toString() << std::endl;
 
     // Change the width and height
-    streamConfig.size.width = 816;
-    streamConfig.size.height = 144;
+    streamConfig.size.width = 224;
+    streamConfig.size.height = 96;
 
     // Print the adjusted values to standard out
     config->validate();
@@ -193,7 +198,7 @@ int main() {
     // CLEAN UP AND STOP THE APPLICATION
     //--------------------------------------------
     
-    
+    std::cout << "stopping..." << std::endl;
     camera->stop();
 
     std::cout << "freeing.." << std::endl;
@@ -245,4 +250,20 @@ static void requestComplete(Request *request) {
     // With the handling of this request completed, it is possible to re-use the request and the associated buffers and re-queue it to the camera device
     request->reuse(Request::ReuseBuffers);
     camera->queueRequest(request);
+}
+
+// Run a shell script to setup the media configuration
+static void setupMediaConfig() {
+    
+    const std::string width = "1440";
+    const std::string height = "720";
+
+    std::string command = "./media_config.sh " + width + " " + height;
+    
+    std::cout << "Running: " << command << std::endl;
+    int ret = std::system(command.c_str());
+
+    if (ret != 0) {
+        std::cerr << "Sensor configuration script failed with code " << ret << std::endl;
+    }
 }

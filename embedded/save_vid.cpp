@@ -4,7 +4,7 @@
 //--------------------------------------------
 
 // BUILD:
-g++ simple_cam_record.cpp -o simple_cam_record -std=c++17 `pkg-config --cflags --libs libcamera opencv4`
+g++ save_vid.cpp -o sv -std=c++17 `pkg-config --cflags --libs libcamera opencv4`
 
 */
 
@@ -16,6 +16,7 @@ g++ simple_cam_record.cpp -o simple_cam_record -std=c++17 `pkg-config --cflags -
 #include <atomic>
 #include <iomanip>
 #include <fstream>
+#include <sys/mman.h>
 #include <opencv2/opencv.hpp>
 #include <libcamera/libcamera.h>
 
@@ -23,18 +24,18 @@ using namespace libcamera;
 using namespace std::chrono_literals;
 
 static std::shared_ptr<Camera> camera;
-static std::atomic<bool> shutdown{false};
-static std::atomic<bool> shutdown_complete{false};
+// static std::atomic<bool> shutdown{false};
+// static std::atomic<bool> shutdown_complete{false};
 
 static cv::VideoWriter writer;
-static int frameWidth = 640;
-static int frameHeight = 480;
+static int frameWidth = 816;
+static int frameHeight = 144;
 
 // Converts raw RGB data from a FrameBuffer into cv::Mat
 cv::Mat convertBufferToMat(FrameBuffer *buffer) {
     const FrameMetadata &metadata = buffer->metadata();
     const FrameMetadata::Plane &plane = metadata.planes()[0];
-    void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, buffer->planes()[0].fd.fd(), 0);
+    void *data = mmap(nullptr, buffer->planes()[0].length, PROT_READ, MAP_SHARED, buffer->planes()[0].fd.get(), 0);
 
     if (data == MAP_FAILED) {
         std::cerr << "Failed to mmap frame buffer" << std::endl;
@@ -43,7 +44,7 @@ cv::Mat convertBufferToMat(FrameBuffer *buffer) {
 
     cv::Mat image(frameHeight, frameWidth, CV_8UC3, data);
     cv::Mat copy = image.clone();  // Make a safe copy before unmapping
-    munmap(data, plane.length);
+    munmap(data, buffer->planes()[0].length);
     return copy;
 }
 
@@ -65,10 +66,10 @@ static void requestComplete(Request *request) {
         std::cout << "Captured frame: " << buffer->metadata().sequence << std::endl;
     }
 
-    if (shutdown) {
-        shutdown_complete = true;
-        return;
-    }
+    // if (shutdown) {
+    //     shutdown_complete = true;
+    //     return;
+    // }
 
     request->reuse(Request::ReuseBuffers);
     camera->queueRequest(request);
@@ -102,6 +103,8 @@ int main() {
     Stream *stream = streamConfig.stream();
 
     // Initialize OpenCV video writer
+    // open(output_file_name, video_codec, frames_per_second, output_frame_size)
+    // fourcc: Four-Character Code, 'avc1' is the code for h.264
     writer.open("output.mp4", cv::VideoWriter::fourcc('a','v','c','1'), 30, cv::Size(frameWidth, frameHeight));
     if (!writer.isOpened()) {
         std::cerr << "Failed to open video writer" << std::endl;
@@ -127,10 +130,10 @@ int main() {
         camera->queueRequest(request.get());
 
     std::this_thread::sleep_for(5s);  // Capture for 5 seconds
-    shutdown = true;
+    // shutdown = true;
 
     camera->stop();
-    while (!shutdown_complete.load()) std::this_thread::sleep_for(50ms);
+    // while (!shutdown_complete.load()) std::this_thread::sleep_for(50ms);
     camera->requestCompleted.disconnect(requestComplete);
     camera->release();
     cm->stop();
