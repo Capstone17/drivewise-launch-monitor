@@ -48,5 +48,5 @@ def process_video(video_path, output_path):
 
 if __name__ == '__main__':
     video_path = sys.argv[1] if len(sys.argv) > 1 else 'video.mp4'
-    output_path = sys.argv[2] if len(sys.argv) > 2 else 'ball_coords.txt'
+    output_path = sys.argv[2] if len(sys.argv) > 2 else 'ball_coords.json'
     process_video(video_path, output_path)

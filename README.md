@@ -19,7 +19,7 @@ pip install imageio ultralytics
 2. Run the detection script:
 
 ```bash
-python video_ball_detector.py video.mp4 ball_coords.txt
+python video_ball_detector.py video.mp4 ball_coords.json
 ```
 
 ## Go Implementation
