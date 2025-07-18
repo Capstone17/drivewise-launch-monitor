@@ -2,6 +2,7 @@
 
 * Python 3.8+
 * `imageio` for reading video files
+* `opencv-python` for ArUco marker detection
 * The `ultralytics` package for running YOLOv8 models
 * `golf_ball_detector.onnx` (your trained model file) placed in the
   repository root
@@ -9,7 +10,7 @@
 Install the required Python packages with:
 
 ```bash
-pip install imageio ultralytics
+pip install imageio opencv-python ultralytics
 ```
 
 ## Usage
@@ -19,7 +20,17 @@ pip install imageio ultralytics
 2. Run the detection script:
 
 ```bash
-python video_ball_detector.py video.mp4 ball_coords.txt
+python video_ball_detector.py video.mp4 ball_coords.json sticker_coords.json
+```
+
+The first JSON file will contain ball coordinates while the second stores the
+position and orientation of the ArUco sticker, for example:
+
+```json
+[
+  {"time": 1.72, "x": 0.66, "y": 6.17, "z": 11.66},
+  {"time": 1.76, "x": 0.59, "y": 5.75, "z": 11.26}
+]
 ```
 
 ## Go Implementation
