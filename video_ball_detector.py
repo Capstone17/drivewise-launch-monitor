@@ -38,11 +38,16 @@ def process_video(video_path, output_path):
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
             by = (cy - h / 2.0) * distance / FOCAL_LENGTH
             bz = distance - 30.0
-            coords.append([t, [round(bx, 2), round(by, 2), round(bz, 2)]])
+            coords.append({
+                "time": round(t, 2),
+                "x": round(bx, 2),
+                "y": round(by, 2),
+                "z": round(bz, 2),
+            })
 
     reader.close()
     with open(output_path, 'w') as f:
-        json.dump(coords, f)
+        json.dump(coords, f, indent=2)
     print(f'Saved {len(coords)} points to {output_path}')
 
 

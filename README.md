@@ -22,6 +22,16 @@ pip install imageio ultralytics
 python video_ball_detector.py video.mp4 ball_coords.json
 ```
 
+The JSON file will contain a list of objects with the timestamp and
+three-dimensional coordinates of the ball, for example:
+
+```json
+[
+  {"time": 1.72, "x": 0.66, "y": 6.17, "z": 11.66},
+  {"time": 1.76, "x": 0.59, "y": 5.75, "z": 11.26}
+]
+```
+
 ## Go Implementation
 
 For better performance a Go version of the detector is included. It
