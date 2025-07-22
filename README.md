@@ -20,11 +20,13 @@ pip install imageio opencv-python ultralytics
 2. Run the detection script:
 
 ```bash
-python video_ball_detector.py video.mp4 ball_coords.json sticker_coords.json
+python video_ball_detector.py video.mp4 \
+    ball_coords.json sticker_coords.json stationary_sticker.json
 ```
 
-The first JSON file will contain ball coordinates while the second stores the
-position and orientation of the ArUco sticker, for example:
+The first JSON file will contain ball coordinates. The second stores the
+position and orientation of the moving sticker while the third contains the
+average pose of the stationary sticker, for example:
 
 ```json
 [
