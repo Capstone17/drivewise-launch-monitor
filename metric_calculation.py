@@ -33,7 +33,7 @@ def face_angle_calc(yaw_current: float, yaw_ideal: float) -> float:
 
 
 # SWING PATH
-def swing_path_calc(pose1: dict, pose2: dict, reference_vector=[0, 1]):
+def swing_path_calc(pose1: dict, pose2: dict, reference_vector):
     """
     Analyze horizontal motion and orientation change between two poses.
 
@@ -93,9 +93,23 @@ def attack_angle_calc(pose1: dict, pose2: dict) -> float:
 
 
 # SIDE ANGLE
-def side_angle_calc(pos1, pos2, reference_vector):
-    p1_xz = np.array([pos1[0], pos1[2]], dtype=float)
-    p2_xz = np.array([pos2[0], pos2[2]], dtype=float)
+def side_angle_calc(pos1_dict, pos2_dict, reference_vector):
+    """
+    Computes horizontal angle of movement (in XZ plane) relative to a reference direction.
+
+    Parameters:
+    - pos1_dict: Dictionary with keys 'x', 'y', 'z' (e.g., first ball position)
+    - pos2_dict: Dictionary with keys 'x', 'y', 'z' (e.g., second ball position)
+    - reference_vector: 2D reference direction in XZ plane (e.g., [0, 1] for forward)
+
+    Returns:
+    Dictionary with:
+      - delta_xz: XZ movement vector
+      - distance_xz: distance in XZ plane
+      - angle_deg: signed angle to reference vector
+    """
+    p1_xz = np.array([pos1_dict["x"], pos1_dict["z"]], dtype=float)
+    p2_xz = np.array([pos2_dict["x"], pos2_dict["z"]], dtype=float)
 
     delta_xz = p2_xz - p1_xz
     distance_xz = np.linalg.norm(delta_xz)

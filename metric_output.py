@@ -10,7 +10,7 @@ def load_first_movement_pair(json_path, threshold=5.0):
 
     # Search for the first two frames with a coordinate change larger than the threshold
     # Note: for enhanced accuracy and error safety, could return more points surrounding the moment of impact
-    for i in range(len(data) - 1):
+    for i in range(len(data) - 2):
         frame1 = data[i]
         frame2 = data[i + 1]
         frame3 = data[i + 2]
@@ -22,7 +22,7 @@ def load_first_movement_pair(json_path, threshold=5.0):
         if dx > threshold or dy > threshold or dz > threshold:
             return frame1, frame2, frame3  # Return the first pair with significant movement
 
-    return None, None  # No significant movement found
+    return None, None, None  # No significant movement found
 
 
 # Find the pose of a sticker at a given time
@@ -67,4 +67,4 @@ reference_vector = reference_vector_calc(yaw_ideal)
 face_angle = face_angle_calc(pose_before_impact1, yaw_ideal)
 swing_path = swing_path_calc(pose_before_impact1, pose_after_impact1, reference_vector)
 attack_angle = attack_angle_calc(pose_before_impact1, pose_after_impact1)
-side_angle = side_angle_calc(, ball_pos2, reference_vector)
+side_angle = side_angle_calc(frame_before_impact1, frame_after_impact1, reference_vector)

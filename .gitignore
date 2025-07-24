@@ -10,3 +10,6 @@ embedded/video.mp4
 stationary_sticker.json
 sticker_coords.json
 ball_coords.json
+
+# Ignore any pycache files
+__pycache__/

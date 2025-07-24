@@ -220,7 +220,7 @@ int main() {
     // Prevent immediate termination by pausing for 3 seconds
     // During that time, the libcamera thread will generate request completion events 
     // The application will handle these events in the requestComplete() slot connected to the Camera::requestCompleted signal
-    std::this_thread::sleep_for(3000ms);
+    std::this_thread::sleep_for(10000ms);
     
     
     //--------------------------------------------
