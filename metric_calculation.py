@@ -3,6 +3,19 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 
+# REFERENCE VECTOR
+def reference_vector_calc(yaw_deg):
+    """
+    Converts yaw angle to a unit direction vector in the XZ plane.
+    yaw_deg: yaw in degrees (rotation around Y-axis)
+    Returns: [x, z] unit vector
+    """
+    yaw_rad = np.radians(yaw_deg)
+    x = np.sin(yaw_rad)
+    z = np.cos(yaw_rad)
+    return np.array([x, z])
+
+
 # FACE ANGLE
 def face_angle_calc(yaw_current: float, yaw_ideal: float) -> float:
     """
@@ -80,7 +93,7 @@ def attack_angle_calc(pose1: dict, pose2: dict) -> float:
 
 
 # SIDE ANGLE
-def side_angle_calc(pos1, pos2, reference_vector=[0, 1]):
+def side_angle_calc(pos1, pos2, reference_vector):
     p1_xz = np.array([pos1[0], pos1[2]], dtype=float)
     p2_xz = np.array([pos2[0], pos2[2]], dtype=float)
 
