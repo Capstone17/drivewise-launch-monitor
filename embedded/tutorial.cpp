@@ -6,7 +6,7 @@
 // SIMPLE BUILD
 g++ tutorial.cpp -o ttl -std=c++17 `pkg-config --cflags --libs libcamera`
 
-// OUTPUT FILE AS MP4 (NOT WORKING YET)
+// OUTPUT FILE AS MP4 (WORKING)
 g++ tutorial.cpp -o ttl -std=c++17 `pkg-config --cflags --libs libcamera opencv4`
 
 // RUN WITH VALGRIND
@@ -53,9 +53,9 @@ $ LIBCAMERA_LOG_LEVELS=0 ./simple_cam
 #include <iostream>
 #include <memory>
 #include <thread>
-#include <cstdio>
 #include <sys/mman.h>
 
+#include <opencv2/opencv.hpp>
 #include <libcamera/libcamera.h>
 
 using namespace libcamera;
@@ -64,12 +64,11 @@ using namespace std::chrono_literals;
 //  Global shared pointer variable for the camera to support the event call back later
 static std::shared_ptr<Camera> camera;
 // Global shared pipeline to ffmpeg to help store video as mp4
-FILE *ffmpeg = nullptr;
+cv::VideoWriter videoWriter;
 
 // Helper functions
 static void requestComplete(Request *request);
 static void setupMediaConfig();
-void writeFrameToFFmpeg(Request *request, FILE *ffmpeg);
 
 int main() {
 
@@ -121,8 +120,8 @@ int main() {
     std::cout << "Default viewfinder configuration is: " << streamConfig.toString() << std::endl;
 
     // Change the width and height
-    streamConfig.size.width = 224;
-    streamConfig.size.height = 96;
+    streamConfig.size.width = 672;
+    streamConfig.size.height = 128;
 
     // Print the adjusted values to standard out
     config->validate();
@@ -193,12 +192,18 @@ int main() {
     // STORE IMAGE FRAMES AS MP4
     //--------------------------------------------
 
-    // FFmpeg shell command to convert image frames to video
-    ffmpeg = popen("ffmpeg -f rawvideo -pix_fmt bgra -s 224x96 -r 60 -i - -c:v libx264 video.mp4", "w");
-    if (!ffmpeg) {
-        std::cerr << "Failed to open FFmpeg pipe." << std::endl;
-        return 1;
+    
+    videoWriter.open("video.mp4",
+                     cv::VideoWriter::fourcc('a', 'v', 'c', '1'), // H264 codec
+                     400, // frame rate - set to your actual frame rate
+                     cv::Size(672, 128), // frame size must match your camera stream
+                     true); // true for color video
+
+    if (!videoWriter.isOpened()) {
+        std::cerr << "Failed to open VideoWriter" << std::endl;
+        return -1;
     }
+
 
     //--------------------------------------------
     // REQUEST QUEUEING
@@ -222,8 +227,6 @@ int main() {
     // CLEAN UP AND STOP THE APPLICATION
     //--------------------------------------------
 
-    int ret = pclose(ffmpeg);
-    std::cout << "FFmpeg exited with code: " << ret << std::endl;
     
     std::cout << "stopping..." << std::endl;
     camera->stop();
@@ -247,46 +250,45 @@ int main() {
 
 // Create the requestComplete function by matching the slot signature
 static void requestComplete(Request *request) {
-
-    // To avoid an application processing invalid image data, it’s worth checking that the request has completed successfully
     if (request->status() == Request::RequestCancelled)
         return;
 
-    // If the Request has completed successfully, applications can access the completed buffers using the Request::buffers() function
-    // This function returns a map of FrameBuffer instances associated with the Stream that produced the images
-    const std::map<const Stream *, FrameBuffer *> &buffers = request->buffers();
-
-    // Iterating through the map allows applications to inspect each completed buffer in this request, and access the metadata associated to each frame
-    for (auto bufferPair : buffers) {
+    for (auto bufferPair : request->buffers()) {
         FrameBuffer *buffer = bufferPair.second;
         const FrameMetadata &metadata = buffer->metadata();
 
-        // Print the Frame sequence number and details of the planes
-        std::cout << " seq: " << std::setw(6) << std::setfill('0') << metadata.sequence << " bytesused: ";
-
-        unsigned int nplane = 0;
-        for (const FrameMetadata::Plane &plane : metadata.planes())
-        {
-            std::cout << plane.bytesused;
-            if (++nplane < metadata.planes().size()) std::cout << "/";
+        // Assuming single plane and BGRA format
+        const FrameBuffer::Plane &plane = buffer->planes().front();
+        void *memory = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, plane.fd.get(), 0);
+        if (memory == MAP_FAILED) {
+            std::cerr << "Failed to mmap buffer" << std::endl;
+            continue;
         }
 
-        std::cout << std::endl;
+        // Create cv::Mat from XRGB8888 data
+        cv::Mat xrgb_frame(128, 672, CV_8UC4, memory);
+
+        // Convert to BGR for OpenCV VideoWriter
+        cv::Mat bgr_frame;
+        cv::cvtColor(xrgb_frame, bgr_frame, cv::COLOR_BGRA2BGR);
+
+        // Write frame to VideoWriter
+        videoWriter.write(bgr_frame);
+
+        munmap(memory, plane.length);
     }
 
-    // Process and save completed frames
-    writeFrameToFFmpeg(request, ffmpeg);
-
-    // With the handling of this request completed, it is possible to re-use the request and the associated buffers and re-queue it to the camera device
+    // Re-queue the request for next capture
     request->reuse(Request::ReuseBuffers);
     camera->queueRequest(request);
 }
 
+
 // Run a shell script to setup the media configuration
 static void setupMediaConfig() {
     
-    const std::string width = "1440";
-    const std::string height = "720";
+    const std::string width = "672";
+    const std::string height = "128";
 
     std::string command = "./media_config.sh " + width + " " + height;
     
@@ -298,37 +300,3 @@ static void setupMediaConfig() {
     }
 }
 
-// Converts image frames to mp4 using ffmpeg shell command
-void writeFrameToFFmpeg(Request *request, FILE *ffmpeg)
-{
-    if (!ffmpeg || !request){
-        std::cout << "request is empty" << std::endl;
-        return;
-    }
-
-    int plane_length = 0;
-
-    for (const auto &pair : request->buffers()) {
-        FrameBuffer *buffer = pair.second;
-        const FrameBuffer::Plane &plane = buffer->planes().front();
-        // int fd = buffer->fd(0).get();
-        int fd = plane.fd.get();
-        plane_length = plane.length;
-
-        void *memory = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED, fd, 0);
-        if (memory == MAP_FAILED) {
-            std::cerr << "Failed to mmap buffer for FFmpeg output" << std::endl;
-            continue;
-        }
-
-        size_t written = fwrite(memory, 1, plane.length, ffmpeg);
-        std::cout << "Wrote frame, size: " << written << " bytes" << std::endl;
-        if (written != plane.length) {
-            std::cerr << "Warning: incomplete frame written to FFmpeg" << std::endl;
-        }
-
-        munmap(memory, plane.length);
-    }
-
-    std::cout << "PLANE LENGTH: " << plane_length << std::endl;
-}
