@@ -1,0 +1,8 @@
+ultralytics
+numpy
+opencv-python
+onnx
+onnxruntime
+sympy
+opencv-contrib-python
+imageio[ffmpeg]
