@@ -1,3 +1,12 @@
 # Ignore virtual environment
 venv/
 .venv/
+
+# Ignore video.mp4 file produced by tutorial.cpp
+video.mp4
+embedded/video.mp4
+
+# Ignore JSON files genereated by image detection
+stationary_sticker.json
+sticker_coords.json
+ball_coords.json
