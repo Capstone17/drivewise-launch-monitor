@@ -16,35 +16,6 @@ valgrind --leak-check=full --show-leak-kinds=all --suppressions=valgrind_lttng_t
 //     allocate_dtv / _dl_allocate_tls – thread-local storage setup
 // These are well-known Valgrind false positives. They are not actual leaks and can be safely ignored or suppressed.
 
-
-// THE MESON/TUTORIAL WAY:
-
-// Adjust the following command to use the pkgconfig directory where libcamera has been installed in your system
-export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig/
-
-// Verify that pkg-config can identify the libcamera library with:
-$ pkg-config --libs --cflags libcamera
-  -I/usr/local/include/libcamera -L/usr/local/lib -lcamera -lcamera-base
-
-
-// Prepare a meson.build build file to be placed in the same directory where the application lives.
-project('simple_cam', 'cpp')
-
-simple_cam = executable('simple_cam',
-    'simple_cam.cpp',
-    dependencies: dependency('libcamera'))
-
-// With the build file in place, compile and run the application with:
-
-$ meson build
-$ cd build
-$ ninja
-$ ./simple_cam
-
-// It is possible to increase the library debug output by using environment variables which control the library log filtering system:
-
-$ LIBCAMERA_LOG_LEVELS=0 ./simple_cam
-
 */
 
 
@@ -65,6 +36,11 @@ using namespace std::chrono_literals;
 static std::shared_ptr<Camera> camera;
 // Global shared pipeline to ffmpeg to help store video as mp4
 cv::VideoWriter videoWriter;
+// Global shared camera configuration
+int CROP_WIDTH = 672;
+int CROP_HEIGHT = 128;
+int FRAME_RATE = 425;
+int EXPOSURE_TIME = 2000;  // Shutter time (us): 1/500fps=0.002s=2000us -> 1800us for safety
 
 // Helper functions
 static void requestComplete(Request *request);
@@ -120,8 +96,8 @@ int main() {
     std::cout << "Default viewfinder configuration is: " << streamConfig.toString() << std::endl;
 
     // Change the width and height
-    streamConfig.size.width = 672;
-    streamConfig.size.height = 128;
+    streamConfig.size.width = CROP_WIDTH;
+    streamConfig.size.height = CROP_HEIGHT;
 
     // Print the adjusted values to standard out
     config->validate();
@@ -195,8 +171,8 @@ int main() {
     
     videoWriter.open("video.mp4",
                      cv::VideoWriter::fourcc('a', 'v', 'c', '1'), // H264 codec
-                     400, // frame rate - set to your actual frame rate
-                     cv::Size(672, 128), // frame size must match your camera stream
+                     FRAME_RATE, // frame rate - set to your actual frame rate
+                     cv::Size(CROP_WIDTH, CROP_HEIGHT), // frame size must match your camera stream
                      true); // true for color video
 
     if (!videoWriter.isOpened()) {
@@ -220,7 +196,7 @@ int main() {
     // Prevent immediate termination by pausing for 3 seconds
     // During that time, the libcamera thread will generate request completion events 
     // The application will handle these events in the requestComplete() slot connected to the Camera::requestCompleted signal
-    std::this_thread::sleep_for(10000ms);
+    std::this_thread::sleep_for(5000ms);
     
     
     //--------------------------------------------
@@ -266,7 +242,7 @@ static void requestComplete(Request *request) {
         }
 
         // Create cv::Mat from XRGB8888 data
-        cv::Mat xrgb_frame(128, 672, CV_8UC4, memory);
+        cv::Mat xrgb_frame(CROP_HEIGHT, CROP_WIDTH, CV_8UC4, memory);
 
         // Convert to BGR for OpenCV VideoWriter
         cv::Mat bgr_frame;
@@ -287,10 +263,12 @@ static void requestComplete(Request *request) {
 // Run a shell script to setup the media configuration
 static void setupMediaConfig() {
     
-    const std::string width = "672";
-    const std::string height = "128";
+    const std::string width = std::to_string(CROP_WIDTH);
+    const std::string height = std::to_string(CROP_HEIGHT);
+    const std::string exposure = std::to_string(EXPOSURE_TIME);
 
-    std::string command = "./media_config.sh " + width + " " + height;
+    // std::string command = "./media_config.sh " + width + " " + height; 
+    std::string command = "./GScrop_no_recording.sh " + width + " " + height + " 250 5000 " + exposure;
     
     std::cout << "Running: " << command << std::endl;
     int ret = std::system(command.c_str());
