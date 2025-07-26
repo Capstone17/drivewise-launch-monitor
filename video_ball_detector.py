@@ -8,11 +8,8 @@ from ultralytics import YOLO
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
 FOCAL_LENGTH = 1000.0  # pixels
 
-# Parameters for ArUco marker detection
-# The stationary marker on the mat is larger than the moving sticker so
-# we keep separate lengths for accurate pose estimation.
 DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
-STATIONARY_MARKER_LENGTH = 3.5  # centimeters (mat sticker)
+STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
 CAMERA_MATRIX = np.array([[500, 0, 320], [0, 500, 240], [0, 0, 1]], dtype=float)
 DIST_COEFFS = np.zeros(5)
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
