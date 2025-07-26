@@ -1,12 +1,12 @@
-import imageio.v2 as imageio
-from ultralytics import YOLO
-import numpy as np
-import cv2
 import json
 import sys
 
+import cv2
+import numpy as np
+from ultralytics import YOLO
+
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
-FOCAL_LENGTH = 1000.0        # pixels
+FOCAL_LENGTH = 1000.0  # pixels
 
 # Parameters for ArUco marker detection
 MARKER_LENGTH = 1.75  # centimeters
@@ -14,6 +14,7 @@ CAMERA_MATRIX = np.array([[500, 0, 320], [0, 500, 240], [0, 0, 1]], dtype=float)
 DIST_COEFFS = np.zeros(5)
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
+ARUCO_DETECTOR = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
 
 # ID of the stationary ArUco marker
 STATIONARY_ID = 1
@@ -57,20 +58,26 @@ def process_video(
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
     ``stationary_path`` stores the averaged pose of the stationary marker."""
-    model = YOLO('golf_ball_detector.onnx')
-    reader = imageio.get_reader(video_path)
-    fps = reader.get_meta_data().get('fps', 30)
-    w = h = None
+    model = YOLO("golf_ball_detector.onnx")
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     ball_coords = []
     sticker_coords = []
-    stationary_sum = np.zeros(6)
+    stationary_sum = np.zeros(6, dtype=float)
     stationary_count = 0
 
-    for idx, frame in enumerate(reader):
+    frame_idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
         if h is None:
             h, w = frame.shape[:2]
-        t = idx / fps
-        results = model(frame)
+        t = frame_idx / fps
+        frame_idx += 1
+        results = model(frame, verbose=False)
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
@@ -78,44 +85,46 @@ def process_video(
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
             by = (cy - h / 2.0) * distance / FOCAL_LENGTH
             bz = distance - 30.0
-            ball_coords.append({
-                "time": round(t, 2),
-                "x": round(bx, 2),
-                "y": round(by, 2),
-                "z": round(bz, 2),
-            })
+            ball_coords.append(
+                {
+                    "time": round(t, 2),
+                    "x": round(bx, 2),
+                    "y": round(by, 2),
+                    "z": round(bz, 2),
+                }
+            )
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = cv2.aruco.detectMarkers(
-            gray, ARUCO_DICT, parameters=ARUCO_PARAMS
-        )
+        corners, ids, _ = ARUCO_DETECTOR.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
             rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
                 corners, MARKER_LENGTH, CAMERA_MATRIX, DIST_COEFFS
             )
             for i, marker_id in enumerate(ids.flatten()):
-                rvec = np.array(rvecs[i][0])
-                tvec = np.array(tvecs[i][0])
+                rvec = rvecs[i, 0]
+                tvec = tvecs[i, 0]
                 x, y, z = tvec
                 roll, pitch, yaw = rvec_to_euler(rvec)
                 if marker_id == STATIONARY_ID:
-                    stationary_sum += np.array([x, y, z, roll, pitch, yaw])
+                    stationary_sum += (x, y, z, roll, pitch, yaw)
                     stationary_count += 1
                 else:
-                    sticker_coords.append({
-                        "time": round(t, 2),
-                        "x": round(float(x), 2),
-                        "y": round(float(y), 2),
-                        "z": round(float(z), 2),
-                        "roll": round(float(roll), 2),
-                        "pitch": round(float(pitch), 2),
-                        "yaw": round(float(yaw), 2),
-                    })
+                    sticker_coords.append(
+                        {
+                            "time": round(t, 2),
+                            "x": round(float(x), 2),
+                            "y": round(float(y), 2),
+                            "z": round(float(z), 2),
+                            "roll": round(float(roll), 2),
+                            "pitch": round(float(pitch), 2),
+                            "yaw": round(float(yaw), 2),
+                        }
+                    )
 
-    reader.close()
-    with open(ball_path, 'w') as f:
+    cap.release()
+    with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
-    with open(sticker_path, 'w') as f:
+    with open(sticker_path, "w") as f:
         json.dump(sticker_coords, f, indent=2)
     stationary_output = []
     if stationary_count:
@@ -130,19 +139,17 @@ def process_video(
                 "yaw": round(float(avg[5]), 2),
             }
         )
-    with open(stationary_path, 'w') as f:
+    with open(stationary_path, "w") as f:
         json.dump(stationary_output, f, indent=2)
-    print(f'Saved {len(ball_coords)} ball points to {ball_path}')
-    print(f'Saved {len(sticker_coords)} sticker points to {sticker_path}')
+    print(f"Saved {len(ball_coords)} ball points to {ball_path}")
+    print(f"Saved {len(sticker_coords)} sticker points to {sticker_path}")
     if stationary_count:
-        print(f'Saved averaged stationary sticker pose to {stationary_path}')
+        print(f"Saved averaged stationary sticker pose to {stationary_path}")
 
 
-if __name__ == '__main__':
-    video_path = sys.argv[1] if len(sys.argv) > 1 else 'video.mp4'
-    ball_path = sys.argv[2] if len(sys.argv) > 2 else 'ball_coords.json'
-    sticker_path = sys.argv[3] if len(sys.argv) > 3 else 'sticker_coords.json'
-    stationary_path = (
-        sys.argv[4] if len(sys.argv) > 4 else 'stationary_sticker.json'
-    )
+if __name__ == "__main__":
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "video.mp4"
+    ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
+    sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
+    stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
     process_video(video_path, ball_path, sticker_path, stationary_path)
