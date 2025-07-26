@@ -17,7 +17,7 @@ def reference_vector_calc(yaw_deg):
 
 
 # FACE ANGLE
-def face_angle_calc(yaw_current: float, yaw_ideal: float) -> float:
+def face_angle_calc(pose1: dict, yaw_ideal: float) -> float:
     """
     Compute the yaw difference (in degrees) between two Euler yaw angles.
 
@@ -28,12 +28,13 @@ def face_angle_calc(yaw_current: float, yaw_ideal: float) -> float:
     Returns:
         float: The yaw angle difference in degrees, wrapped to [-180, 180).
     """
+    yaw_current = pose1['yaw']
     yaw_error = (yaw_current - yaw_ideal + 180) % 360 - 180
     return yaw_error
 
 
 # SWING PATH
-def swing_path_calc(pose1: dict, pose2: dict, reference_vector):
+def swing_path_calc(pose1: dict, pose2: dict, pose3: dict, reference_vector):
     """
     Analyze horizontal motion and orientation change between two poses.
 
@@ -50,6 +51,8 @@ def swing_path_calc(pose1: dict, pose2: dict, reference_vector):
             "motion_angle_deg": float
         }
     """
+    # Check if the first two frames are the same
+
     # Extract horizontal positions (X, Z)
     p1 = np.array([pose1["x"], pose1["z"]], dtype=float)
     p2 = np.array([pose2["x"], pose2["z"]], dtype=float)

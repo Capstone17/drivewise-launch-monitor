@@ -1,7 +1,7 @@
 from metric_calculation import * # reference_vector_calc, face_angle_calc, swing_path_calc, attack_angle_calc, side_angle_calc 
 import json
 
-def load_first_movement_pair(json_path, threshold=5.0):
+def load_first_movement_pair(json_path, threshold=2.0):
     with open(json_path, 'r') as f:
         data = json.load(f)
 
@@ -10,6 +10,7 @@ def load_first_movement_pair(json_path, threshold=5.0):
 
     # Search for the first two frames with a coordinate change larger than the threshold
     # Note: for enhanced accuracy and error safety, could return more points surrounding the moment of impact
+    # Note: consider error in x y and z measurement
     for i in range(len(data) - 2):
         frame1 = data[i]
         frame2 = data[i + 1]
@@ -26,7 +27,7 @@ def load_first_movement_pair(json_path, threshold=5.0):
 
 
 # Find the pose of a sticker at a given time
-def load_pose_at_time(json_path, target_time, tolerance=1e-3):
+def load_pose_at_time(json_path, target_time, tolerance=0.03):
     """
     Finds the pose dictionary in the JSON that matches the given time (within a small tolerance).
     """
@@ -53,18 +54,31 @@ def load_reference_yaw(json_path):
 
 # Find ball data
 frame_before_impact1, frame_after_impact1, frame_after_impact2 = load_first_movement_pair("ball_coords.json")  # Find the moment of impact and its surrounding frames
-time_before_impact1 = frame_before_impact1['time']
-time_after_impact1 = frame_after_impact1['time']
+print(f'Frame before impact: {frame_before_impact1}')
+print(f'Frame after impact: {frame_after_impact1}')
+print(f'Frame 2 after impact: {frame_after_impact2}\n')
 
 # Find club data
-pose_before_impact1 = load_pose_at_time("sticker_coords.json", time_before_impact1)
-pose_after_impact1 = load_pose_at_time("sticker_coords.json", time_after_impact1)
+pose_before_impact1 = load_pose_at_time("sticker_coords.json", frame_before_impact1['time'])
+pose_after_impact1 = load_pose_at_time("sticker_coords.json", frame_after_impact1['time'])
+pose_after_impact2 = load_pose_at_time("sticker_coords.json", frame_after_impact2['time'])
+print(f'Pose before impact: {pose_before_impact1}')
+print(f'Pose after impact: {pose_after_impact1}')
+print(f'Pose after impact: {pose_after_impact2}')
 
 # Find reference data
 yaw_ideal = load_reference_yaw("stationary_sticker.json")  # Load the reference yaw
+print(f'Ideal yaw: {yaw_ideal}\n')
 
 reference_vector = reference_vector_calc(yaw_ideal)
+print(f'Reference vector: {reference_vector}\n')
+
 face_angle = face_angle_calc(pose_before_impact1, yaw_ideal)
-swing_path = swing_path_calc(pose_before_impact1, pose_after_impact1, reference_vector)
+print(f'Face angle: {face_angle}\n')
+
+swing_path = swing_path_calc(pose_before_impact1, pose_after_impact1, pose_after_impact2, reference_vector)
+print(f'Swing path: {swing_path}\n')
+
 attack_angle = attack_angle_calc(pose_before_impact1, pose_after_impact1)
 side_angle = side_angle_calc(frame_before_impact1, frame_after_impact1, reference_vector)
+

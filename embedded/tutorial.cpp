@@ -40,7 +40,7 @@ cv::VideoWriter videoWriter;
 int CROP_WIDTH = 672;
 int CROP_HEIGHT = 128;
 int FRAME_RATE = 425;
-int EXPOSURE_TIME = 2000;  // Shutter time (us): 1/500fps=0.002s=2000us -> 1800us for safety
+int EXPOSURE_TIME = 1800;  // Shutter time (us): 1/500fps=0.002s=2000us -> 1800us for safety
 
 // Helper functions
 static void requestComplete(Request *request);
