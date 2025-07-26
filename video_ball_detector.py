@@ -9,7 +9,10 @@ ACTUAL_BALL_RADIUS = 2.135  # centimeters
 FOCAL_LENGTH = 1000.0  # pixels
 
 # Parameters for ArUco marker detection
-MARKER_LENGTH = 1.75  # centimeters
+# The stationary marker on the mat is larger than the moving sticker so
+# we keep separate lengths for accurate pose estimation.
+DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
+STATIONARY_MARKER_LENGTH = 3.5  # centimeters (mat sticker)
 CAMERA_MATRIX = np.array([[500, 0, 320], [0, 500, 240], [0, 0, 1]], dtype=float)
 DIST_COEFFS = np.zeros(5)
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
@@ -97,12 +100,20 @@ def process_video(
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = ARUCO_DETECTOR.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
-            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                corners, MARKER_LENGTH, CAMERA_MATRIX, DIST_COEFFS
-            )
             for i, marker_id in enumerate(ids.flatten()):
-                rvec = rvecs[i, 0]
-                tvec = tvecs[i, 0]
+                length = (
+                    STATIONARY_MARKER_LENGTH
+                    if marker_id == STATIONARY_ID
+                    else DYNAMIC_MARKER_LENGTH
+                )
+                rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+                    [corners[i]],
+                    length,
+                    CAMERA_MATRIX,
+                    DIST_COEFFS,
+                )
+                rvec = rvecs[0, 0]
+                tvec = tvecs[0, 0]
                 x, y, z = tvec
                 roll, pitch, yaw = rvec_to_euler(rvec)
                 if marker_id == STATIONARY_ID:
