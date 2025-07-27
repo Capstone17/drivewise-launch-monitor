@@ -1,9 +1,12 @@
 import json
+import os
 import sys
 
 import cv2
 import numpy as np
 from ultralytics import YOLO
+
+os.environ.setdefault("YOLO_AUTOINSTALL", "0")
 
 ACTUAL_BALL_RADIUS = 21.35  # milimeters
 FOCAL_LENGTH = 1900.0  # pixels
@@ -58,7 +61,7 @@ def process_video(
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
     ``stationary_path`` stores the averaged pose of the stationary marker."""
-    model = YOLO("golf_ball_detector.onnx")
+    model = YOLO("golf_ball_detector.onnx", task="detect")
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
