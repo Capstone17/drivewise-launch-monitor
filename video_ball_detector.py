@@ -54,15 +54,18 @@ def process_video(
     ball_path: str,
     sticker_path: str,
     stationary_path: str,
+    output_path: str = "annotated_output.mp4",
 ) -> None:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
-    ``stationary_path`` stores the averaged pose of the stationary marker."""
+    ``stationary_path`` stores the averaged pose of the stationary marker.
+    ``output_path`` is the video with all detections drawn."""
     model = YOLO("golf_ball_detector.onnx")
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
+    writer = None
     ball_coords = []
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
@@ -75,13 +78,16 @@ def process_video(
             break
         if h is None:
             h, w = frame.shape[:2]
+        if writer is None:
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
         t = frame_idx / fps
         frame_idx += 1
         results = model(frame, verbose=False)
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
-            cx, cy, _, distance = measure_ball(boxes[best_idx])
+            cx, cy, radius_px, distance = measure_ball(boxes[best_idx])
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
             by = (cy - h / 2.0) * distance / FOCAL_LENGTH
             bz = distance - 30.0
@@ -93,10 +99,22 @@ def process_video(
                     "z": round(bz, 2),
                 }
             )
+            cv2.circle(frame, (int(cx), int(cy)), int(radius_px), (0, 255, 0), 2)
+            cv2.putText(
+                frame,
+                f"x:{bx:.2f} y:{by:.2f} z:{bz:.2f}",
+                (int(cx) + 10, int(cy)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA,
+            )
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = ARUCO_DETECTOR.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
+            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
             for i, marker_id in enumerate(ids.flatten()):
                 length = (
                     STATIONARY_MARKER_LENGTH
@@ -116,6 +134,7 @@ def process_video(
                 if marker_id == STATIONARY_ID:
                     stationary_sum += (x, y, z, roll, pitch, yaw)
                     stationary_count += 1
+                    color = (0, 0, 255)
                 else:
                     sticker_coords.append(
                         {
@@ -128,8 +147,34 @@ def process_video(
                             "yaw": round(float(yaw), 2),
                         }
                     )
-
+                    color = (255, 0, 0)
+                cv2.aruco.drawAxis(frame, CAMERA_MATRIX, DIST_COEFFS, rvec, tvec, length)
+                mc = (int(corners[i][0][:, 0].mean()), int(corners[i][0][:, 1].mean()))
+                cv2.putText(
+                    frame,
+                    f"x:{x:.2f} y:{y:.2f} z:{z:.2f}",
+                    (mc[0], mc[1] - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    color,
+                    1,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    frame,
+                    f"r:{roll:.1f} p:{pitch:.1f} y:{yaw:.1f}",
+                    (mc[0], mc[1] - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    color,
+                    1,
+                    cv2.LINE_AA,
+                )
+        if writer is not None:
+            writer.write(frame)
     cap.release()
+    if writer is not None:
+        writer.release()
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
@@ -153,6 +198,8 @@ def process_video(
     print(f"Saved {len(sticker_coords)} sticker points to {sticker_path}")
     if stationary_count:
         print(f"Saved averaged stationary sticker pose to {stationary_path}")
+    if writer is not None:
+        print(f"Annotated video saved to {output_path}")
 
 
 if __name__ == "__main__":
@@ -160,4 +207,5 @@ if __name__ == "__main__":
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
-    process_video(video_path, ball_path, sticker_path, stationary_path)
+    output_path = sys.argv[5] if len(sys.argv) > 5 else "annotated_output.mp4"
+    process_video(video_path, ball_path, sticker_path, stationary_path, output_path)
