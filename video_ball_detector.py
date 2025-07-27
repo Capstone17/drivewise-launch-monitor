@@ -179,7 +179,6 @@ def process_video(
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     print("fps: ", fps, "width: ", w, "height :", h)
-    ball_coords = []
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
     stationary_count = 0
@@ -187,10 +186,10 @@ def process_video(
     sticker_time = 0.0
     yolo_frames = 0
     circle_frames = 0
-    ball_found = False
     last_circle: tuple[float, float, float] | None = None
-    lost = 0
-    LOST_THRESHOLD = 50
+    ball_results: list[dict | None] = []
+    outlier_frames: list[tuple[int, np.ndarray]] = []
+    jump_thresh = 50
 
     frame_idx = 0
     while True:
@@ -202,54 +201,31 @@ def process_video(
         t = frame_idx / fps
         frame_idx += 1
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        if last_circle is None or lost >= LOST_THRESHOLD:
-            start = time.perf_counter()
-            boxes = detect_ball(sess, frame, w, h)
-            ball_time += time.perf_counter() - start
-            yolo_frames += 1
-            if boxes.size > 0:
-                best_idx = boxes[:, 4].argmax()
-                cx, cy, r, distance = measure_ball(tuple(boxes[best_idx, :4]))
-                last_circle = (cx, cy, r)
-                ball_found = True
-                lost = 0
-            else:
-                ball_found = False
-                last_circle = None
-                lost += 1
-        else:
-            start = time.perf_counter()
-            circle = detect_circle(gray, last_circle)
-            ball_time += time.perf_counter() - start
-            circle_frames += 1
-            if circle is not None:
-                cx, cy, r = circle
-                distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / r
-                dx = abs(cx - last_circle[0]) if last_circle is not None else 0
-                dy = abs(cy - last_circle[1]) if last_circle is not None else 0
-                if dx < 50 and dy < 50:
-                    last_circle = circle
-                    ball_found = True
-                    lost = 0
-                else:
-                    lost += 1
-                    ball_found = False
-            elif last_circle is not None and lost < LOST_THRESHOLD:
-                cx, cy, r = last_circle
-                distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / r
-                lost += 1
-                ball_found = True
-            else:
-                lost += 1
-                ball_found = False
-                if lost >= LOST_THRESHOLD:
-                    last_circle = None
 
-        if ball_found:
+        start = time.perf_counter()
+        circle = detect_circle(gray, last_circle)
+        ball_time += time.perf_counter() - start
+        circle_frames += 1
+
+        outlier = circle is None
+        if not outlier:
+            cx, cy, r = circle
+            distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / r
+            if last_circle is not None:
+                dx = abs(cx - last_circle[0])
+                dy = abs(cy - last_circle[1])
+                outlier = dx > jump_thresh or dy > jump_thresh
+        if circle is not None:
+            last_circle = circle
+
+        if outlier:
+            outlier_frames.append((frame_idx - 1, frame.copy()))
+            ball_results.append(None)
+        else:
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
             by = (cy - h / 2.0) * distance / FOCAL_LENGTH
             bz = distance - 30.0
-            ball_coords.append(
+            ball_results.append(
                 {
                     "time": round(t, 2),
                     "x": round(bx, 2),
@@ -292,7 +268,28 @@ def process_video(
                     )
         sticker_time += time.perf_counter() - sticker_start
 
+    # Recalculate outlier frames with YOLO
+    for idx, frm in outlier_frames:
+        start = time.perf_counter()
+        boxes = detect_ball(sess, frm, w, h)
+        ball_time += time.perf_counter() - start
+        yolo_frames += 1
+        if boxes.size > 0:
+            best_idx = boxes[:, 4].argmax()
+            cx, cy, r, distance = measure_ball(tuple(boxes[best_idx, :4]))
+            bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
+            by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+            bz = distance - 30.0
+            t = idx / fps
+            ball_results[idx] = {
+                "time": round(t, 2),
+                "x": round(bx, 2),
+                "y": round(by, 2),
+                "z": round(bz, 2),
+            }
+
     cap.release()
+    ball_coords = [b for b in ball_results if b is not None]
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
