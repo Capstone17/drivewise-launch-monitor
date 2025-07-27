@@ -34,7 +34,7 @@ def face_angle_calc(pose1: dict, yaw_ideal: float) -> float:
 
 
 # SWING PATH
-def swing_path_calc(pose1: dict, pose2: dict, pose3: dict, reference_vector):
+def swing_path_calc(pose1: dict, pose2: dict, reference_vector):
     """
     Analyze horizontal motion and orientation change between two poses.
 
@@ -47,18 +47,23 @@ def swing_path_calc(pose1: dict, pose2: dict, pose3: dict, reference_vector):
         dict: {
             "horizontal_displacement": np.ndarray [dx, dz],
             "distance": float,
-            "yaw_change": float,
             "motion_angle_deg": float
         }
     """
-    # Check if the first two frames are the same
-
     # Extract horizontal positions (X, Z)
     p1 = np.array([pose1["x"], pose1["z"]], dtype=float)
     p2 = np.array([pose2["x"], pose2["z"]], dtype=float)
 
     # Compute displacement vector and distance
     delta_xz = p2 - p1
+
+    # Check for the [0, 0] case
+    if np.linalg.norm(delta_xz) == 0:
+        return {
+            "horizontal_displacement": delta_xz,
+            "distance": 0.0,
+            "motion_angle_deg": 0.0
+        }
     distance = np.linalg.norm(delta_xz)
 
     # Compute motion direction angle relative to reference vector

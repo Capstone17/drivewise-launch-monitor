@@ -4,7 +4,7 @@
 
 # RUN INSTRUCTIONS:
 #     Make the script exuecutable: chmod +x GScrop.sh
-#     Basic format: ./capture_video.sh <width> <height> <framerate> <duration_ms> [shutter_us]
+#     Basic format: ./GScrop.sh <width> <height> <framerate> <duration_ms> [shutter_us]
 #     Shutter time (us): 1/500fps=0.002s=2000us -> 1800us for safety
 #     Example: ./GScrop.sh 960 240 250 5000 4000
 #         Runs for 5 seconds with a 250 fps, exposure time of 4000 us
