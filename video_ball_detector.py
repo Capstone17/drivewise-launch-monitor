@@ -5,6 +5,7 @@ import time
 import cv2
 import numpy as np
 from ultralytics import YOLO
+from scipy.interpolate import UnivariateSpline
 
 ACTUAL_BALL_RADIUS = 21.35  # milimeters
 FOCAL_LENGTH = 1900.0  # pixels
@@ -75,42 +76,52 @@ def estimate_pose_single_markers(corners: list[np.ndarray], length: float):
 
 
 
-def remove_outliers(coords: list[dict]) -> list[dict]:
-    """Remove coordinate outliers using the median absolute deviation."""
-    if not coords:
-        return coords
-    arr = np.array([[c["x"], c["y"], c["z"]] for c in coords], dtype=float)
-    med = np.median(arr, axis=0)
-    diff = np.linalg.norm(arr - med, axis=1)
-    mad = np.median(diff)
-    if mad == 0:
-        return coords
-    mask = diff < 2.5 * mad
-    return [c for c, m in zip(coords, mask) if m]
+def remove_outliers(points: list[dict], threshold: float = 3.5) -> list[dict]:
+    """Remove obvious outliers using sequential differences."""
+
+    if len(points) < 3:
+        return points
+
+    pts = sorted(points, key=lambda p: p["time"])
+    arr = np.array([[p["cx"], p["cy"]] for p in pts], dtype=float)
+    step = np.linalg.norm(np.diff(arr, axis=0), axis=1)
+    med_step = np.median(step)
+
+    if med_step == 0:
+        return pts
+
+    keep = [True]
+    for d in step:
+        keep.append(d <= threshold * med_step)
+
+    return [p for p, k in zip(pts, keep) if k]
 
 
-def fit_linear_curve(coords: list[dict]):
-    """Fit a linear model for x, y and z over time."""
-    t = np.array([c["time"] for c in coords], dtype=float)
-    x = np.array([c["x"] for c in coords], dtype=float)
-    y = np.array([c["y"] for c in coords], dtype=float)
-    z = np.array([c["z"] for c in coords], dtype=float)
-    px = np.polyfit(t, x, 1)
-    py = np.polyfit(t, y, 1)
-    pz = np.polyfit(t, z, 1)
-    return px, py, pz
+def fit_pixel_curve(points: list[dict], smooth: float = 0.0):
+    """Return splines approximating pixel centers over time."""
+    if len(points) < 2:
+        raise ValueError("At least two points are required")
+    t = np.array([p["time"] for p in points], dtype=float)
+    cx = np.array([p["cx"] for p in points], dtype=float)
+    cy = np.array([p["cy"] for p in points], dtype=float)
+    sx = UnivariateSpline(t, cx, s=smooth)
+    sy = UnivariateSpline(t, cy, s=smooth)
+    return sx, sy
 
 
 def detect_with_hough(
     video_path: str,
-    coeffs: tuple[np.ndarray, np.ndarray, np.ndarray],
+    coeffs: tuple[callable, callable],
     fps: float,
     w: int,
     h: int,
     search_radius: int,
 ) -> list[dict]:
-    """Detect circles along the approximated curve within ``search_radius``."""
-    px, py, pz = coeffs
+    """Detect circles along the approximated curve within ``search_radius``.
+
+    Returns a list of detections containing both world and pixel coordinates.
+    """
+    fx, fy = coeffs
     cap = cv2.VideoCapture(video_path)
     coords: list[dict] = []
     frame_idx = 0
@@ -120,12 +131,8 @@ def detect_with_hough(
             break
         t = frame_idx / fps
         frame_idx += 1
-        x_pred = np.polyval(px, t)
-        y_pred = np.polyval(py, t)
-        z_pred = np.polyval(pz, t)
-        dist = z_pred + 30.0
-        cx_pred = int(x_pred * FOCAL_LENGTH / dist + w / 2)
-        cy_pred = int(y_pred * FOCAL_LENGTH / dist + h / 2)
+        cx_pred = int(fx(t))
+        cy_pred = int(fy(t))
         x1 = max(0, cx_pred - search_radius)
         y1 = max(0, cy_pred - search_radius)
         x2 = min(w, cx_pred + search_radius)
@@ -158,9 +165,12 @@ def detect_with_hough(
         coords.append(
             {
                 "time": round(t, 2),
+                "frame": frame_idx - 1,
                 "x": round(bx, 2),
                 "y": round(by, 2),
                 "z": round(bz, 2),
+                "cx": int(cx),
+                "cy": int(cy),
             }
         )
     cap.release()
@@ -175,15 +185,16 @@ def process_video(
     annotated_path: str = "annotated.mp4",
     yolo_interval: int = 10,
     search_radius: int = 40,
+    curve_path: str = "curve_path.json",
 ) -> None:
-    """Process ``video_path`` saving ball and sticker coordinates to JSON.
+    """Process ``video_path`` saving ball, sticker and path coordinates to JSON.
 
     ``stationary_path`` stores the averaged pose of the stationary marker.
     Prints compile and runtime statistics for each detector and saves an
     annotated video. YOLOv8 inference is performed every ``yolo_interval``
     frames (default 10). After initial detection an approximated trajectory is
     fitted and OpenCV circle detection is performed within ``search_radius``
-    pixels of that curve."""
+    pixels of that curve. The approximated curve is saved to ``curve_path``."""
     ball_compile_start = time.perf_counter()
     model = YOLO("golf_ball_detector.onnx")
     ball_compile_time = time.perf_counter() - ball_compile_start
@@ -196,12 +207,7 @@ def process_video(
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     print("fps: ", fps, "width: ", w, "height :", h)
-    writer = cv2.VideoWriter(
-        annotated_path,
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        fps,
-        (w, h),
-    )
+    annotated_frames: list[np.ndarray] = []
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
     stationary_count = 0
@@ -210,6 +216,7 @@ def process_video(
     yolo_frames = 0
     circle_frames = 0
     ball_coords: list[dict] = []
+    yolo_points: list[dict] = []
 
     frame_idx = 0
     while True:
@@ -233,17 +240,7 @@ def process_video(
             best_idx = boxes.conf.argmax()
             box_xyxy = tuple(boxes[best_idx].xyxy[0])
             cx, cy, r, distance = measure_ball(box_xyxy)
-            bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-            by = (cy - h / 2.0) * distance / FOCAL_LENGTH
-            bz = distance - 30.0
-            ball_coords.append(
-                {
-                    "time": round(t, 2),
-                    "x": round(bx, 2),
-                    "y": round(by, 2),
-                    "z": round(bz, 2),
-                }
-            )
+            yolo_points.append({"time": t, "cx": cx, "cy": cy})
             x1, y1, x2, y2 = map(int, box_xyxy)
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
@@ -283,14 +280,17 @@ def process_video(
                     )
                 # Axis drawing requires aruco contrib module which may not be available
         sticker_time += time.perf_counter() - sticker_start
-        writer.write(frame)
+        annotated_frames.append(frame.copy())
 
     cap.release()
-    writer.release()
 
     # Refine the YOLO detections
-    filtered = remove_outliers(ball_coords)
-    coeffs = fit_linear_curve(filtered) if filtered else (np.array([0, 0]), np.array([0, 0]), np.array([0, 0]))
+    # Remove outliers and fit a flexible spline through the remaining points
+    filtered = remove_outliers(yolo_points)
+    if len(filtered) >= 2:
+        coeffs = fit_pixel_curve(filtered)
+    else:
+        coeffs = (lambda t: 0.0, lambda t: 0.0)
     ball_coords = detect_with_hough(
         video_path,
         coeffs,
@@ -300,6 +300,59 @@ def process_video(
         search_radius,
     )
     circle_frames = len(ball_coords)
+
+    # Map frame indices to OpenCV detected pixel centers for annotation
+    circle_points: dict[int, list[tuple[int, int]]] = {}
+    for c in ball_coords:
+        idx = c.get("frame")
+        if idx is not None:
+            circle_points.setdefault(int(idx), []).append((int(c["cx"]), int(c["cy"])))
+
+    # Draw the approximated trajectory on the annotated frames
+    fx, fy = coeffs
+    writer = cv2.VideoWriter(
+        annotated_path,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (w, h),
+    )
+    curve_points: list[tuple[int, int]] = []
+    path_points: list[dict] = []
+    start_t = filtered[0]["time"] if filtered else 0.0
+    end_t = filtered[-1]["time"] if filtered else len(annotated_frames) / fps
+    start_idx = int(start_t * fps)
+    end_idx = min(int(end_t * fps), len(annotated_frames) - 1)
+    for idx in range(start_idx, end_idx + 1):
+        t = idx / fps
+        cx_pred_float = float(fx(t))
+        cy_pred_float = float(fy(t))
+        curve_points.append((int(cx_pred_float), int(cy_pred_float)))
+        path_points.append(
+            {
+                "time": round(t, 2),
+                "cx": round(cx_pred_float, 2),
+                "cy": round(cy_pred_float, 2),
+            }
+        )
+    for idx, frame in enumerate(annotated_frames):
+        if start_idx <= idx <= end_idx:
+            pts = np.array(
+                [p for i, p in enumerate(curve_points) if start_idx + i <= idx],
+                dtype=np.int32,
+            )
+            if len(pts) > 1:
+                cv2.polylines(frame, [pts], False, (0, 0, 255), 2)
+            elif len(pts) == 1:
+                cv2.circle(frame, pts[0], 3, (0, 0, 255), -1)
+        # Draw detected circle centers from OpenCV
+        if idx in circle_points:
+            for cx, cy in circle_points[idx]:
+                cv2.circle(frame, (cx, cy), 4, (255, 0, 0), -1)
+        writer.write(frame)
+    writer.release()
+
+    with open(curve_path, "w") as f:
+        json.dump(path_points, f, indent=2)
 
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
@@ -340,6 +393,7 @@ if __name__ == "__main__":
     annotated_path = sys.argv[5] if len(sys.argv) > 5 else "annotated.mp4"
     yolo_interval = int(sys.argv[6]) if len(sys.argv) > 6 else 10
     search_radius = int(sys.argv[7]) if len(sys.argv) > 7 else 40
+    curve_path = sys.argv[8] if len(sys.argv) > 8 else "curve_path.json"
     process_video(
         video_path,
         ball_path,
@@ -348,4 +402,5 @@ if __name__ == "__main__":
         annotated_path,
         yolo_interval,
         search_radius,
+        curve_path,
     )
