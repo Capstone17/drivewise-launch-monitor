@@ -192,6 +192,8 @@ def process_video(
     outlier_frames: list[tuple[int, np.ndarray]] = []
     jump_thresh = 50
 
+    writer = None
+
     frame_idx = 0
     while True:
         ret, frame = cap.read()
@@ -237,7 +239,7 @@ def process_video(
                     "z": round(bz, 2),
                 }
             )
-            cv2.circle(frame, (int(cx), int(cy)), int(radius_px), (0, 255, 0), 2)
+            cv2.circle(frame, (int(cx), int(cy)), int(r), (0, 255, 0), 2)
             cv2.putText(
                 frame,
                 f"x:{bx:.2f} y:{by:.2f} z:{bz:.2f}",
@@ -248,6 +250,9 @@ def process_video(
                 1,
                 cv2.LINE_AA,
             )
+
+        if writer is not None:
+            writer.write(frame)
 
         sticker_start = time.perf_counter()
         corners, ids, _ = aruco_detector.detectMarkers(gray)
@@ -306,6 +311,8 @@ def process_video(
             }
 
     cap.release()
+    if writer is not None:
+        writer.release()
     ball_coords = [b for b in ball_results if b is not None]
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
