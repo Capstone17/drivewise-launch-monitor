@@ -1,9 +1,15 @@
 import json
 import sys
+import time
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
+try:
+    import cv2.dnn as cvdnn
+    from cv2.dnn import Net as cvdnn_Net
+except Exception:  # pragma: no cover - older opencv
+    cvdnn = cv2.dnn
+    cvdnn_Net = cv2.dnn_Net
 
 ACTUAL_BALL_RADIUS = 21.35  # milimeters
 FOCAL_LENGTH = 1900.0  # pixels
@@ -18,6 +24,27 @@ ARUCO_DETECTOR = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
 
 # ID of the stationary ArUco marker
 STATIONARY_ID = 1
+
+# Parameters for ONNX ball detector
+IMG_SIZE = 512
+STRIDES = [8, 16, 32]
+
+
+def _make_grid(img_size=IMG_SIZE, strides=STRIDES):
+    """Create grid and stride arrays for YOLOv8 decoding."""
+    grid_list = []
+    stride_list = []
+    for s in strides:
+        num = img_size // s
+        y, x = np.meshgrid(np.arange(num), np.arange(num))
+        grid_list.append(np.stack((x, y), axis=-1).reshape(-1, 2))
+        stride_list.append(np.full((num * num, 1), s, dtype=float))
+    grid = np.concatenate(grid_list, axis=0).astype(float)
+    stride = np.concatenate(stride_list, axis=0).astype(float)
+    return grid, stride
+
+
+GRID, STRIDE = _make_grid()
 
 
 def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
@@ -38,8 +65,9 @@ def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
     return tuple(np.degrees([roll, pitch, yaw]))
 
 
-def measure_ball(box):
-    x1, y1, x2, y2 = box.xyxy[0]
+def measure_ball(box: tuple[float, float, float, float]):
+    """Return center and distance from bounding box coordinates."""
+    x1, y1, x2, y2 = box
     w = float(x2 - x1)
     h = float(y2 - y1)
     radius_px = (w + h) / 4.0
@@ -47,6 +75,20 @@ def measure_ball(box):
     cy = float(y1 + y2) / 2.0
     distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / radius_px
     return cx, cy, radius_px, distance
+
+
+def detect_ball(net: cvdnn_Net, frame: np.ndarray, w: int, h: int) -> np.ndarray:
+    """Run ONNX model and return bounding boxes in xyxy format with confidence."""
+    blob = cvdnn.blobFromImage(frame, 1.0 / 255.0, (IMG_SIZE, IMG_SIZE), swapRB=True)
+    net.setInput(blob)
+    pred = net.forward().reshape(5, -1).T
+
+    xy = (pred[:, :2] * 2 + GRID) * STRIDE
+    wh = (pred[:, 2:4] * 2) ** 2 * STRIDE
+    conf = 1 / (1 + np.exp(-pred[:, 4:5]))
+    xyxy = np.concatenate([xy - wh / 2, xy + wh / 2, conf], axis=1)
+    scale = np.array([[w / IMG_SIZE, h / IMG_SIZE, w / IMG_SIZE, h / IMG_SIZE, 1]])
+    return xyxy * scale
 
 
 def process_video(
@@ -58,16 +100,18 @@ def process_video(
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
     ``stationary_path`` stores the averaged pose of the stationary marker."""
-    model = YOLO("golf_ball_detector.onnx")
+    net = cvdnn.readNetFromONNX("golf_ball_detector.onnx")
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
-    print("fps: ", fps, "width: ", w, "height :", h) 
+    print("fps: ", fps, "width: ", w, "height :", h)
     ball_coords = []
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
     stationary_count = 0
+    ball_time = 0.0
+    sticker_time = 0.0
 
     frame_idx = 0
     while True:
@@ -78,11 +122,12 @@ def process_video(
             h, w = frame.shape[:2]
         t = frame_idx / fps
         frame_idx += 1
-        results = model(frame, verbose=False)
-        if results and len(results[0].boxes) > 0:
-            boxes = results[0].boxes
-            best_idx = boxes.conf.argmax()
-            cx, cy, _, distance = measure_ball(boxes[best_idx])
+        start = time.perf_counter()
+        boxes = detect_ball(net, frame, w, h)
+        ball_time += time.perf_counter() - start
+        if boxes.size > 0:
+            best_idx = boxes[:, 4].argmax()
+            cx, cy, _, distance = measure_ball(tuple(boxes[best_idx, :4]))
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
             by = (cy - h / 2.0) * distance / FOCAL_LENGTH
             bz = distance - 30.0
@@ -95,6 +140,7 @@ def process_video(
                 }
             )
 
+        sticker_start = time.perf_counter()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = ARUCO_DETECTOR.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
@@ -129,6 +175,7 @@ def process_video(
                             "yaw": round(float(yaw), 2),
                         }
                     )
+        sticker_time += time.perf_counter() - sticker_start
 
     cap.release()
     with open(ball_path, "w") as f:
@@ -154,6 +201,8 @@ def process_video(
     print(f"Saved {len(sticker_coords)} sticker points to {sticker_path}")
     if stationary_count:
         print(f"Saved averaged stationary sticker pose to {stationary_path}")
+    print(f"Ball detection time: {ball_time:.2f}s")
+    print(f"Sticker detection time: {sticker_time:.2f}s")
 
 
 if __name__ == "__main__":
