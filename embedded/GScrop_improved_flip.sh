@@ -3,10 +3,10 @@
 # (silence shellcheck wrt $cam1 environment variable)
 
 # RUN INSTRUCTIONS:
-#   Make executable: chmod +x GScrop_improved.sh
-#   Usage: ./GScrop.sh <width> <height> <framerate> <duration_ms> [shutter_us]
-#   Example (387 fps): ./GScrop_improved.sh 816 144 387 2000 2300
-#   Example (427 fps): ./GScrop_improved.sh 672 128 425 2000 2100
+#   Make executable: chmod +x GScrop_centerflip.sh
+#   Usage: ./GScrop_centerflip.sh <width> <height> <framerate> <duration_ms> [shutter_us]
+#   Example: ./GScrop_centerflip.sh 816 144 387 2000 2300
+#   Example: ./GScrop_centerflip.sh 672 128 425 2000 2100
 
 # -------------------------
 # Input Validation
@@ -51,17 +51,11 @@ if grep -q "Revision.*: ...17." /proc/cpuinfo; then
 fi
 
 # -------------------------
-# media-ctl Setup (centered crop)
+# media-ctl Setup (center crop)
 # -------------------------
 
-full_width=1440
-full_height=1088
-crop_x=$(((full_width - width) / 2))
-crop_y=$(((full_height - height) / 2))
-
 for ((m=0; m<=5; ++m)); do
-    media-ctl -d /dev/media$m \
-        --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:(${crop_x},${crop_y})/${width}x${height}]" -v
+    media-ctl -d /dev/media$m --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:($(((1440 - width) / 2)),$(((1088 - height) / 2)))/${width}x${height}]" -v
     if [[ $? -eq 0 ]]; then
         break
     fi
@@ -76,22 +70,22 @@ mkdir -p "$output_dir"
 rm -f "$output_dir/tst.pts"
 
 # -------------------------
-# Run Camera Capture
+# Run Camera Capture (with live flip)
 # -------------------------
 
 libcamera-hello --list-cameras
-echo
 
+echo
 if grep -q "Revision.*: ...17." /proc/cpuinfo; then
     # Raspberry Pi 5 with rpicam-vid
     output_file="$output_dir/tst${cam1:+1}.mp4"
     rpicam-vid "$workaround" ${cam1:+--camera 1} --width "$width" --height "$height" \
         --denoise cdn_off --framerate "$framerate" -t "$duration" "$SHTR" "$shutter" \
+        --hflip --vflip \
         -o "$output_file" -n
+
     echo
     ~/venv/bin/python ~/rpicam-apps/utils/timestamp.py --plot ${narrow:+--narrow} "$output_file"
-
-    # Benchmark FPS (Python script outputs it in terminal)
 
 else
     # Other Pi models using libcamera-vid
@@ -99,9 +93,11 @@ else
     pts_file="$output_dir/tst.pts"
     libcamera-vid "$workaround" --width "$width" --height "$height" \
         --denoise cdn_off --framerate "$framerate" --save-pts "$pts_file" \
-        -t "$duration" "$SHTR" "$shutter" -o "$output_file" -n
-    echo
+        -t "$duration" "$SHTR" "$shutter" \
+        --hflip --vflip \
+        -o "$output_file" -n
 
+    echo
     rm -f tstamps.csv
     if command -v ptsanalyze >/dev/null 2>&1; then
         echo "Calculating actual FPS from pts file..."
