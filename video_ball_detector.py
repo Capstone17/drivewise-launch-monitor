@@ -1,5 +1,6 @@
 import json
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -63,11 +64,13 @@ def process_video(
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
-    print("fps: ", fps, "width: ", w, "height :", h) 
+    print("fps: ", fps, "width: ", w, "height :", h)
     ball_coords = []
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
     stationary_count = 0
+    ball_time = 0.0
+    sticker_time = 0.0
 
     frame_idx = 0
     while True:
@@ -78,7 +81,9 @@ def process_video(
             h, w = frame.shape[:2]
         t = frame_idx / fps
         frame_idx += 1
+        start = time.perf_counter()
         results = model(frame, verbose=False)
+        ball_time += time.perf_counter() - start
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
@@ -95,6 +100,7 @@ def process_video(
                 }
             )
 
+        sticker_start = time.perf_counter()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = ARUCO_DETECTOR.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
@@ -129,6 +135,7 @@ def process_video(
                             "yaw": round(float(yaw), 2),
                         }
                     )
+        sticker_time += time.perf_counter() - sticker_start
 
     cap.release()
     with open(ball_path, "w") as f:
@@ -154,6 +161,8 @@ def process_video(
     print(f"Saved {len(sticker_coords)} sticker points to {sticker_path}")
     if stationary_count:
         print(f"Saved averaged stationary sticker pose to {stationary_path}")
+    print(f"Ball detection time: {ball_time:.2f}s")
+    print(f"Sticker detection time: {sticker_time:.2f}s")
 
 
 if __name__ == "__main__":
