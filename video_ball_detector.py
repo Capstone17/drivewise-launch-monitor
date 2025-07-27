@@ -234,6 +234,11 @@ def process_video(
                 else:
                     lost += 1
                     ball_found = False
+            elif last_circle is not None and lost < LOST_THRESHOLD:
+                cx, cy, r = last_circle
+                distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / r
+                lost += 1
+                ball_found = True
             else:
                 lost += 1
                 ball_found = False
