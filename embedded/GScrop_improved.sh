@@ -51,11 +51,17 @@ if grep -q "Revision.*: ...17." /proc/cpuinfo; then
 fi
 
 # -------------------------
-# media-ctl Setup
+# media-ctl Setup (centered crop)
 # -------------------------
 
+full_width=1440
+full_height=1088
+crop_x=$(((full_width - width) / 2))
+crop_y=$(((full_height - height) / 2))
+
 for ((m=0; m<=5; ++m)); do
-    media-ctl -d /dev/media$m --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:($(((1440 - width) / 2)),$(((1088 - height) / 2)))/${width}x${height}]" -v
+    media-ctl -d /dev/media$m \
+        --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:(${crop_x},${crop_y})/${width}x${height}]" -v
     if [[ $? -eq 0 ]]; then
         break
     fi
@@ -86,6 +92,7 @@ if grep -q "Revision.*: ...17." /proc/cpuinfo; then
     ~/venv/bin/python ~/rpicam-apps/utils/timestamp.py --plot ${narrow:+--narrow} "$output_file"
 
     # Benchmark FPS (Python script outputs it in terminal)
+
 else
     # Other Pi models using libcamera-vid
     output_file="$output_dir/tst.h264"
