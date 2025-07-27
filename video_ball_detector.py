@@ -81,12 +81,14 @@ def process_video(
     sticker_path: str,
     stationary_path: str,
     annotated_path: str = "annotated.mp4",
+    yolo_interval: int = 10,
 ) -> None:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
     ``stationary_path`` stores the averaged pose of the stationary marker.
     Prints compile and runtime statistics for each detector and saves an
-    annotated video."""
+    annotated video. YOLOv8 inference is performed every ``yolo_interval``
+    frames (default 10)."""
     ball_compile_start = time.perf_counter()
     model = YOLO("golf_ball_detector.onnx")
     ball_compile_time = time.perf_counter() - ball_compile_start
@@ -124,10 +126,13 @@ def process_video(
         t = frame_idx / fps
         frame_idx += 1
 
-        start = time.perf_counter()
-        results = model(frame, verbose=False, imgsz=512)
-        ball_time += time.perf_counter() - start
-        yolo_frames += 1
+        if frame_idx % yolo_interval == 0:
+            start = time.perf_counter()
+            results = model(frame, verbose=False, imgsz=512)
+            ball_time += time.perf_counter() - start
+            yolo_frames += 1
+        else:
+            results = None
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
@@ -224,4 +229,12 @@ if __name__ == "__main__":
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
     annotated_path = sys.argv[5] if len(sys.argv) > 5 else "annotated.mp4"
-    process_video(video_path, ball_path, sticker_path, stationary_path, annotated_path)
+    yolo_interval = int(sys.argv[6]) if len(sys.argv) > 6 else 10
+    process_video(
+        video_path,
+        ball_path,
+        sticker_path,
+        stationary_path,
+        annotated_path,
+        yolo_interval,
+    )
