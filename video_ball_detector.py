@@ -148,7 +148,10 @@ def process_video(
                         }
                     )
                     color = (255, 0, 0)
-                cv2.aruco.drawAxis(frame, CAMERA_MATRIX, DIST_COEFFS, rvec, tvec, length)
+                if hasattr(cv2.aruco, "drawAxis"):
+                    cv2.aruco.drawAxis(frame, CAMERA_MATRIX, DIST_COEFFS, rvec, tvec, length)
+                else:
+                    cv2.drawFrameAxes(frame, CAMERA_MATRIX, DIST_COEFFS, rvec, tvec, length)
                 mc = (int(corners[i][0][:, 0].mean()), int(corners[i][0][:, 1].mean()))
                 cv2.putText(
                     frame,
