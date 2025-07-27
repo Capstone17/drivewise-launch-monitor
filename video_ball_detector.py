@@ -15,7 +15,6 @@ CAMERA_MATRIX = np.array([[500, 0, 320], [0, 500, 240], [0, 0, 1]], dtype=float)
 DIST_COEFFS = np.zeros(5)
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
-ARUCO_DETECTOR = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
 
 # ID of the stationary ArUco marker
 STATIONARY_ID = 1
@@ -117,7 +116,9 @@ def process_video(
 ) -> None:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
-    ``stationary_path`` stores the averaged pose of the stationary marker."""
+    ``stationary_path`` stores the averaged pose of the stationary marker.
+    Prints compile and runtime statistics for each detector."""
+    ball_compile_start = time.perf_counter()
     sess_opts = ort.SessionOptions()
     sess_opts.intra_op_num_threads = 0
     sess_opts.inter_op_num_threads = 0
@@ -126,6 +127,11 @@ def process_video(
         sess_options=sess_opts,
         providers=["CPUExecutionProvider"],
     )
+    ball_compile_time = time.perf_counter() - ball_compile_start
+
+    sticker_compile_start = time.perf_counter()
+    aruco_detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
+    sticker_compile_time = time.perf_counter() - sticker_compile_start
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
@@ -167,7 +173,7 @@ def process_video(
 
         sticker_start = time.perf_counter()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = ARUCO_DETECTOR.detectMarkers(gray)
+        corners, ids, _ = aruco_detector.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
             for i, marker_id in enumerate(ids.flatten()):
                 length = (
@@ -224,6 +230,8 @@ def process_video(
     print(f"Saved {len(sticker_coords)} sticker points to {sticker_path}")
     if stationary_count:
         print(f"Saved averaged stationary sticker pose to {stationary_path}")
+    print(f"Ball detection compile time: {ball_compile_time:.2f}s")
+    print(f"Sticker detection compile time: {sticker_compile_time:.2f}s")
     print(f"Ball detection time: {ball_time:.2f}s")
     print(f"Sticker detection time: {sticker_time:.2f}s")
 
