@@ -198,6 +198,7 @@ def process_video(
     sticker_path: str,
     stationary_path: str,
     output_path: str = "annotated_output.mp4",
+    yolo_interval: int = 10,
 ) -> None:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
@@ -235,7 +236,13 @@ def process_video(
     outlier_frames: list[tuple[int, np.ndarray]] = []
     jump_thresh_x = 40
     jump_thresh_y = 200
-    yolo_interval = 10
+
+    # Keep the last two YOLO detections to approximate motion
+    prev_yolo_idx: int | None = None
+    prev_yolo_circle: tuple[float, float, float] | None = None
+    last_yolo_idx: int | None = None
+    last_yolo_circle: tuple[float, float, float] | None = None
+    velocity = (0.0, 0.0)
 
     writer = None
 
@@ -262,14 +269,40 @@ def process_video(
             if boxes.size > 0:
                 best_idx = boxes[:, 4].argmax()
                 last_box = tuple(boxes[best_idx, :4])
+                prev_yolo_idx = last_yolo_idx
+                prev_yolo_circle = last_yolo_circle
                 last_circle = measure_ball(last_box)[:3]
+                last_yolo_circle = last_circle
+                last_yolo_idx = frame_idx
+                if prev_yolo_idx is not None and prev_yolo_circle is not None:
+                    dt = last_yolo_idx - prev_yolo_idx
+                    if dt:
+                        velocity = (
+                            (last_yolo_circle[0] - prev_yolo_circle[0]) / dt,
+                            (last_yolo_circle[1] - prev_yolo_circle[1]) / dt,
+                        )
             else:
                 last_box = None
 
-        start = time.perf_counter()
-        circle = detect_circle(gray, last_circle, last_box)
-        ball_time += time.perf_counter() - start
-        circle_frames += 1
+        if not run_yolo and last_yolo_circle is not None:
+            pred_x = last_yolo_circle[0] + velocity[0] * (frame_idx - last_yolo_idx)
+            pred_y = last_yolo_circle[1] + velocity[1] * (frame_idx - last_yolo_idx)
+            predicted = (pred_x, pred_y, last_yolo_circle[2])
+            search_box = (
+                pred_x - predicted[2],
+                pred_y - predicted[2],
+                pred_x + predicted[2],
+                pred_y + predicted[2],
+            )
+            start = time.perf_counter()
+            circle = detect_circle(gray, predicted, search_box)
+            ball_time += time.perf_counter() - start
+            circle_frames += 1
+        else:
+            start = time.perf_counter()
+            circle = detect_circle(gray, last_circle, last_box)
+            ball_time += time.perf_counter() - start
+            circle_frames += 1
 
         outlier = circle is None
         if not outlier:
@@ -428,4 +461,12 @@ if __name__ == "__main__":
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
     output_path = sys.argv[5] if len(sys.argv) > 5 else "annotated_output.mp4"
-    process_video(video_path, ball_path, sticker_path, stationary_path, output_path)
+    interval = int(sys.argv[6]) if len(sys.argv) > 6 else 10
+    process_video(
+        video_path,
+        ball_path,
+        sticker_path,
+        stationary_path,
+        output_path,
+        interval,
+    )

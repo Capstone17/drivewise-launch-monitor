@@ -38,10 +38,11 @@ average pose of the stationary sticker, for example:
 ### Hybrid ball tracking
 
 The detector combines a fast Hough circle transform with occasional YOLOv8
-inference. YOLO is executed every few frames or when the circle tracker fails.
-Its bounding box constrains subsequent circle searches so other round objects
-do not trigger false positives. This approach keeps inference time low while
-maintaining high accuracy.
+inference. YOLO runs every ``n`` frames (``n`` can be specified on the command
+line) or whenever the circle tracker fails. The last two YOLO detections are
+used to estimate the ball's velocity so that intermediate circle searches are
+restricted to a narrow region along the predicted path. This keeps inference
+time low while maintaining high accuracy.
 
 ## Go Implementation
 
