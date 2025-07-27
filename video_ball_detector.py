@@ -5,11 +5,11 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-ACTUAL_BALL_RADIUS = 2.135  # centimeters
-FOCAL_LENGTH = 1000.0  # pixels
+ACTUAL_BALL_RADIUS = 21.35  # milimeters
+FOCAL_LENGTH = 1900.0  # pixels
 
-DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
-STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
+DYNAMIC_MARKER_LENGTH = 1.75  # milimeters (club sticker)
+STATIONARY_MARKER_LENGTH = 65  # milimeters (block sticker)
 CAMERA_MATRIX = np.array([[500, 0, 320], [0, 500, 240], [0, 0, 1]], dtype=float)
 DIST_COEFFS = np.zeros(5)
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
@@ -63,6 +63,7 @@ def process_video(
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
+    print("fps: ", fps, "width: ", w, "height :", h) 
     ball_coords = []
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
