@@ -117,7 +117,9 @@ def detect_circle(gray: np.ndarray, last: tuple[float, float, float] | None) -> 
         y1 = max(int(y - search), 0)
         x2 = min(int(x + search), gray.shape[1] - 1)
         y2 = min(int(y + search), gray.shape[0] - 1)
-        roi = gray[y1:y2, x1:x2]
+        if x2 <= x1 or y2 <= y1:
+            return None
+        roi = gray[y1 : y2 + 1, x1 : x2 + 1]
         circles = cv2.HoughCircles(
             roi,
             cv2.HOUGH_GRADIENT,
