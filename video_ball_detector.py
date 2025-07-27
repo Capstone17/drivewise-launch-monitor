@@ -4,7 +4,7 @@ import time
 
 import cv2
 import numpy as np
-import onnxruntime as ort
+from ultralytics import YOLO
 
 ACTUAL_BALL_RADIUS = 21.35  # milimeters
 FOCAL_LENGTH = 1900.0  # pixels
@@ -19,26 +19,6 @@ ARUCO_PARAMS = cv2.aruco.DetectorParameters()
 # ID of the stationary ArUco marker
 STATIONARY_ID = 1
 
-# Parameters for ONNX ball detector
-IMG_SIZE = 512
-STRIDES = [8, 16, 32]
-
-
-def _make_grid(img_size=IMG_SIZE, strides=STRIDES):
-    """Create grid and stride arrays for YOLOv8 decoding."""
-    grid_list = []
-    stride_list = []
-    for s in strides:
-        num = img_size // s
-        y, x = np.meshgrid(np.arange(num), np.arange(num))
-        grid_list.append(np.stack((x, y), axis=-1).reshape(-1, 2))
-        stride_list.append(np.full((num * num, 1), s, dtype=float))
-    grid = np.concatenate(grid_list, axis=0).astype(float)
-    stride = np.concatenate(stride_list, axis=0).astype(float)
-    return grid, stride
-
-
-GRID, STRIDE = _make_grid()
 
 
 def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
@@ -93,61 +73,6 @@ def estimate_pose_single_markers(corners: list[np.ndarray], length: float):
         tvecs.append(tvec.reshape(1, 3))
     return np.array(rvecs), np.array(tvecs), None
 
-def detect_ball(sess: ort.InferenceSession, frame: np.ndarray, w: int, h: int) -> np.ndarray:
-    """Run ONNX model and return bounding boxes in xyxy format with confidence."""
-    resized = cv2.resize(frame, (IMG_SIZE, IMG_SIZE))
-    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    inp = np.transpose(rgb, (2, 0, 1))[None]
-    pred = sess.run(None, {sess.get_inputs()[0].name: inp})[0][0].T
-
-    xy = (pred[:, :2] * 2 + GRID) * STRIDE
-    wh = (pred[:, 2:4] * 2) ** 2 * STRIDE
-    conf = 1 / (1 + np.exp(-pred[:, 4:5]))
-    xyxy = np.concatenate([xy - wh / 2, xy + wh / 2, conf], axis=1)
-    scale = np.array([[w / IMG_SIZE, h / IMG_SIZE, w / IMG_SIZE, h / IMG_SIZE, 1]])
-    return xyxy * scale
-
-
-def detect_circle(gray: np.ndarray, last: tuple[float, float, float] | None) -> tuple[float, float, float] | None:
-    """Return (x, y, r) of detected circle near ``last`` using Hough transform."""
-    search = 60
-    if last is not None:
-        x, y, r = last
-        x1 = max(int(x - search), 0)
-        y1 = max(int(y - search), 0)
-        x2 = min(int(x + search), gray.shape[1] - 1)
-        y2 = min(int(y + search), gray.shape[0] - 1)
-        if x2 <= x1 or y2 <= y1:
-            return None
-        roi = gray[y1 : y2 + 1, x1 : x2 + 1]
-        circles = cv2.HoughCircles(
-            roi,
-            cv2.HOUGH_GRADIENT,
-            dp=1.2,
-            minDist=r * 2,
-            param1=50,
-            param2=15,
-            minRadius=int(r * 0.6),
-            maxRadius=int(r * 1.4),
-        )
-        if circles is not None:
-            c = circles[0, 0]
-            return float(x1 + c[0]), float(y1 + c[1]), float(c[2])
-    else:
-        circles = cv2.HoughCircles(
-            gray,
-            cv2.HOUGH_GRADIENT,
-            dp=1.2,
-            minDist=30,
-            param1=50,
-            param2=15,
-            minRadius=5,
-            maxRadius=100,
-        )
-        if circles is not None:
-            c = circles[0, 0]
-            return float(c[0]), float(c[1]), float(c[2])
-    return None
 
 
 def process_video(
@@ -155,20 +80,15 @@ def process_video(
     ball_path: str,
     sticker_path: str,
     stationary_path: str,
+    annotated_path: str = "annotated.mp4",
 ) -> None:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
     ``stationary_path`` stores the averaged pose of the stationary marker.
-    Prints compile and runtime statistics for each detector."""
+    Prints compile and runtime statistics for each detector and saves an
+    annotated video."""
     ball_compile_start = time.perf_counter()
-    sess_opts = ort.SessionOptions()
-    sess_opts.intra_op_num_threads = 0
-    sess_opts.inter_op_num_threads = 0
-    sess = ort.InferenceSession(
-        "golf_ball_detector.onnx",
-        sess_options=sess_opts,
-        providers=["CPUExecutionProvider"],
-    )
+    model = YOLO("golf_ball_detector.onnx")
     ball_compile_time = time.perf_counter() - ball_compile_start
 
     sticker_compile_start = time.perf_counter()
@@ -179,6 +99,12 @@ def process_video(
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     print("fps: ", fps, "width: ", w, "height :", h)
+    writer = cv2.VideoWriter(
+        annotated_path,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (w, h),
+    )
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
     stationary_count = 0
@@ -186,10 +112,7 @@ def process_video(
     sticker_time = 0.0
     yolo_frames = 0
     circle_frames = 0
-    last_circle: tuple[float, float, float] | None = None
-    ball_results: list[dict | None] = []
-    outlier_frames: list[tuple[int, np.ndarray]] = []
-    jump_thresh = 50
+    ball_coords: list[dict] = []
 
     frame_idx = 0
     while True:
@@ -200,32 +123,20 @@ def process_video(
             h, w = frame.shape[:2]
         t = frame_idx / fps
         frame_idx += 1
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         start = time.perf_counter()
-        circle = detect_circle(gray, last_circle)
+        results = model(frame, verbose=False, imgsz=512)
         ball_time += time.perf_counter() - start
-        circle_frames += 1
-
-        outlier = circle is None
-        if not outlier:
-            cx, cy, r = circle
-            distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / r
-            if last_circle is not None:
-                dx = abs(cx - last_circle[0])
-                dy = abs(cy - last_circle[1])
-                outlier = dx > jump_thresh or dy > jump_thresh
-        if circle is not None:
-            last_circle = circle
-
-        if outlier:
-            outlier_frames.append((frame_idx - 1, frame.copy()))
-            ball_results.append(None)
-        else:
+        yolo_frames += 1
+        if results and len(results[0].boxes) > 0:
+            boxes = results[0].boxes
+            best_idx = boxes.conf.argmax()
+            box_xyxy = tuple(boxes[best_idx].xyxy[0])
+            cx, cy, r, distance = measure_ball(box_xyxy)
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
             by = (cy - h / 2.0) * distance / FOCAL_LENGTH
             bz = distance - 30.0
-            ball_results.append(
+            ball_coords.append(
                 {
                     "time": round(t, 2),
                     "x": round(bx, 2),
@@ -233,10 +144,14 @@ def process_video(
                     "z": round(bz, 2),
                 }
             )
+            x1, y1, x2, y2 = map(int, box_xyxy)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         sticker_start = time.perf_counter()
         corners, ids, _ = aruco_detector.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
+            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
             for i, marker_id in enumerate(ids.flatten()):
                 length = (
                     STATIONARY_MARKER_LENGTH
@@ -266,30 +181,12 @@ def process_video(
                             "yaw": round(float(yaw), 2),
                         }
                     )
+                # Axis drawing requires aruco contrib module which may not be available
         sticker_time += time.perf_counter() - sticker_start
-
-    # Recalculate outlier frames with YOLO
-    for idx, frm in outlier_frames:
-        start = time.perf_counter()
-        boxes = detect_ball(sess, frm, w, h)
-        ball_time += time.perf_counter() - start
-        yolo_frames += 1
-        if boxes.size > 0:
-            best_idx = boxes[:, 4].argmax()
-            cx, cy, r, distance = measure_ball(tuple(boxes[best_idx, :4]))
-            bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-            by = (cy - h / 2.0) * distance / FOCAL_LENGTH
-            bz = distance - 30.0
-            t = idx / fps
-            ball_results[idx] = {
-                "time": round(t, 2),
-                "x": round(bx, 2),
-                "y": round(by, 2),
-                "z": round(bz, 2),
-            }
+        writer.write(frame)
 
     cap.release()
-    ball_coords = [b for b in ball_results if b is not None]
+    writer.release()
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
@@ -326,4 +223,5 @@ if __name__ == "__main__":
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
-    process_video(video_path, ball_path, sticker_path, stationary_path)
+    annotated_path = sys.argv[5] if len(sys.argv) > 5 else "annotated.mp4"
+    process_video(video_path, ball_path, sticker_path, stationary_path, annotated_path)
