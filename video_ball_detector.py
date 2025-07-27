@@ -108,6 +108,46 @@ def detect_ball(sess: ort.InferenceSession, frame: np.ndarray, w: int, h: int) -
     return xyxy * scale
 
 
+def detect_circle(gray: np.ndarray, last: tuple[float, float, float] | None) -> tuple[float, float, float] | None:
+    """Return (x, y, r) of detected circle near ``last`` using Hough transform."""
+    search = 60
+    if last is not None:
+        x, y, r = last
+        x1 = max(int(x - search), 0)
+        y1 = max(int(y - search), 0)
+        x2 = min(int(x + search), gray.shape[1] - 1)
+        y2 = min(int(y + search), gray.shape[0] - 1)
+        roi = gray[y1:y2, x1:x2]
+        circles = cv2.HoughCircles(
+            roi,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=r * 2,
+            param1=50,
+            param2=15,
+            minRadius=int(r * 0.6),
+            maxRadius=int(r * 1.4),
+        )
+        if circles is not None:
+            c = circles[0, 0]
+            return float(x1 + c[0]), float(y1 + c[1]), float(c[2])
+    else:
+        circles = cv2.HoughCircles(
+            gray,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=30,
+            param1=50,
+            param2=15,
+            minRadius=5,
+            maxRadius=100,
+        )
+        if circles is not None:
+            c = circles[0, 0]
+            return float(c[0]), float(c[1]), float(c[2])
+    return None
+
+
 def process_video(
     video_path: str,
     ball_path: str,
@@ -143,6 +183,9 @@ def process_video(
     stationary_count = 0
     ball_time = 0.0
     sticker_time = 0.0
+    ball_found = False
+    last_circle: tuple[float, float, float] | None = None
+    lost = 0
 
     frame_idx = 0
     while True:
@@ -153,12 +196,34 @@ def process_video(
             h, w = frame.shape[:2]
         t = frame_idx / fps
         frame_idx += 1
-        start = time.perf_counter()
-        boxes = detect_ball(sess, frame, w, h)
-        ball_time += time.perf_counter() - start
-        if boxes.size > 0:
-            best_idx = boxes[:, 4].argmax()
-            cx, cy, _, distance = measure_ball(tuple(boxes[best_idx, :4]))
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if not ball_found or lost >= 5:
+            start = time.perf_counter()
+            boxes = detect_ball(sess, frame, w, h)
+            ball_time += time.perf_counter() - start
+            if boxes.size > 0:
+                best_idx = boxes[:, 4].argmax()
+                cx, cy, r, distance = measure_ball(tuple(boxes[best_idx, :4]))
+                last_circle = (cx, cy, r)
+                ball_found = True
+                lost = 0
+            else:
+                ball_found = False
+                lost += 1
+        else:
+            start = time.perf_counter()
+            circle = detect_circle(gray, last_circle)
+            ball_time += time.perf_counter() - start
+            if circle is not None:
+                cx, cy, r = circle
+                distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / r
+                last_circle = circle
+                ball_found = True
+            else:
+                ball_found = False
+                lost += 1
+
+        if ball_found:
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
             by = (cy - h / 2.0) * distance / FOCAL_LENGTH
             bz = distance - 30.0
@@ -172,7 +237,6 @@ def process_video(
             )
 
         sticker_start = time.perf_counter()
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = aruco_detector.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
             for i, marker_id in enumerate(ids.flatten()):
