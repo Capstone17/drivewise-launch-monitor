@@ -93,6 +93,7 @@ def estimate_pose_single_markers(corners: list[np.ndarray], length: float):
         tvecs.append(tvec.reshape(1, 3))
     return np.array(rvecs), np.array(tvecs), None
 
+
 def detect_ball(sess: ort.InferenceSession, frame: np.ndarray, w: int, h: int) -> np.ndarray:
     """Run ONNX model and return bounding boxes in xyxy format with confidence."""
     resized = cv2.resize(frame, (IMG_SIZE, IMG_SIZE))
@@ -108,9 +109,50 @@ def detect_ball(sess: ort.InferenceSession, frame: np.ndarray, w: int, h: int) -
     return xyxy * scale
 
 
-def detect_circle(gray: np.ndarray, last: tuple[float, float, float] | None) -> tuple[float, float, float] | None:
-    """Return (x, y, r) of detected circle near ``last`` using Hough transform."""
+def detect_circle(
+    gray: np.ndarray,
+    last: tuple[float, float, float] | None,
+    box: tuple[float, float, float, float] | None = None,
+) -> tuple[float, float, float] | None:
+    """Return (x, y, r) of detected circle using Hough transform.
+
+    ``last`` contains the previous circle center and radius. ``box`` limits the
+    search region (typically a YOLO bounding box)."""
+
     search = 60
+
+    if box is not None:
+        bx1, by1, bx2, by2 = [int(v) for v in box]
+        bx1 = max(bx1 - search, 0)
+        by1 = max(by1 - search, 0)
+        bx2 = min(bx2 + search, gray.shape[1] - 1)
+        by2 = min(by2 + search, gray.shape[0] - 1)
+        if bx2 <= bx1 or by2 <= by1:
+            return None
+        roi = gray[by1 : by2 + 1, bx1 : bx2 + 1]
+        if last is not None:
+            _, _, r = last
+            min_r = int(r * 0.6)
+            max_r = int(r * 1.4)
+            min_d = r * 2
+        else:
+            min_r = 5
+            max_r = 100
+            min_d = 30
+        circles = cv2.HoughCircles(
+            roi,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=min_d,
+            param1=50,
+            param2=15,
+            minRadius=min_r,
+            maxRadius=max_r,
+        )
+        if circles is not None:
+            c = circles[0, 0]
+            return float(bx1 + c[0]), float(by1 + c[1]), float(c[2])
+
     if last is not None:
         x, y, r = last
         x1 = max(int(x - search), 0)
@@ -133,20 +175,20 @@ def detect_circle(gray: np.ndarray, last: tuple[float, float, float] | None) -> 
         if circles is not None:
             c = circles[0, 0]
             return float(x1 + c[0]), float(y1 + c[1]), float(c[2])
-    else:
-        circles = cv2.HoughCircles(
-            gray,
-            cv2.HOUGH_GRADIENT,
-            dp=1.2,
-            minDist=30,
-            param1=50,
-            param2=15,
-            minRadius=5,
-            maxRadius=100,
-        )
-        if circles is not None:
-            c = circles[0, 0]
-            return float(c[0]), float(c[1]), float(c[2])
+
+    circles = cv2.HoughCircles(
+        gray,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=30,
+        param1=50,
+        param2=15,
+        minRadius=5,
+        maxRadius=100,
+    )
+    if circles is not None:
+        c = circles[0, 0]
+        return float(c[0]), float(c[1]), float(c[2])
     return None
 
 
@@ -188,9 +230,18 @@ def process_video(
     yolo_frames = 0
     circle_frames = 0
     last_circle: tuple[float, float, float] | None = None
+    last_box: tuple[float, float, float, float] | None = None
     ball_results: list[dict | None] = []
     outlier_frames: list[tuple[int, np.ndarray]] = []
-    jump_thresh = 50
+    jump_thresh_x = 40
+    jump_thresh_y = 200
+    confirm_frames = 3
+    lost_thresh = 3
+    verify_interval = 45
+    mode = "search"
+    confirm_count = 0
+    lost_count = 0
+    frames_since_verify = 0
 
     writer = None
 
@@ -208,26 +259,90 @@ def process_video(
         frame_idx += 1
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        start = time.perf_counter()
-        circle = detect_circle(gray, last_circle)
-        ball_time += time.perf_counter() - start
-        circle_frames += 1
+        circle: tuple[float, float, float] | None = None
+        distance = 0.0
 
-        outlier = circle is None
-        if not outlier:
-            cx, cy, r = circle
-            distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / r
-            if last_circle is not None:
+        if mode == "search":
+            start = time.perf_counter()
+            boxes = detect_ball(sess, frame, w, h)
+            ball_time += time.perf_counter() - start
+            yolo_frames += 1
+            if boxes.size > 0:
+                best_idx = boxes[:, 4].argmax()
+                last_box = tuple(boxes[best_idx, :4])
+                circle = measure_ball(last_box)[:3]
+                last_circle = circle
+                confirm_count += 1
+                if confirm_count >= confirm_frames:
+                    mode = "track"
+                    frames_since_verify = 0
+                    lost_count = 0
+            else:
+                confirm_count = 0
+                last_circle = None
+                last_box = None
+        else:  # track mode
+            circle = detect_circle(gray, last_circle, last_box)
+            circle_frames += 1
+            frames_since_verify += 1
+            outlier = circle is None
+            if not outlier:
+                cx, cy, r = circle
+                distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / r
                 dx = abs(cx - last_circle[0])
                 dy = abs(cy - last_circle[1])
-                outlier = dx > jump_thresh or dy > jump_thresh
-        if circle is not None:
-            last_circle = circle
+                outlier = dx > jump_thresh_x and dy > jump_thresh_y
+            if outlier:
+                lost_count += 1
+            else:
+                lost_count = 0
+                last_circle = circle
+                last_box = (
+                    last_circle[0] - last_circle[2],
+                    last_circle[1] - last_circle[2],
+                    last_circle[0] + last_circle[2],
+                    last_circle[1] + last_circle[2],
+                )
 
-        if outlier:
-            outlier_frames.append((frame_idx - 1, frame.copy()))
-            ball_results.append(None)
-        else:
+            need_verify = (
+                lost_count >= lost_thresh or frames_since_verify >= verify_interval
+            )
+            if need_verify:
+                start = time.perf_counter()
+                boxes = detect_ball(sess, frame, w, h)
+                ball_time += time.perf_counter() - start
+                yolo_frames += 1
+                frames_since_verify = 0
+                if boxes.size > 0:
+                    best_idx = boxes[:, 4].argmax()
+                    y_box = tuple(boxes[best_idx, :4])
+                    y_circle = measure_ball(y_box)[:3]
+                    if circle is None:
+                        circle = y_circle
+                        last_circle = circle
+                        last_box = y_box
+                        lost_count = 0
+                    else:
+                        dx = abs(y_circle[0] - circle[0])
+                        dy = abs(y_circle[1] - circle[1])
+                        if dx > jump_thresh_x and dy > jump_thresh_y:
+                            circle = y_circle
+                            last_circle = circle
+                            last_box = y_box
+                            lost_count = 0
+                else:
+                    if lost_count >= lost_thresh:
+                        mode = "search"
+                        confirm_count = 0
+                        last_circle = None
+                        last_box = None
+                        circle = None
+                        lost_count = 0
+
+        if circle is not None:
+            cx, cy, r = circle
+            if distance == 0.0:
+                distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / r
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
             by = (cy - h / 2.0) * distance / FOCAL_LENGTH
             bz = distance - 30.0
@@ -250,6 +365,9 @@ def process_video(
                 1,
                 cv2.LINE_AA,
             )
+        else:
+            outlier_frames.append((frame_idx - 1, frame.copy()))
+            ball_results.append(None)
 
         if writer is not None:
             writer.write(frame)

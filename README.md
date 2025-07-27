@@ -35,6 +35,15 @@ average pose of the stationary sticker, for example:
 ]
 ```
 
+### Hybrid ball tracking
+
+The ball tracker first searches with YOLOv8 until the same object is detected
+for several consecutive frames. Once confirmed, a lightweight Hough circle
+transform follows the ball, restricted to the previous location. YOLO is only
+invoked again when the circle tracker loses the ball or at long intervals to
+verify tracking. This decision tree keeps inference time low while avoiding
+false positives from other circular objects.
+
 ## Go Implementation
 
 For better performance a Go version of the detector is included. It
