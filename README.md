@@ -21,7 +21,7 @@ pip install imageio opencv-python ultralytics
 
 ```bash
 python video_ball_detector.py video.mp4 \
-    ball_coords.json sticker_coords.json stationary_sticker.json
+    ball_coords.json sticker_coords.json stationary_sticker.json [output.mp4] [yolo_usage]
 ```
 
 The first JSON file will contain ball coordinates. The second stores the
@@ -34,6 +34,20 @@ average pose of the stationary sticker, for example:
   {"time": 1.76, "x": 0.59, "y": 5.75, "z": 11.26}
 ]
 ```
+
+### Hybrid ball tracking
+
+The ball tracker first searches with YOLOv8 until the same object is detected
+for several consecutive frames. Once confirmed, a lightweight Hough circle
+transform follows the ball, restricted to the previous location. YOLO is only
+invoked again when the circle tracker loses the ball or at long intervals to
+verify tracking. This decision tree keeps inference time low while avoiding
+false positives from other circular objects.
+
+The optional `yolo_usage` argument ranges from 0 to 100 and controls how often
+YOLOv8 runs. `0` disables YOLO entirely (OpenCV only) while `100` uses YOLO for
+every frame. Values between adjust the frequency of YOLO verification during
+tracking.
 
 ## Go Implementation
 
