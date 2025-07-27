@@ -185,6 +185,8 @@ def process_video(
     stationary_count = 0
     ball_time = 0.0
     sticker_time = 0.0
+    yolo_frames = 0
+    circle_frames = 0
     ball_found = False
     last_circle: tuple[float, float, float] | None = None
     lost = 0
@@ -203,6 +205,7 @@ def process_video(
             start = time.perf_counter()
             boxes = detect_ball(sess, frame, w, h)
             ball_time += time.perf_counter() - start
+            yolo_frames += 1
             if boxes.size > 0:
                 best_idx = boxes[:, 4].argmax()
                 cx, cy, r, distance = measure_ball(tuple(boxes[best_idx, :4]))
@@ -216,6 +219,7 @@ def process_video(
             start = time.perf_counter()
             circle = detect_circle(gray, last_circle)
             ball_time += time.perf_counter() - start
+            circle_frames += 1
             if circle is not None:
                 cx, cy, r = circle
                 distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / r
@@ -300,6 +304,8 @@ def process_video(
     print(f"Sticker detection compile time: {sticker_compile_time:.2f}s")
     print(f"Ball detection time: {ball_time:.2f}s")
     print(f"Sticker detection time: {sticker_time:.2f}s")
+    print(f"YOLO frames: {yolo_frames}")
+    print(f"Circle frames: {circle_frames}")
 
 
 if __name__ == "__main__":
