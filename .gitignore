@@ -13,6 +13,3 @@ sticker_coords.json
 
 # Ignore any pycache files
 __pycache__/
-ball_coords.json
-stationary_sticker.json
-sticker_coords.json

@@ -26,8 +26,8 @@ raw_data = return_metrics()  # face_angle, swing_path, attack_angle, side_angle,
 # - Ideal numbers for face-to-path are from GolfWRX: https://www.golfwrx.com/342864/how-to-hit-a-push-draw-and-a-pull-fade/1000/
 # -------------------------------
 facts = {
-    "face_extreme_left": raw_data['face_angle'] < 4.0,
-    "face_slight_left": 4.0 <= raw_data['face_angle'] < -2.0,
+    "face_extreme_left": raw_data['face_angle'] < -4.0,
+    "face_slight_left": -4.0 <= raw_data['face_angle'] < -2.0,
     "face_straight": -2.0 <= raw_data['face_angle'] < 2.0,
     "face_slight_right": 2.0 <= raw_data['face_angle'] < 4.0,
     "face_extreme_right": 4.0 <= raw_data['face_angle'],
@@ -43,7 +43,7 @@ facts = {
     "attack_slight_up": 1.0 < raw_data['attack_angle'] <= 3.0,
     "attack_neutral": -2.0 < raw_data['attack_angle'] <= 1.0,
     "attack_slight_down": -5.0 < raw_data['attack_angle'] <= -2.0,  # Ideal for iron shots
-    "attack_very_down": -10.0 < raw_data['attack_angle'] <= 5.0,  # Ideal for wedge shots
+    "attack_very_down": -10.0 < raw_data['attack_angle'] <= -5.0,  # Ideal for wedge shots
     "attack_extreme_down": raw_data['attack_angle'] <= -10.0,
 
     "side_extreme_left": raw_data['side_angle'] < -4.0,
@@ -65,32 +65,25 @@ facts = {
 # -------------------------------
 rules = [
     {
+        # Worst-case
         "name": "Pull Hook",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: (f["face_slight_left"] and f["path_extreme_right"])   or   (f["face_extreme_left"] and (f["path_slight_right"] or f["path_extreme_right"])),
+        "action": lambda: print("Pull hook: ")
     },
     {
         "name": "Pull Draw",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: (f["face_slight_left"] and f["path_straight"])   or   (f["face_extreme_left"] and (f["path_straight"] or f["path_slight_left"])),
+        "action": lambda: print("Pull draw: ")
     },
     {
-        "name": "Draw",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "name": "Pull",
+        "condition": lambda f: (f["face_slight_left"] and f["path_slight_left"])   or   (f["face_extreme_left"] and (f["path_extreme_left"])),
+        "action": lambda: print("Pull: ")
     },
+    # HERE
     {
-        "name": "Push Draw",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
-    },
-    {
-        "name": "Push Hook",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
-    },
-    {
-        "name": "Straight",
+        # Ideal fade
+        "name": "Pull Fade",
         "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
         "action": lambda: print("Straight slice: ")
     },
@@ -100,12 +93,44 @@ rules = [
         "action": lambda: print("Straight slice: ")
     },
     {
-        "name": "Pull Fade",
+        "name": "Straight Hook",
         "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
         "action": lambda: print("Straight slice: ")
     },
     {
-        "name": "Fade",
+        "name": "Straight Draw",
+        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
+        "action": lambda: print("Straight slice: ")
+    },
+    {
+        # Ideal straight
+        "name": "Straight",
+        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
+        "action": lambda: print("Straight slice: ")
+    },
+    {
+        "name": "Straight Fade",
+        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
+        "action": lambda: print("Straight slice: ")
+    },
+    {
+        "name": "Straight Slice",
+        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
+        "action": lambda: print("Straight slice: ")
+    },
+    {
+        "name": "Push Hook",
+        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
+        "action": lambda: print("Straight slice: ")
+    },
+    {
+        # Ideal draw
+        "name": "Push Draw",
+        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
+        "action": lambda: print("Straight slice: ")
+    },
+    {
+        "name": "Push",
         "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
         "action": lambda: print("Straight slice: ")
     },
@@ -115,6 +140,7 @@ rules = [
         "action": lambda: print("Straight slice: ")
     },
     {
+        # Worst-case
         "name": "Push Slice",
         "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
         "action": lambda: print("Straight slice: ")
