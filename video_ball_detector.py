@@ -109,6 +109,76 @@ def fit_pixel_curve(points: list[dict], smooth: float = 0.0):
     return sx, sy
 
 
+def _detect_ball(frame: np.ndarray, model: YOLO):
+    """Return the center of the ball in ``frame`` or ``None``."""
+    results = model(frame, verbose=False, imgsz=512)
+    if not results or len(results[0].boxes) == 0:
+        return None
+    boxes = results[0].boxes
+    best_idx = boxes.conf.argmax()
+    box_xyxy = tuple(boxes[best_idx].xyxy[0])
+    cx, cy, _, _ = measure_ball(box_xyxy)
+    return float(cx), float(cy)
+
+
+def _ball_position(cap: cv2.VideoCapture, idx: int, model: YOLO, cache: dict):
+    """Return cached ball position for frame ``idx``."""
+    if idx in cache:
+        return cache[idx]
+    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    ret, frame = cap.read()
+    if not ret:
+        cache[idx] = None
+        return None
+    pos = _detect_ball(frame, model)
+    cache[idx] = pos
+    return pos
+
+
+def find_motion_window(
+    cap: cv2.VideoCapture,
+    model: YOLO,
+    initial_guess: int,
+    max_range: int = 60,
+    margin: float = 3.0,
+):
+    """Return start and end frames for the ball flight using binary search."""
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cache: dict[int, tuple[float, float] | None] = {}
+
+    start_lo = max(0, initial_guess - max_range)
+    start_hi = initial_guess
+    last_stationary = start_lo - 1
+    while start_lo <= start_hi:
+        mid = (start_lo + start_hi) // 2
+        p1 = _ball_position(cap, mid, model, cache)
+        p2 = _ball_position(cap, mid + 1, model, cache)
+        if p1 is None or p2 is None:
+            start_hi = mid - 1
+            continue
+        dist = np.linalg.norm(np.array(p2) - np.array(p1))
+        if dist <= margin:
+            last_stationary = mid
+            start_lo = mid + 1
+        else:
+            start_hi = mid - 1
+
+    start_frame = last_stationary + 1
+
+    end_lo = initial_guess
+    end_hi = total - 1
+    while end_lo <= end_hi:
+        mid = (end_lo + end_hi) // 2
+        pos = _ball_position(cap, mid, model, cache)
+        if pos is None:
+            end_hi = mid - 1
+        else:
+            end_lo = mid + 1
+    end_frame = end_lo
+
+    return start_frame, end_frame
+
+
 def detect_with_hough(
     video_path: str,
     coeffs: tuple[callable, callable],
@@ -116,6 +186,8 @@ def detect_with_hough(
     w: int,
     h: int,
     search_radius: int,
+    start_frame: int = 0,
+    end_frame: int | None = None,
 ) -> list[dict]:
     """Detect circles along the approximated curve within ``search_radius``.
 
@@ -124,8 +196,12 @@ def detect_with_hough(
     fx, fy = coeffs
     cap = cv2.VideoCapture(video_path)
     coords: list[dict] = []
-    frame_idx = 0
-    while True:
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if end_frame is None or end_frame > total:
+        end_frame = total
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    frame_idx = start_frame
+    while frame_idx < end_frame:
         ret, frame = cap.read()
         if not ret:
             break
@@ -186,6 +262,10 @@ def process_video(
     yolo_interval: int = 10,
     search_radius: int = 40,
     curve_path: str = "curve_path.json",
+    start_guess: int | None = None,
+    max_range: int = 60,
+    margin: float = 3.0,
+    context_frames: int = 2,
 ) -> None:
     """Process ``video_path`` saving ball, sticker and path coordinates to JSON.
 
@@ -206,6 +286,13 @@ def process_video(
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if start_guess is None:
+        start_guess = total_frames // 4
+    start_frame, end_frame = find_motion_window(cap, model, start_guess, max_range, margin)
+    start_read_idx = max(0, start_frame - context_frames)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_read_idx)
+    frame_idx = start_read_idx
     print("fps: ", fps, "width: ", w, "height :", h)
     annotated_frames: list[np.ndarray] = []
     sticker_coords = []
@@ -218,8 +305,7 @@ def process_video(
     ball_coords: list[dict] = []
     yolo_points: list[dict] = []
 
-    frame_idx = 0
-    while True:
+    while frame_idx < end_frame:
         ret, frame = cap.read()
         if not ret:
             break
@@ -298,6 +384,8 @@ def process_video(
         w,
         h,
         search_radius,
+        start_read_idx,
+        end_frame,
     )
     circle_frames = len(ball_coords)
 
@@ -318,12 +406,13 @@ def process_video(
     )
     curve_points: list[tuple[int, int]] = []
     path_points: list[dict] = []
-    start_t = filtered[0]["time"] if filtered else 0.0
-    end_t = filtered[-1]["time"] if filtered else len(annotated_frames) / fps
-    start_idx = int(start_t * fps)
-    end_idx = min(int(end_t * fps), len(annotated_frames) - 1)
-    for idx in range(start_idx, end_idx + 1):
-        t = idx / fps
+    offset = start_read_idx
+    start_t = filtered[0]["time"] if filtered else offset / fps
+    end_t = filtered[-1]["time"] if filtered else (end_frame - 1) / fps
+    start_abs = int(start_t * fps)
+    end_abs = min(int(end_t * fps), end_frame - 1)
+    for gidx in range(start_abs, end_abs + 1):
+        t = gidx / fps
         cx_pred_float = float(fx(t))
         cy_pred_float = float(fy(t))
         curve_points.append((int(cx_pred_float), int(cy_pred_float)))
@@ -334,10 +423,11 @@ def process_video(
                 "cy": round(cy_pred_float, 2),
             }
         )
-    for idx, frame in enumerate(annotated_frames):
-        if start_idx <= idx <= end_idx:
+    for rel_idx, frame in enumerate(annotated_frames):
+        gidx = rel_idx + offset
+        if start_abs <= gidx <= end_abs:
             pts = np.array(
-                [p for i, p in enumerate(curve_points) if start_idx + i <= idx],
+                [p for i, p in enumerate(curve_points) if start_abs + i <= gidx],
                 dtype=np.int32,
             )
             if len(pts) > 1:
@@ -345,8 +435,8 @@ def process_video(
             elif len(pts) == 1:
                 cv2.circle(frame, pts[0], 3, (0, 0, 255), -1)
         # Draw detected circle centers from OpenCV
-        if idx in circle_points:
-            for cx, cy in circle_points[idx]:
+        if gidx in circle_points:
+            for cx, cy in circle_points[gidx]:
                 cv2.circle(frame, (cx, cy), 4, (255, 0, 0), -1)
         writer.write(frame)
     writer.release()
@@ -394,6 +484,10 @@ if __name__ == "__main__":
     yolo_interval = int(sys.argv[6]) if len(sys.argv) > 6 else 10
     search_radius = int(sys.argv[7]) if len(sys.argv) > 7 else 40
     curve_path = sys.argv[8] if len(sys.argv) > 8 else "curve_path.json"
+    start_guess = int(sys.argv[9]) if len(sys.argv) > 9 else None
+    max_range = int(sys.argv[10]) if len(sys.argv) > 10 else 60
+    margin = float(sys.argv[11]) if len(sys.argv) > 11 else 3.0
+    context_frames = int(sys.argv[12]) if len(sys.argv) > 12 else 2
     process_video(
         video_path,
         ball_path,
@@ -403,4 +497,8 @@ if __name__ == "__main__":
         yolo_interval,
         search_radius,
         curve_path,
+        start_guess,
+        max_range,
+        margin,
+        context_frames,
     )
