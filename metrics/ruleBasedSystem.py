@@ -64,6 +64,9 @@ facts = {
 # - The shot shaping diagnosis was taken from this Reddit post: https://www.reddit.com/r/GolfSwing/comments/1546tus/i_think_everyone_should_save_this_diagram_to_help/ 
 # -------------------------------
 rules = [
+    # -------------------------------
+    # Shot shaping
+    # -------------------------------
     {
         # Worst-case
         "name": "Pull Hook",
@@ -144,6 +147,15 @@ rules = [
         "name": "Push Slice",
         "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
         "action": lambda: print("Straight slice: ")
+    },
+    # -------------------------------
+    # Ball flight
+    # - Heavily depends on club selection
+    # -------------------------------
+    {
+        "name": "Very Upward",
+        "condition": lambda f: f["attack_extreme_up"],
+        "action": lambda: print("Very upward: ")
     }
 ]
 
