@@ -3,7 +3,6 @@ import sys
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
 
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
 FOCAL_LENGTH = 1000.0  # pixels
@@ -38,15 +37,24 @@ def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
     return tuple(np.degrees([roll, pitch, yaw]))
 
 
-def measure_ball(box):
-    x1, y1, x2, y2 = box.xyxy[0]
-    w = float(x2 - x1)
-    h = float(y2 - y1)
-    radius_px = (w + h) / 4.0
-    cx = float(x1 + x2) / 2.0
-    cy = float(y1 + y2) / 2.0
+def detect_ball(gray: np.ndarray):
+    """Detect the golf ball using Hough circle transform."""
+    circles = cv2.HoughCircles(
+        gray,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=20,
+        param1=50,
+        param2=30,
+        minRadius=5,
+        maxRadius=100,
+    )
+    if circles is None:
+        return None
+    circles = np.round(circles[0]).astype(int)
+    cx, cy, radius_px = max(circles, key=lambda c: c[2])
     distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / radius_px
-    return cx, cy, radius_px, distance
+    return float(cx), float(cy), float(radius_px), float(distance)
 
 
 def process_video(
@@ -58,7 +66,6 @@ def process_video(
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
     ``stationary_path`` stores the averaged pose of the stationary marker."""
-    model = YOLO("golf_ball_detector.onnx")
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
@@ -77,11 +84,10 @@ def process_video(
             h, w = frame.shape[:2]
         t = frame_idx / fps
         frame_idx += 1
-        results = model(frame, verbose=False)
-        if results and len(results[0].boxes) > 0:
-            boxes = results[0].boxes
-            best_idx = boxes.conf.argmax()
-            cx, cy, _, distance = measure_ball(boxes[best_idx])
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        ball = detect_ball(gray)
+        if ball is not None:
+            cx, cy, _, distance = ball
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
             by = (cy - h / 2.0) * distance / FOCAL_LENGTH
             bz = distance - 30.0
@@ -94,7 +100,6 @@ def process_video(
                 }
             )
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = ARUCO_DETECTOR.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
             for i, marker_id in enumerate(ids.flatten()):

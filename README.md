@@ -3,20 +3,18 @@
 * Python 3.8+
 * `imageio` for reading video files
 * `opencv-python` for ArUco marker detection
-* The `ultralytics` package for running YOLOv8 models
-* `golf_ball_detector.onnx` (your trained model file) placed in the
-  repository root
+* OpenCV's Hough circle transform is used for ball detection so no
+  additional model files are required
 
 Install the required Python packages with:
 
 ```bash
-pip install imageio opencv-python ultralytics
+pip install imageio opencv-python
 ```
 
 ## Usage
 
-1. Place your `golf_ball_detector.onnx` file in the repository root and your
-   MP4 video (e.g. `video.mp4`).
+1. Place your MP4 video (e.g. `video.mp4`) in the repository root.
 2. Run the detection script:
 
 ```bash

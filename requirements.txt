@@ -1,9 +1,4 @@
-ultralytics
 numpy
 opencv-python
-onnx
-onnxruntime
-sympy
-cv2
 opencv-contrib-python
 imageio[ffmpeg]
