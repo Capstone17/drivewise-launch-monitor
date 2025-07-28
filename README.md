@@ -2,31 +2,24 @@
 
 * Python 3.8+
 * `imageio` for reading video files
-* `opencv-python` for ArUco marker detection
-* The `ultralytics` package for running YOLOv8 models
-* `golf_ball_detector.onnx` (your trained model file) placed in the
-  repository root
+* `opencv-python` for ArUco marker and circle detection
 
 Install the required Python packages with:
 
 ```bash
-pip install imageio opencv-python ultralytics
+pip install imageio opencv-python
 ```
 
 ## Usage
 
-1. Place your `golf_ball_detector.onnx` file in the repository root and your
-   MP4 video (e.g. `video.mp4`).
+1. Place your MP4 video (e.g. `video.mp4`) in the repository root.
 2. Run the detection script:
 
 ```bash
 python video_ball_detector.py video.mp4 \
     ball_coords.json sticker_coords.json stationary_sticker.json \
-    annotated.mp4 10
+    annotated.mp4
 ```
-
-The last number specifies how often YOLOv8 detection runs (every Nth frame).
-If omitted, it defaults to 10.
 
 The first JSON file will contain ball coordinates. The second stores the
 position and orientation of the moving sticker while the third contains the
