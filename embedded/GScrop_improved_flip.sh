@@ -54,8 +54,15 @@ fi
 # media-ctl Setup (center crop)
 # -------------------------
 
+# for ((m=0; m<=5; ++m)); do
+#     media-ctl -d /dev/media$m --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:($(((1440 - width) / 2)),$(((1088 - height) / 2)))/${width}x${height}]" -v
+#     if [[ $? -eq 0 ]]; then
+#         break
+#     fi
+# done
+
 for ((m=0; m<=5; ++m)); do
-    media-ctl -d /dev/media$m --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:($(((1440 - width) / 2)),$(((1088 - height) / 2)))/${width}x${height}]" -v
+    media-ctl -d /dev/media$m --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:($(((1440 - width) / 2)),$((((1088 - height) / 2) + 100)))/${width}x${height}]" -v
     if [[ $? -eq 0 ]]; then
         break
     fi

@@ -51,13 +51,16 @@ def swing_path_calc(pose1: dict, pose2: dict, reference_vector):
         }
     """
     # Extract horizontal positions (X, Z)
-    p1 = np.array([pose1["x"], pose1["z"]], dtype=float)
-    p2 = np.array([pose2["x"], pose2["z"]], dtype=float)
+    p1 = np.array([pose1["x"], pose1["z"]], dtype=float)  # Convert the dict into an array
+    p2 = np.array([pose2["x"], pose2["z"]], dtype=float)  # Convert the dict into an array
 
     # Compute displacement vector and distance
+    # The Euclidean norm (length) of this vector gives total horizontal distance moved
     delta_xz = p2 - p1
 
     # Check for the [0, 0] case
+    # This would mean that there is no movement in the xz plane
+    #   I.e. there is only vertical (y) movement, or no movement at all
     if np.linalg.norm(delta_xz) == 0:
         return {
             "horizontal_displacement": delta_xz,
