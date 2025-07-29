@@ -49,6 +49,79 @@ def measure_ball(box):
     return cx, cy, radius_px, distance
 
 
+def detect_center(model: YOLO, frame: np.ndarray) -> tuple[float, float] | None:
+    """Return the pixel center of the ball or ``None`` if not found."""
+    results = model(frame, verbose=False)
+    if not results or len(results[0].boxes) == 0:
+        return None
+    boxes = results[0].boxes
+    best_idx = boxes.conf.argmax()
+    cx, cy, _, _ = measure_ball(boxes[best_idx])
+    return cx, cy
+
+
+def find_motion_window(
+    video_path: str,
+    model: YOLO,
+    initial_guess: int,
+    *,
+    max_range: int = 60,
+    margin: float = 2.0,
+    pre_frames: int = 3,
+) -> tuple[int, int]:
+    """Return the start and end frame where the ball is in motion."""
+
+    cap = cv2.VideoCapture(video_path)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cache: dict[int, tuple[float, float] | None] = {}
+
+    def get_pos(idx: int) -> tuple[float, float] | None:
+        if idx < 0 or idx >= total:
+            return None
+        if idx in cache:
+            return cache[idx]
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = cap.read()
+        if not ret:
+            cache[idx] = None
+        else:
+            cache[idx] = detect_center(model, frame)
+        return cache[idx]
+
+    low = max(initial_guess - max_range, 0)
+    high = min(initial_guess, total - 2)
+    last_stationary = low
+    while low <= high:
+        mid = (low + high) // 2
+        p1 = get_pos(mid)
+        p2 = get_pos(mid + 1)
+        moved = (
+            p1 is not None
+            and p2 is not None
+            and np.linalg.norm(np.subtract(p2, p1)) > margin
+        )
+        if not moved:
+            last_stationary = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+
+    start_frame = max(0, last_stationary + 1 - pre_frames)
+
+    low = max(initial_guess, start_frame)
+    high = min(initial_guess + max_range, total - 1)
+    first_invisible = high + 1
+    while low <= high:
+        mid = (low + high) // 2
+        if get_pos(mid) is None:
+            first_invisible = mid
+            high = mid - 1
+        else:
+            low = mid + 1
+    cap.release()
+    return start_frame, first_invisible
+
+
 def process_video(
     video_path: str,
     ball_path: str,

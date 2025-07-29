@@ -21,8 +21,12 @@ pip install imageio opencv-python ultralytics
 
 ```bash
 python video_ball_detector.py video.mp4 \
-    ball_coords.json sticker_coords.json stationary_sticker.json
+    ball_coords.json sticker_coords.json stationary_sticker.json \
+    annotated.mp4 10
 ```
+
+The last number specifies how often YOLOv8 detection runs (every Nth frame).
+If omitted, it defaults to 10.
 
 The first JSON file will contain ball coordinates. The second stores the
 position and orientation of the moving sticker while the third contains the
