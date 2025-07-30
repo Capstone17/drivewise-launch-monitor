@@ -1,5 +1,6 @@
 import json
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -14,7 +15,6 @@ CAMERA_MATRIX = np.array([[500, 0, 320], [0, 500, 240], [0, 0, 1]], dtype=float)
 DIST_COEFFS = np.zeros(5)
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
-ARUCO_DETECTOR = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
 
 # ID of the stationary ArUco marker
 STATIONARY_ID = 1
@@ -127,15 +127,26 @@ def process_video(
     ball_path: str,
     sticker_path: str,
     stationary_path: str,
+    output_path: str = "annotated_output.mp4",
 ) -> None:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
     ``stationary_path`` stores the averaged pose of the stationary marker."""
+    ball_compile_start = time.perf_counter()
     model = YOLO("golf_ball_detector.onnx")
+    ball_compile_time = time.perf_counter() - ball_compile_start
+
+    sticker_compile_start = time.perf_counter()
+    aruco_detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
+    sticker_compile_time = time.perf_counter() - sticker_compile_start
+
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
+    writer = None
+    ball_time = 0.0
+    sticker_time = 0.0
     ball_coords = []
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
@@ -148,13 +159,18 @@ def process_video(
             break
         if h is None:
             h, w = frame.shape[:2]
+        if writer is None:
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
         t = frame_idx / fps
         frame_idx += 1
+        start = time.perf_counter()
         results = model(frame, verbose=False)
+        ball_time += time.perf_counter() - start
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
-            cx, cy, _, distance = measure_ball(boxes[best_idx])
+            cx, cy, rad, distance = measure_ball(boxes[best_idx])
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
             by = (cy - h / 2.0) * distance / FOCAL_LENGTH
             bz = distance - 30.0
@@ -166,10 +182,24 @@ def process_video(
                     "z": round(bz, 2),
                 }
             )
+            cv2.circle(frame, (int(cx), int(cy)), int(rad), (0, 255, 0), 2)
+            cv2.putText(
+                frame,
+                f"x:{bx:.2f} y:{by:.2f} z:{bz:.2f}",
+                (int(cx) + 10, int(cy)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA,
+            )
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = ARUCO_DETECTOR.detectMarkers(gray)
+        sticker_start = time.perf_counter()
+        corners, ids, _ = aruco_detector.detectMarkers(gray)
+        sticker_time += time.perf_counter() - sticker_start
         if ids is not None and len(ids) > 0:
+            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
             for i, marker_id in enumerate(ids.flatten()):
                 length = (
                     STATIONARY_MARKER_LENGTH
@@ -201,8 +231,14 @@ def process_video(
                             "yaw": round(float(yaw), 2),
                         }
                     )
+                cv2.drawFrameAxes(frame, CAMERA_MATRIX, DIST_COEFFS, rvec, tvec, length * 0.5, 2)
+
+        if writer is not None:
+            writer.write(frame)
 
     cap.release()
+    if writer is not None:
+        writer.release()
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
@@ -226,6 +262,10 @@ def process_video(
     print(f"Saved {len(sticker_coords)} sticker points to {sticker_path}")
     if stationary_count:
         print(f"Saved averaged stationary sticker pose to {stationary_path}")
+    print(f"Ball detection compile time: {ball_compile_time:.2f}s")
+    print(f"Sticker detection compile time: {sticker_compile_time:.2f}s")
+    print(f"Ball detection time: {ball_time:.2f}s")
+    print(f"Sticker detection time: {sticker_time:.2f}s")
 
 
 if __name__ == "__main__":
@@ -233,4 +273,5 @@ if __name__ == "__main__":
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
-    process_video(video_path, ball_path, sticker_path, stationary_path)
+    output_path = sys.argv[5] if len(sys.argv) > 5 else "annotated_output.mp4"
+    process_video(video_path, ball_path, sticker_path, stationary_path, output_path)
