@@ -80,73 +80,72 @@ rules = [
     },
     {
         "name": "Pull",
-        "condition": lambda f: (f["face_slight_left"] and f["path_slight_left"])   or   (f["face_extreme_left"] and (f["path_extreme_left"])),
+        "condition": lambda f: (f["face_slight_left"] and f["path_slight_left"] and not f["face_to_path_slight_left"])   or   (f["face_extreme_left"] and (f["path_extreme_left"])),
         "action": lambda: print("Pull: ")
     },
-    # HERE
     {
         # Ideal fade
         "name": "Pull Fade",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: f["face_slight_left"] and f["path_slight_left"] and f["face_to_path_slight_left"],
+        "action": lambda: print("Fade: ")
     },
     {
         "name": "Pull Slice",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: f["face_slight_left"] and f["path_extreme_left"],
+        "action": lambda: print("Pull slice: ")
     },
     {
         "name": "Straight Hook",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: f["face_straight"] and f["path_extreme_right"],
+        "action": lambda: print("Straight hook: ")
     },
     {
         "name": "Straight Draw",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: f["face_straight"] and f["path_slight_right"],
+        "action": lambda: print("Straight draw: ")
     },
     {
         # Ideal straight
         "name": "Straight",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: f["face_straight"] and f["path_straight"],
+        "action": lambda: print("Straight: ")
     },
     {
         "name": "Straight Fade",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: f["face_straight"] and f["path_slight_left"],
+        "action": lambda: print("Straight fade: ")
     },
     {
         "name": "Straight Slice",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
+        "condition": lambda f: f["face_straight"] and f["path_extreme_left"],
         "action": lambda: print("Straight slice: ")
     },
     {
         "name": "Push Hook",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: f["face_slight_right"] and f["path_extreme_right"],
+        "action": lambda: print("Push hook: ")
     },
     {
         # Ideal draw
         "name": "Push Draw",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: f["face_slight_right"] and f["path_slight_right"] and f["face_to_path_slight_right"],
+        "action": lambda: print("Draw: ")
     },
     {
         "name": "Push",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: (f["face_slight_right"] and f["path_slight_right"] and not f["face_to_path_slight_right"])   or   (f["face_extreme_right"] and f["path_extreme_right"]),
+        "action": lambda: print("Push: ")
     },
     {
         "name": "Push Fade",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: (f["face_extreme_right"] and f["path_slight_right"])   or   (f["face_slight_right"] and f["path_straight"]),
+        "action": lambda: print("Push fade: ")
     },
     {
         # Worst-case
         "name": "Push Slice",
-        "condition": lambda f: f["face_extreme_left"] and (f["path_straight"]),
-        "action": lambda: print("Straight slice: ")
+        "condition": lambda f: (f["face_extreme_right"] and (f["path_straight"] or f["path_slight_left"] or f["path_extreme_left"]))   or   (f["face_slight_right"] and f["path_extreme_left"])   or   (f["face_slight_right"] and f["path_slight_left"]),
+        "action": lambda: print("Push slice: ")
     },
     # -------------------------------
     # Ball flight
