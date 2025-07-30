@@ -1,27 +1,56 @@
+"""Detect golf ball and club stickers in a video and optionally annotate the
+output."""
+
+from __future__ import annotations
+
 import json
 import sys
+import time
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
+import onnxruntime as ort
 
-ACTUAL_BALL_RADIUS = 2.135  # centimeters
-FOCAL_LENGTH = 1000.0  # pixels
 
-DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
-STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
+ACTUAL_BALL_RADIUS = 21.35  # millimeters
+FOCAL_LENGTH = 1900.0  # pixels
+
+DYNAMIC_MARKER_LENGTH = 1.75  # millimeters (club sticker)
+STATIONARY_MARKER_LENGTH = 65  # millimeters (block sticker)
 CAMERA_MATRIX = np.array([[500, 0, 320], [0, 500, 240], [0, 0, 1]], dtype=float)
 DIST_COEFFS = np.zeros(5)
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
-ARUCO_DETECTOR = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
 
 # ID of the stationary ArUco marker
 STATIONARY_ID = 1
 
+# Parameters for ONNX ball detector
+IMG_SIZE = 512
+STRIDES = [8, 16, 32]
+
+
+def _make_grid(img_size: int = IMG_SIZE, strides: list[int] = STRIDES) -> tuple[np.ndarray, np.ndarray]:
+    """Create grid and stride arrays for YOLOv8 decoding."""
+
+    grid_list = []
+    stride_list = []
+    for s in strides:
+        num = img_size // s
+        y, x = np.meshgrid(np.arange(num), np.arange(num))
+        grid_list.append(np.stack((x, y), axis=-1).reshape(-1, 2))
+        stride_list.append(np.full((num * num, 1), s, dtype=float))
+    grid = np.concatenate(grid_list, axis=0).astype(float)
+    stride = np.concatenate(stride_list, axis=0).astype(float)
+    return grid, stride
+
+
+GRID, STRIDE = _make_grid()
+
 
 def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
     """Convert a rotation vector to roll, pitch and yaw in degrees."""
+
     rotation_matrix, _ = cv2.Rodrigues(rvec)
     flip = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]], dtype=float)
     rotation_matrix = flip @ rotation_matrix
@@ -38,8 +67,10 @@ def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
     return tuple(np.degrees([roll, pitch, yaw]))
 
 
-def measure_ball(box):
-    x1, y1, x2, y2 = box.xyxy[0]
+def measure_ball(box: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    """Return center and distance from bounding box coordinates."""
+
+    x1, y1, x2, y2 = box
     w = float(x2 - x1)
     h = float(y2 - y1)
     radius_px = (w + h) / 4.0
@@ -49,77 +80,124 @@ def measure_ball(box):
     return cx, cy, radius_px, distance
 
 
-def detect_center(model: YOLO, frame: np.ndarray) -> tuple[float, float] | None:
-    """Return the pixel center of the ball or ``None`` if not found."""
-    results = model(frame, verbose=False)
-    if not results or len(results[0].boxes) == 0:
-        return None
-    boxes = results[0].boxes
-    best_idx = boxes.conf.argmax()
-    cx, cy, _, _ = measure_ball(boxes[best_idx])
-    return cx, cy
+def estimate_pose_single_markers(corners: list[np.ndarray], length: float) -> tuple[np.ndarray, np.ndarray, None]:
+    """Fallback for :func:`cv2.aruco.estimatePoseSingleMarkers`."""
+
+    obj = np.array(
+        [
+            [-length / 2, length / 2, 0],
+            [length / 2, length / 2, 0],
+            [length / 2, -length / 2, 0],
+            [-length / 2, -length / 2, 0],
+        ],
+        dtype=np.float32,
+    )
+    rvecs = []
+    tvecs = []
+    for c in corners:
+        ok, rvec, tvec = cv2.solvePnP(obj, c.reshape(4, 2), CAMERA_MATRIX, DIST_COEFFS)
+        if not ok:
+            rvec = np.zeros(3)
+            tvec = np.zeros(3)
+        rvecs.append(rvec.reshape(1, 3))
+        tvecs.append(tvec.reshape(1, 3))
+    return np.array(rvecs), np.array(tvecs), None
 
 
-def find_motion_window(
-    video_path: str,
-    model: YOLO,
-    initial_guess: int,
-    *,
-    max_range: int = 60,
-    margin: float = 2.0,
-    pre_frames: int = 3,
-) -> tuple[int, int]:
-    """Return the start and end frame where the ball is in motion."""
+def detect_ball(sess: ort.InferenceSession, frame: np.ndarray, w: int, h: int) -> np.ndarray:
+    """Run ONNX model and return bounding boxes in ``xyxy`` format with confidence."""
 
-    cap = cv2.VideoCapture(video_path)
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    cache: dict[int, tuple[float, float] | None] = {}
+    resized = cv2.resize(frame, (IMG_SIZE, IMG_SIZE))
+    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    inp = np.transpose(rgb, (2, 0, 1))[None]
+    pred = sess.run(None, {sess.get_inputs()[0].name: inp})[0][0].T
 
-    def get_pos(idx: int) -> tuple[float, float] | None:
-        if idx < 0 or idx >= total:
+    xy = (pred[:, :2] * 2 + GRID) * STRIDE
+    wh = (pred[:, 2:4] * 2) ** 2 * STRIDE
+    conf = 1 / (1 + np.exp(-pred[:, 4:5]))
+    xyxy = np.concatenate([xy - wh / 2, xy + wh / 2, conf], axis=1)
+    scale = np.array([[w / IMG_SIZE, h / IMG_SIZE, w / IMG_SIZE, h / IMG_SIZE, 1]])
+    return xyxy * scale
+
+
+def detect_circle(
+    gray: np.ndarray,
+    last: tuple[float, float, float] | None,
+    box: tuple[float, float, float, float] | None = None,
+) -> tuple[float, float, float] | None:
+    """Detect a circle with the Hough transform."""
+
+    search = 60
+
+    if box is not None:
+        bx1, by1, bx2, by2 = [int(v) for v in box]
+        bx1 = max(bx1 - search, 0)
+        by1 = max(by1 - search, 0)
+        bx2 = min(bx2 + search, gray.shape[1] - 1)
+        by2 = min(by2 + search, gray.shape[0] - 1)
+        if bx2 <= bx1 or by2 <= by1:
             return None
-        if idx in cache:
-            return cache[idx]
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if not ret:
-            cache[idx] = None
+        roi = gray[by1 : by2 + 1, bx1 : bx2 + 1]
+        if last is not None:
+            _, _, r = last
+            min_r = int(r * 0.6)
+            max_r = int(r * 1.4)
+            min_d = r * 2
         else:
-            cache[idx] = detect_center(model, frame)
-        return cache[idx]
-
-    low = max(initial_guess - max_range, 0)
-    high = min(initial_guess, total - 2)
-    last_stationary = low
-    while low <= high:
-        mid = (low + high) // 2
-        p1 = get_pos(mid)
-        p2 = get_pos(mid + 1)
-        moved = (
-            p1 is not None
-            and p2 is not None
-            and np.linalg.norm(np.subtract(p2, p1)) > margin
+            min_r = 5
+            max_r = 100
+            min_d = 30
+        circles = cv2.HoughCircles(
+            roi,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=min_d,
+            param1=50,
+            param2=15,
+            minRadius=min_r,
+            maxRadius=max_r,
         )
-        if not moved:
-            last_stationary = mid
-            low = mid + 1
-        else:
-            high = mid - 1
+        if circles is not None:
+            c = circles[0, 0]
+            return float(bx1 + c[0]), float(by1 + c[1]), float(c[2])
 
-    start_frame = max(0, last_stationary + 1 - pre_frames)
+    if last is not None:
+        x, y, r = last
+        x1 = max(int(x - search), 0)
+        y1 = max(int(y - search), 0)
+        x2 = min(int(x + search), gray.shape[1] - 1)
+        y2 = min(int(y + search), gray.shape[0] - 1)
+        if x2 <= x1 or y2 <= y1:
+            return None
+        roi = gray[y1 : y2 + 1, x1 : x2 + 1]
+        circles = cv2.HoughCircles(
+            roi,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=r * 2,
+            param1=50,
+            param2=15,
+            minRadius=int(r * 0.6),
+            maxRadius=int(r * 1.4),
+        )
+        if circles is not None:
+            c = circles[0, 0]
+            return float(x1 + c[0]), float(y1 + c[1]), float(c[2])
 
-    low = max(initial_guess, start_frame)
-    high = min(initial_guess + max_range, total - 1)
-    first_invisible = high + 1
-    while low <= high:
-        mid = (low + high) // 2
-        if get_pos(mid) is None:
-            first_invisible = mid
-            high = mid - 1
-        else:
-            low = mid + 1
-    cap.release()
-    return start_frame, first_invisible
+    circles = cv2.HoughCircles(
+        gray,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=30,
+        param1=50,
+        param2=15,
+        minRadius=5,
+        maxRadius=100,
+    )
+    if circles is not None:
+        c = circles[0, 0]
+        return float(c[0]), float(c[1]), float(c[2])
+    return None
 
 
 def process_video(
@@ -127,19 +205,57 @@ def process_video(
     ball_path: str,
     sticker_path: str,
     stationary_path: str,
+    output_path: str = "annotated_output.mp4",
+    yolo_interval: int = 10,
 ) -> None:
-    """Process ``video_path`` saving ball and sticker coordinates to JSON.
+    """Process ``video_path`` saving results and an annotated video."""
 
-    ``stationary_path`` stores the averaged pose of the stationary marker."""
-    model = YOLO("golf_ball_detector.onnx")
+    # --- Initialisation timings ---
+    ball_compile_start = time.perf_counter()
+    sess_opts = ort.SessionOptions()
+    sess_opts.intra_op_num_threads = 0
+    sess_opts.inter_op_num_threads = 0
+    sess = ort.InferenceSession(
+        "golf_ball_detector.onnx",
+        sess_options=sess_opts,
+        providers=["CPUExecutionProvider"],
+    )
+    ball_compile_time = time.perf_counter() - ball_compile_start
+
+    sticker_compile_start = time.perf_counter()
+    aruco_detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
+    sticker_compile_time = time.perf_counter() - sticker_compile_start
+
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
-    ball_coords = []
-    sticker_coords = []
+
+    sticker_coords: list[dict] = []
     stationary_sum = np.zeros(6, dtype=float)
     stationary_count = 0
+
+    ball_time = 0.0
+    sticker_time = 0.0
+    yolo_frames = 0
+    circle_frames = 0
+
+    last_circle: tuple[float, float, float] | None = None
+    last_box: tuple[float, float, float, float] | None = None
+    ball_results: list[dict | None] = []
+    outlier_frames: list[tuple[int, np.ndarray]] = []
+
+    jump_thresh_x = 40
+    jump_thresh_y = 200
+
+    # Keep the last two YOLO detections to approximate motion
+    prev_yolo_idx: int | None = None
+    prev_yolo_circle: tuple[float, float, float] | None = None
+    last_yolo_idx: int | None = None
+    last_yolo_circle: tuple[float, float, float] | None = None
+    velocity = (0.0, 0.0)
+
+    writer: cv2.VideoWriter | None = None
 
     frame_idx = 0
     while True:
@@ -148,17 +264,94 @@ def process_video(
             break
         if h is None:
             h, w = frame.shape[:2]
+        if writer is None:
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+
         t = frame_idx / fps
         frame_idx += 1
-        results = model(frame, verbose=False)
-        if results and len(results[0].boxes) > 0:
-            boxes = results[0].boxes
-            best_idx = boxes.conf.argmax()
-            cx, cy, _, distance = measure_ball(boxes[best_idx])
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        run_yolo = frame_idx % yolo_interval == 0 or last_circle is None
+        if run_yolo:
+            start = time.perf_counter()
+            boxes = detect_ball(sess, frame, w, h)
+            ball_time += time.perf_counter() - start
+            yolo_frames += 1
+            if boxes.size > 0:
+                best_idx = boxes[:, 4].argmax()
+                last_box = tuple(boxes[best_idx, :4])
+                prev_yolo_idx = last_yolo_idx
+                prev_yolo_circle = last_yolo_circle
+                last_circle = measure_ball(last_box)[:3]
+                last_yolo_circle = last_circle
+                last_yolo_idx = frame_idx
+                if prev_yolo_idx is not None and prev_yolo_circle is not None:
+                    dt = last_yolo_idx - prev_yolo_idx
+                    if dt:
+                        velocity = (
+                            (last_yolo_circle[0] - prev_yolo_circle[0]) / dt,
+                            (last_yolo_circle[1] - prev_yolo_circle[1]) / dt,
+                        )
+            else:
+                last_box = None
+
+        if not run_yolo and last_yolo_circle is not None:
+            pred_x = last_yolo_circle[0] + velocity[0] * (frame_idx - last_yolo_idx)
+            pred_y = last_yolo_circle[1] + velocity[1] * (frame_idx - last_yolo_idx)
+            predicted = (pred_x, pred_y, last_yolo_circle[2])
+            search_box = (
+                pred_x - predicted[2],
+                pred_y - predicted[2],
+                pred_x + predicted[2],
+                pred_y + predicted[2],
+            )
+            start = time.perf_counter()
+            circle = detect_circle(gray, predicted, search_box)
+            ball_time += time.perf_counter() - start
+            circle_frames += 1
+        else:
+            start = time.perf_counter()
+            circle = detect_circle(gray, last_circle, last_box)
+            ball_time += time.perf_counter() - start
+            circle_frames += 1
+
+        outlier = circle is None
+        if not outlier:
+            cx, cy, r = circle
+            distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / r
+            if last_circle is not None:
+                dx = abs(cx - last_circle[0])
+                dy = abs(cy - last_circle[1])
+                outlier = dx > jump_thresh_x or dy > jump_thresh_y
+
+        if outlier:
+            start = time.perf_counter()
+            boxes = detect_ball(sess, frame, w, h)
+            ball_time += time.perf_counter() - start
+            yolo_frames += 1
+            if boxes.size > 0:
+                best_idx = boxes[:, 4].argmax()
+                last_box = tuple(boxes[best_idx, :4])
+                cx, cy, r, distance = measure_ball(last_box)
+                circle = (cx, cy, r)
+                outlier = False
+            else:
+                last_box = None
+
+        if circle is not None and not outlier:
+            last_circle = circle
+            last_box = (
+                last_circle[0] - last_circle[2],
+                last_circle[1] - last_circle[2],
+                last_circle[0] + last_circle[2],
+                last_circle[1] + last_circle[2],
+            )
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
             by = (cy - h / 2.0) * distance / FOCAL_LENGTH
             bz = distance - 30.0
-            ball_coords.append(
+            ball_results.append(
                 {
                     "time": round(t, 2),
                     "x": round(bx, 2),
@@ -166,22 +359,35 @@ def process_video(
                     "z": round(bz, 2),
                 }
             )
+            cv2.circle(frame, (int(cx), int(cy)), int(r), (0, 255, 0), 2)
+            cv2.putText(
+                frame,
+                f"x:{bx:.2f} y:{by:.2f} z:{bz:.2f}",
+                (int(cx) + 10, int(cy)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA,
+            )
+        else:
+            outlier_frames.append((frame_idx - 1, frame.copy()))
+            ball_results.append(None)
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = ARUCO_DETECTOR.detectMarkers(gray)
+        if writer is not None:
+            writer.write(frame)
+
+        sticker_start = time.perf_counter()
+        corners, ids, _ = aruco_detector.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
+            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
             for i, marker_id in enumerate(ids.flatten()):
                 length = (
                     STATIONARY_MARKER_LENGTH
                     if marker_id == STATIONARY_ID
                     else DYNAMIC_MARKER_LENGTH
                 )
-                rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                    [corners[i]],
-                    length,
-                    CAMERA_MATRIX,
-                    DIST_COEFFS,
-                )
+                rvecs, tvecs, _ = estimate_pose_single_markers([corners[i]], length)
                 rvec = rvecs[0, 0]
                 tvec = tvecs[0, 0]
                 x, y, z = tvec
@@ -201,13 +407,39 @@ def process_video(
                             "yaw": round(float(yaw), 2),
                         }
                     )
+        sticker_time += time.perf_counter() - sticker_start
+
+    # Recalculate outlier frames with YOLO
+    for idx, frm in outlier_frames:
+        start = time.perf_counter()
+        boxes = detect_ball(sess, frm, w, h)
+        ball_time += time.perf_counter() - start
+        yolo_frames += 1
+        if boxes.size > 0:
+            best_idx = boxes[:, 4].argmax()
+            cx, cy, r, distance = measure_ball(tuple(boxes[best_idx, :4]))
+            bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
+            by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+            bz = distance - 30.0
+            t = idx / fps
+            ball_results[idx] = {
+                "time": round(t, 2),
+                "x": round(bx, 2),
+                "y": round(by, 2),
+                "z": round(bz, 2),
+            }
 
     cap.release()
+    if writer is not None:
+        writer.release()
+
+    ball_coords = [b for b in ball_results if b is not None]
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
         json.dump(sticker_coords, f, indent=2)
-    stationary_output = []
+
+    stationary_output: list[dict] = []
     if stationary_count:
         avg = stationary_sum / stationary_count
         stationary_output.append(
@@ -222,15 +454,33 @@ def process_video(
         )
     with open(stationary_path, "w") as f:
         json.dump(stationary_output, f, indent=2)
+
     print(f"Saved {len(ball_coords)} ball points to {ball_path}")
     print(f"Saved {len(sticker_coords)} sticker points to {sticker_path}")
     if stationary_count:
         print(f"Saved averaged stationary sticker pose to {stationary_path}")
 
+    print(f"Ball detection compile time: {ball_compile_time:.2f}s")
+    print(f"Sticker detection compile time: {sticker_compile_time:.2f}s")
+    print(f"Ball detection time: {ball_time:.2f}s")
+    print(f"Sticker detection time: {sticker_time:.2f}s")
+    print(f"YOLO frames: {yolo_frames}")
+    print(f"Circle frames: {circle_frames}")
+
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "tst_cropped.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "video_ball_and_sticker.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
-    process_video(video_path, ball_path, sticker_path, stationary_path)
+    output_path = sys.argv[5] if len(sys.argv) > 5 else "annotated_output.mp4"
+    interval = int(sys.argv[6]) if len(sys.argv) > 6 else 10
+    process_video(
+        video_path,
+        ball_path,
+        sticker_path,
+        stationary_path,
+        output_path,
+        interval,
+    )
+

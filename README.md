@@ -25,8 +25,12 @@ python video_ball_detector.py video.mp4 \
     annotated.mp4 10
 ```
 
-The last number specifies how often YOLOv8 detection runs (every Nth frame).
-If omitted, it defaults to 10.
+The script saves an annotated version of the input video and prints
+the compilation and processing times for both the ball and sticker
+detectors.  The last number specifies how often YOLOv8 detection runs
+(every Nth frame). If omitted, it defaults to 10.
+
+
 
 The first JSON file will contain ball coordinates. The second stores the
 position and orientation of the moving sticker while the third contains the
