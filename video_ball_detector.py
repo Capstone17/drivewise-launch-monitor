@@ -65,9 +65,9 @@ def find_motion_window(
     model: YOLO,
     initial_guess: int,
     *,
-    max_range: int = 60,
+    max_range: int = 450,
     margin: float = 2.0,
-    pre_frames: int = 3,
+    pre_frames: int = 8,
 ) -> tuple[int, int]:
     """Return the start and end frame where the ball is in motion."""
 
