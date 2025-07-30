@@ -4,6 +4,7 @@ import sys
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import time
 
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
 FOCAL_LENGTH = 1000.0  # pixels
@@ -127,20 +128,34 @@ def process_video(
     ball_path: str,
     sticker_path: str,
     stationary_path: str,
+    annotated_path: str | None = None,
+    stride: int = 10,
 ) -> None:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
-    ``stationary_path`` stores the averaged pose of the stationary marker."""
+    ``stationary_path`` stores the averaged pose of the stationary marker.
+    If ``annotated_path`` is provided an annotated video is written and YOLO
+    detection runs every ``stride`` frames."""
+
     model = YOLO("golf_ball_detector.onnx")
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
+
+    writer = None
+    if annotated_path is not None and w is not None and h is not None:
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(annotated_path, fourcc, fps, (w, h))
+
     ball_coords = []
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
     stationary_count = 0
+    ball_times: list[float] = []
+    sticker_times: list[float] = []
 
+    last_boxes = None
     frame_idx = 0
     while True:
         ret, frame = cap.read()
@@ -148,11 +163,21 @@ def process_video(
             break
         if h is None:
             h, w = frame.shape[:2]
+            if writer is None and annotated_path is not None:
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(annotated_path, fourcc, fps, (w, h))
+
         t = frame_idx / fps
         frame_idx += 1
-        results = model(frame, verbose=False)
-        if results and len(results[0].boxes) > 0:
-            boxes = results[0].boxes
+
+        if frame_idx % stride == 0:
+            start = time.perf_counter()
+            results = model(frame, verbose=False)
+            ball_times.append(time.perf_counter() - start)
+            last_boxes = results[0].boxes if results and len(results[0].boxes) > 0 else None
+        boxes = last_boxes
+
+        if boxes is not None:
             best_idx = boxes.conf.argmax()
             cx, cy, _, distance = measure_ball(boxes[best_idx])
             bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
@@ -167,8 +192,10 @@ def process_video(
                 }
             )
 
+        start = time.perf_counter()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = ARUCO_DETECTOR.detectMarkers(gray)
+        sticker_times.append(time.perf_counter() - start)
         if ids is not None and len(ids) > 0:
             for i, marker_id in enumerate(ids.flatten()):
                 length = (
@@ -202,11 +229,31 @@ def process_video(
                         }
                     )
 
+        if writer is not None:
+            if boxes is not None:
+                x1, y1, x2, y2 = boxes[best_idx].xyxy[0]
+                cv2.rectangle(
+                    frame,
+                    (int(x1), int(y1)),
+                    (int(x2), int(y2)),
+                    (0, 255, 0),
+                    2,
+                )
+            if ids is not None and len(ids) > 0:
+                cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+                for rvecs, tvecs in zip(rvecs, tvecs):
+                    cv2.drawFrameAxes(frame, CAMERA_MATRIX, DIST_COEFFS, rvecs, tvecs, 2)
+            writer.write(frame)
+
     cap.release()
+    if writer is not None:
+        writer.release()
+
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
         json.dump(sticker_coords, f, indent=2)
+
     stationary_output = []
     if stationary_count:
         avg = stationary_sum / stationary_count
@@ -222,10 +269,14 @@ def process_video(
         )
     with open(stationary_path, "w") as f:
         json.dump(stationary_output, f, indent=2)
+
     print(f"Saved {len(ball_coords)} ball points to {ball_path}")
     print(f"Saved {len(sticker_coords)} sticker points to {sticker_path}")
     if stationary_count:
         print(f"Saved averaged stationary sticker pose to {stationary_path}")
+
+    print("Ball frame times:", [round(t, 4) for t in ball_times])
+    print("Sticker frame times:", [round(t, 4) for t in sticker_times])
 
 
 if __name__ == "__main__":

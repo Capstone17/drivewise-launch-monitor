@@ -26,7 +26,9 @@ python video_ball_detector.py video.mp4 \
 ```
 
 The last number specifies how often YOLOv8 detection runs (every Nth frame).
-If omitted, it defaults to 10.
+If omitted, it defaults to 10. When an output video path is provided the
+frames are annotated with the detected ball and stickers. The script also
+prints the inference time for every processed frame.
 
 The first JSON file will contain ball coordinates. The second stores the
 position and orientation of the moving sticker while the third contains the
