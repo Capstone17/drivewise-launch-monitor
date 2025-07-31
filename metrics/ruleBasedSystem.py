@@ -71,17 +71,17 @@ rules = [
         # Worst-case
         "name": "Pull Hook",
         "condition": lambda f: (f["face_slight_left"] and f["path_extreme_right"])   or   (f["face_extreme_left"] and (f["path_slight_right"] or f["path_extreme_right"])),
-        "action": lambda: print("Pull hook: ")
+        "action": lambda: print("Pull hook: You're closing the clubface too much and swinging aggressively out-to-in. Try keeping your clubface more neutral and reducing how far left you're swinging.")
     },
     {
         "name": "Pull Draw",
         "condition": lambda f: (f["face_slight_left"] and f["path_straight"])   or   (f["face_extreme_left"] and (f["path_straight"] or f["path_slight_left"])),
-        "action": lambda: print("Pull draw: ")
+        "action": lambda: print("Pull draw: Your clubface is slightly closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right.")
     },
     {
         "name": "Pull",
         "condition": lambda f: (f["face_slight_left"] and f["path_slight_left"] and not f["face_to_path_slight_left"])   or   (f["face_extreme_left"] and (f["path_extreme_left"])),
-        "action": lambda: print("Pull: ")
+        "action": lambda: print("Pull: Both your face and path are left, causing a pull. Try aligning your stance and path more rightward and ensure the face matches the path.")
     },
     {
         # Ideal fade
@@ -92,12 +92,12 @@ rules = [
     {
         "name": "Pull Slice",
         "condition": lambda f: f["face_slight_left"] and f["path_extreme_left"],
-        "action": lambda: print("Pull slice: ")
+        "action": lambda: print("Pull slice: Your club face is aiming left and your out-to-in path are producing sidespin. Work on neutralizing your swing path and straightening the face angle to prevent excessive spin.")
     },
     {
         "name": "Straight Hook",
         "condition": lambda f: f["face_straight"] and f["path_extreme_right"],
-        "action": lambda: print("Straight hook: ")
+        "action": lambda: print("Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.")
     },
     {
         "name": "Straight Draw",
