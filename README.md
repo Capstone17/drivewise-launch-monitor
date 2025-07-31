@@ -39,6 +39,10 @@ average pose of the stationary sticker, for example:
 ]
 ```
 
+The club's sticker must use ArUco ID 0 while the stationary block sticker uses
+ID 1. Both markers come from the 4x4 dictionary (`DICT_4X4_1000`). Any other
+detected IDs will be ignored.
+
 ## Go Implementation
 
 For better performance a Go version of the detector is included. It
