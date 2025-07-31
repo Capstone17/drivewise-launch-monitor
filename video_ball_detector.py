@@ -1,10 +1,28 @@
 import json
+import os
 import sys
 import time
 
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import onnxruntime as ort
+import torch
+
+# Ensure Ultralytics can write its settings locally and skip auto-installation
+os.environ.setdefault(
+    "YOLO_CONFIG_DIR", os.path.join(os.path.dirname(__file__), ".yolo")
+)
+os.environ.setdefault("YOLO_AUTOINSTALL", "False")
+os.makedirs(os.environ["YOLO_CONFIG_DIR"], exist_ok=True)
+
+# Select GPU if available
+DEVICE = (
+    "cuda"
+    if "CUDAExecutionProvider" in ort.get_available_providers()
+    and torch.cuda.is_available()
+    else "cpu"
+)
 
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
 FOCAL_LENGTH = 1000.0  # pixels
@@ -51,7 +69,7 @@ def measure_ball(box):
 
 def detect_center(model: YOLO, frame: np.ndarray) -> tuple[float, float] | None:
     """Return the pixel center of the ball or ``None`` if not found."""
-    results = model(frame, verbose=False)
+    results = model(frame, verbose=False, device=DEVICE)
     if not results or len(results[0].boxes) == 0:
         return None
     boxes = results[0].boxes
@@ -133,7 +151,7 @@ def process_video(
 
     ``stationary_path`` stores the averaged pose of the stationary marker."""
     ball_compile_start = time.perf_counter()
-    model = YOLO("golf_ball_detector.onnx")
+    model = YOLO("golf_ball_detector.onnx", task="detect")
     ball_compile_time = time.perf_counter() - ball_compile_start
 
     sticker_compile_start = time.perf_counter()
@@ -165,7 +183,7 @@ def process_video(
         t = frame_idx / fps
         frame_idx += 1
         start = time.perf_counter()
-        results = model(frame, verbose=False)
+        results = model(frame, verbose=False, device=DEVICE)
         ball_time += time.perf_counter() - start
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
@@ -231,7 +249,9 @@ def process_video(
                             "yaw": round(float(yaw), 2),
                         }
                     )
-                cv2.drawFrameAxes(frame, CAMERA_MATRIX, DIST_COEFFS, rvec, tvec, length * 0.5, 2)
+                cv2.drawFrameAxes(
+                    frame, CAMERA_MATRIX, DIST_COEFFS, rvec, tvec, length * 0.5, 2
+                )
 
         if writer is not None:
             writer.write(frame)
