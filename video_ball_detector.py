@@ -34,7 +34,10 @@ DIST_COEFFS = np.zeros(5)
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
 
-# ID of the stationary ArUco marker
+# IDs of the ArUco markers
+# Dynamic marker is affixed to the club and uses ID 0 while the
+# stationary marker placed on the block uses ID 1.
+DYNAMIC_ID = 0
 STATIONARY_ID = 1
 
 
@@ -219,11 +222,12 @@ def process_video(
         if ids is not None and len(ids) > 0:
             cv2.aruco.drawDetectedMarkers(frame, corners, ids)
             for i, marker_id in enumerate(ids.flatten()):
-                length = (
-                    STATIONARY_MARKER_LENGTH
-                    if marker_id == STATIONARY_ID
-                    else DYNAMIC_MARKER_LENGTH
-                )
+                if marker_id == STATIONARY_ID:
+                    length = STATIONARY_MARKER_LENGTH
+                elif marker_id == DYNAMIC_ID:
+                    length = DYNAMIC_MARKER_LENGTH
+                else:
+                    continue
                 rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
                     [corners[i]],
                     length,
