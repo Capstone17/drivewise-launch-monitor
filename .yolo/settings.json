@@ -1,0 +1,21 @@
+{
+  "settings_version": "0.0.6",
+  "datasets_dir": "/mnt/c/Users/Danik/Documents/GitHub/webcamGolf/datasets",
+  "weights_dir": "weights",
+  "runs_dir": "runs",
+  "uuid": "c7d9d22d7bdff3e51a1e757fc43387e2953498f9c57ee73287aac3edd1ae93c4",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "hub": true,
+  "mlflow": true,
+  "neptune": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}
