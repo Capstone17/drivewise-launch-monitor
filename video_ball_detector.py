@@ -86,17 +86,36 @@ def find_motion_window(
     model: YOLO,
     initial_guess: int,
     *,
-    max_range: int = 450,
-    margin: float = 2.0,
-    pre_frames: int = 8,
+    max_range: int | None = None,
+    margin: float = 1.5,
+    pre_frames: int | None = None,
 ) -> tuple[int, int]:
-    """Return the start and end frame where the ball is in motion."""
+    """Return the start and end frame where the ball is in motion.
+
+    The search range defaults to half a second of footage based on the video
+    frame rate and the amount of padding before motion starts is 20 ms worth of
+    frames.  ``margin`` controls the minimum pixel movement considered motion.
+    A message describing how many YOLO evaluations were required is printed
+    before returning.
+    """
 
     cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 240.0
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    if max_range is None:
+        max_range = int(fps * 0.5)
+    else:
+        max_range = min(max_range, int(fps * 0.5))
+
+    if pre_frames is None:
+        pre_frames = int(fps * 0.02)
+
     cache: dict[int, tuple[float, float] | None] = {}
+    yolo_runs = 0
 
     def get_pos(idx: int) -> tuple[float, float] | None:
+        nonlocal yolo_runs
         if idx < 0 or idx >= total:
             return None
         if idx in cache:
@@ -107,6 +126,7 @@ def find_motion_window(
             cache[idx] = None
         else:
             cache[idx] = detect_center(model, frame)
+            yolo_runs += 1
         return cache[idx]
 
     low = max(initial_guess - max_range, 0)
@@ -139,7 +159,9 @@ def find_motion_window(
             high = mid - 1
         else:
             low = mid + 1
+
     cap.release()
+    print(f"YOLO runs to find motion window: {yolo_runs}")
     return start_frame, first_invisible
 
 
