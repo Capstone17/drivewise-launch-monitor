@@ -35,10 +35,10 @@ ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
 
 # IDs of the ArUco markers
-# Dynamic marker is affixed to the club and uses ID 0 while the
-# stationary marker placed on the block uses ID 1.
-DYNAMIC_ID = 0
-STATIONARY_ID = 1
+# Stationary marker placed on the block uses ID 0 while the
+# dynamic marker affixed to the club uses ID 1.
+STATIONARY_ID = 0
+DYNAMIC_ID = 1
 
 
 def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
@@ -242,42 +242,55 @@ def process_video(
         corners, ids, _ = aruco_detector.detectMarkers(gray)
         sticker_time += time.perf_counter() - sticker_start
         if ids is not None and len(ids) > 0:
-            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
-            for i, marker_id in enumerate(ids.flatten()):
-                if marker_id == STATIONARY_ID:
-                    length = STATIONARY_MARKER_LENGTH
-                elif marker_id == DYNAMIC_ID:
-                    length = DYNAMIC_MARKER_LENGTH
-                else:
-                    continue
-                rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                    [corners[i]],
-                    length,
-                    CAMERA_MATRIX,
-                    DIST_COEFFS,
-                )
-                rvec = rvecs[0, 0]
-                tvec = tvecs[0, 0]
-                x, y, z = tvec
-                roll, pitch, yaw = rvec_to_euler(rvec)
-                if marker_id == STATIONARY_ID:
-                    stationary_sum += (x, y, z, roll, pitch, yaw)
-                    stationary_count += 1
-                else:
-                    sticker_coords.append(
-                        {
-                            "time": round(t, 2),
-                            "x": round(float(x), 2),
-                            "y": round(float(y), 2),
-                            "z": round(float(z), 2),
-                            "roll": round(float(roll), 2),
-                            "pitch": round(float(pitch), 2),
-                            "yaw": round(float(yaw), 2),
-                        }
+            valid = [
+                (corners[i], ids[i][0])
+                for i in range(len(ids))
+                if ids[i][0] in (STATIONARY_ID, DYNAMIC_ID)
+            ]
+            if valid:
+                valid_corners = [c for c, _ in valid]
+                valid_ids = np.array([[mid] for _, mid in valid])
+                cv2.aruco.drawDetectedMarkers(frame, valid_corners, valid_ids)
+                for corner, marker_id in valid:
+                    length = (
+                        STATIONARY_MARKER_LENGTH
+                        if marker_id == STATIONARY_ID
+                        else DYNAMIC_MARKER_LENGTH
                     )
-                cv2.drawFrameAxes(
-                    frame, CAMERA_MATRIX, DIST_COEFFS, rvec, tvec, length * 0.5, 2
-                )
+                    rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+                        [corner],
+                        length,
+                        CAMERA_MATRIX,
+                        DIST_COEFFS,
+                    )
+                    rvec = rvecs[0, 0]
+                    tvec = tvecs[0, 0]
+                    x, y, z = tvec
+                    roll, pitch, yaw = rvec_to_euler(rvec)
+                    if marker_id == STATIONARY_ID:
+                        stationary_sum += (x, y, z, roll, pitch, yaw)
+                        stationary_count += 1
+                    else:
+                        sticker_coords.append(
+                            {
+                                "time": round(t, 2),
+                                "x": round(float(x), 2),
+                                "y": round(float(y), 2),
+                                "z": round(float(z), 2),
+                                "roll": round(float(roll), 2),
+                                "pitch": round(float(pitch), 2),
+                                "yaw": round(float(yaw), 2),
+                            }
+                        )
+                    cv2.drawFrameAxes(
+                        frame,
+                        CAMERA_MATRIX,
+                        DIST_COEFFS,
+                        rvec,
+                        tvec,
+                        length * 0.5,
+                        2,
+                    )
 
         if writer is not None:
             writer.write(frame)
