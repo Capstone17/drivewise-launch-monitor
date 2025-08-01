@@ -25,14 +25,28 @@ DEVICE = (
 )
 
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
-FOCAL_LENGTH = 1000.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
 STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
-CAMERA_MATRIX = np.array([[500, 0, 320], [0, 500, 240], [0, 0, 1]], dtype=float)
-DIST_COEFFS = np.zeros(5)
+
+# Load camera calibration parameters
+_calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
+_calib_data = np.load(_calib_path)
+CAMERA_MATRIX = _calib_data["K"]
+DIST_COEFFS = _calib_data["dist"]
+FOCAL_X = float(CAMERA_MATRIX[0, 0])
+FOCAL_Y = float(CAMERA_MATRIX[1, 1])
+PRINCIPAL_X = float(CAMERA_MATRIX[0, 2])
+PRINCIPAL_Y = float(CAMERA_MATRIX[1, 2])
+FOCAL_LENGTH = (FOCAL_X + FOCAL_Y) / 2.0
+
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
+ARUCO_PARAMS.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+ARUCO_PARAMS.adaptiveThreshWinSizeMin = 3
+ARUCO_PARAMS.adaptiveThreshWinSizeMax = 23
+ARUCO_PARAMS.adaptiveThreshWinSizeStep = 2
+ARUCO_PARAMS.adaptiveThreshConstant = 7
 
 STATIONARY_ID = 1
 DYNAMIC_ID = 0
@@ -191,6 +205,8 @@ def process_video(
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
     stationary_count = 0
+    last_dynamic = None
+    missing_frames = 0
 
     frame_idx = 0
     while True:
@@ -211,8 +227,8 @@ def process_video(
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
             cx, cy, rad, distance = measure_ball(boxes[best_idx])
-            bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-            by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+            bx = (cx - PRINCIPAL_X) * distance / FOCAL_X
+            by = (cy - PRINCIPAL_Y) * distance / FOCAL_Y
             bz = distance - 30.0
             ball_coords.append(
                 {
@@ -235,6 +251,8 @@ def process_video(
             )
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.equalizeHist(gray)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
         sticker_start = time.perf_counter()
         corners, ids, _ = aruco_detector.detectMarkers(gray)
         sticker_time += time.perf_counter() - sticker_start
@@ -268,6 +286,8 @@ def process_video(
                         stationary_sum += (x, y, z, roll, pitch, yaw)
                         stationary_count += 1
                     else:
+                        last_dynamic = (x, y, z, roll, pitch, yaw)
+                        missing_frames = 0
                         sticker_coords.append(
                             {
                                 "time": round(t, 2),
@@ -288,6 +308,20 @@ def process_video(
                         length * 0.5,
                         2,
                     )
+        elif last_dynamic is not None and missing_frames < 10:
+            x, y, z, roll, pitch, yaw = last_dynamic
+            missing_frames += 1
+            sticker_coords.append(
+                {
+                    "time": round(t, 2),
+                    "x": round(float(x), 2),
+                    "y": round(float(y), 2),
+                    "z": round(float(z), 2),
+                    "roll": round(float(roll), 2),
+                    "pitch": round(float(pitch), 2),
+                    "yaw": round(float(yaw), 2),
+                }
+            )
 
         if writer is not None:
             writer.write(frame)
