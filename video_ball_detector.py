@@ -34,11 +34,8 @@ DIST_COEFFS = np.zeros(5)
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
 
-# IDs of the ArUco markers
-# Stationary marker placed on the block uses ID 0 while the
-# dynamic marker affixed to the club uses ID 1.
-STATIONARY_ID = 0
-DYNAMIC_ID = 1
+STATIONARY_ID = 1
+DYNAMIC_ID = 0
 
 
 def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
