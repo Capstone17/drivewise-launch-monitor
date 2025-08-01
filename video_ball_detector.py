@@ -25,7 +25,6 @@ DEVICE = (
 )
 
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
-FOCAL_LENGTH = 1000.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
 STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
@@ -35,6 +34,11 @@ _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_cal
 _calib_data = np.load(_calib_path)
 CAMERA_MATRIX = _calib_data["K"]
 DIST_COEFFS = _calib_data["dist"]
+FOCAL_X = float(CAMERA_MATRIX[0, 0])
+FOCAL_Y = float(CAMERA_MATRIX[1, 1])
+PRINCIPAL_X = float(CAMERA_MATRIX[0, 2])
+PRINCIPAL_Y = float(CAMERA_MATRIX[1, 2])
+FOCAL_LENGTH = (FOCAL_X + FOCAL_Y) / 2.0
 
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
@@ -96,14 +100,14 @@ def find_motion_window(
     max_range: int | None = None,
     margin: float = 1.5,
     pre_frames: int | None = None,
-) -> tuple[int, int, int]:
-    """Return start/end frames for motion and the YOLO evaluation count.
+) -> tuple[int, int]:
+    """Return the start and end frame where the ball is in motion.
 
     The search range defaults to half a second of footage based on the video
     frame rate and the amount of padding before motion starts is 20 ms worth of
-    frames. ``margin`` controls the minimum pixel movement considered motion.
-    The number of YOLO evaluations performed is both printed and returned as
-    the third element of the tuple.
+    frames.  ``margin`` controls the minimum pixel movement considered motion.
+    A message describing how many YOLO evaluations were required is printed
+    before returning.
     """
 
     cap = cv2.VideoCapture(video_path)
@@ -169,7 +173,7 @@ def find_motion_window(
 
     cap.release()
     print(f"YOLO runs to find motion window: {yolo_runs}")
-    return start_frame, first_invisible, yolo_runs
+    return start_frame, first_invisible
 
 
 def process_video(
@@ -192,14 +196,6 @@ def process_video(
 
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    start_frame, end_frame = 0, total_frames
-    if total_frames > 0:
-        mid_frame = total_frames // 2
-        start_frame, end_frame, _ = find_motion_window(video_path, model, mid_frame)
-        print(f"Motion window frames: {start_frame}-{end_frame}")
-    inference_start = max(0, start_frame - 5)
-    inference_end = min(total_frames, end_frame + 5)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     writer = None
@@ -209,8 +205,7 @@ def process_video(
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
     stationary_count = 0
-    last_dynamic_pose = None
-    last_dynamic_rt = None
+    last_dynamic = None
     missing_frames = 0
 
     frame_idx = 0
@@ -224,17 +219,16 @@ def process_video(
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
         t = frame_idx / fps
-        results = None
-        if inference_start <= frame_idx < inference_end:
-            start = time.perf_counter()
-            results = model(frame, verbose=False, device=DEVICE)
-            ball_time += time.perf_counter() - start
+        frame_idx += 1
+        start = time.perf_counter()
+        results = model(frame, verbose=False, device=DEVICE)
+        ball_time += time.perf_counter() - start
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
             cx, cy, rad, distance = measure_ball(boxes[best_idx])
-            bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-            by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+            bx = (cx - PRINCIPAL_X) * distance / FOCAL_X
+            by = (cy - PRINCIPAL_Y) * distance / FOCAL_Y
             bz = distance - 30.0
             ball_coords.append(
                 {
@@ -292,8 +286,7 @@ def process_video(
                         stationary_sum += (x, y, z, roll, pitch, yaw)
                         stationary_count += 1
                     else:
-                        last_dynamic_pose = (x, y, z, roll, pitch, yaw)
-                        last_dynamic_rt = (rvec, tvec)
+                        last_dynamic = (x, y, z, roll, pitch, yaw)
                         missing_frames = 0
                         sticker_coords.append(
                             {
@@ -315,8 +308,8 @@ def process_video(
                         length * 0.5,
                         2,
                     )
-        elif last_dynamic_pose is not None and missing_frames < 5:
-            x, y, z, roll, pitch, yaw = last_dynamic_pose
+        elif last_dynamic is not None and missing_frames < 10:
+            x, y, z, roll, pitch, yaw = last_dynamic
             missing_frames += 1
             sticker_coords.append(
                 {
@@ -329,21 +322,9 @@ def process_video(
                     "yaw": round(float(yaw), 2),
                 }
             )
-            if last_dynamic_rt is not None:
-                rvec, tvec = last_dynamic_rt
-                cv2.drawFrameAxes(
-                    frame,
-                    CAMERA_MATRIX,
-                    DIST_COEFFS,
-                    rvec,
-                    tvec,
-                    DYNAMIC_MARKER_LENGTH * 0.5,
-                    2,
-                )
 
         if writer is not None:
             writer.write(frame)
-        frame_idx += 1
 
     cap.release()
     if writer is not None:
