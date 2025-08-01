@@ -3,18 +3,18 @@ import os
 import sys
 import time
 
-import cv2
-import numpy as np
-from ultralytics import YOLO
-import onnxruntime as ort
-import torch
-
 # Ensure Ultralytics can write its settings locally and skip auto-installation
 os.environ.setdefault(
     "YOLO_CONFIG_DIR", os.path.join(os.path.dirname(__file__), ".yolo")
 )
 os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 os.makedirs(os.environ["YOLO_CONFIG_DIR"], exist_ok=True)
+
+import cv2
+import numpy as np
+from ultralytics import YOLO
+import onnxruntime as ort
+import torch
 
 # Select GPU if available
 DEVICE = (
@@ -203,7 +203,11 @@ def process_video(
     sticker_compile_time = time.perf_counter() - sticker_compile_start
 
     cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    writer_fps = video_fps
+    # mpeg4 codecs fail when the timebase denominator exceeds 65535
+    if writer_fps * 1000 > 65535:
+        writer_fps = 60.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
     start_frame, end_frame = 0, total_frames
     if total_frames > 0:
@@ -240,8 +244,8 @@ def process_video(
             h, w = frame.shape[:2]
         if writer is None:
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
-        t = frame_idx / fps
+            writer = cv2.VideoWriter(output_path, fourcc, writer_fps, (w, h))
+        t = frame_idx / video_fps
         results = None
         if inference_start <= frame_idx < inference_end:
             start = time.perf_counter()
