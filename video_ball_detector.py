@@ -96,14 +96,14 @@ def find_motion_window(
     max_range: int | None = None,
     margin: float = 1.5,
     pre_frames: int | None = None,
-) -> tuple[int, int]:
-    """Return the start and end frame where the ball is in motion.
+) -> tuple[int, int, int]:
+    """Return start/end frames for motion and the YOLO evaluation count.
 
     The search range defaults to half a second of footage based on the video
     frame rate and the amount of padding before motion starts is 20 ms worth of
-    frames.  ``margin`` controls the minimum pixel movement considered motion.
-    A message describing how many YOLO evaluations were required is printed
-    before returning.
+    frames. ``margin`` controls the minimum pixel movement considered motion.
+    The number of YOLO evaluations performed is both printed and returned as
+    the third element of the tuple.
     """
 
     cap = cv2.VideoCapture(video_path)
@@ -169,7 +169,7 @@ def find_motion_window(
 
     cap.release()
     print(f"YOLO runs to find motion window: {yolo_runs}")
-    return start_frame, first_invisible
+    return start_frame, first_invisible, yolo_runs
 
 
 def process_video(
@@ -178,6 +178,7 @@ def process_video(
     sticker_path: str,
     stationary_path: str,
     output_path: str = "annotated_output.mp4",
+    frames_dir: str = "ball_frames",
 ) -> None:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
@@ -192,16 +193,32 @@ def process_video(
 
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    start_frame, end_frame = 0, total_frames
+    if total_frames > 0:
+        mid_frame = total_frames // 2
+        start_frame, end_frame, _ = find_motion_window(video_path, model, mid_frame)
+        print(f"Motion window frames: {start_frame}-{end_frame}")
+    inference_start = max(0, start_frame - 5)
+    inference_end = min(total_frames, end_frame + 5)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     writer = None
+    if frames_dir:
+        os.makedirs(frames_dir, exist_ok=True)
+        for name in os.listdir(frames_dir):
+            try:
+                os.remove(os.path.join(frames_dir, name))
+            except OSError:
+                pass
     ball_time = 0.0
     sticker_time = 0.0
     ball_coords = []
     sticker_coords = []
     stationary_sum = np.zeros(6, dtype=float)
     stationary_count = 0
-    last_dynamic = None
+    last_dynamic_pose = None
+    last_dynamic_rt = None
     missing_frames = 0
 
     frame_idx = 0
@@ -215,10 +232,11 @@ def process_video(
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
         t = frame_idx / fps
-        frame_idx += 1
-        start = time.perf_counter()
-        results = model(frame, verbose=False, device=DEVICE)
-        ball_time += time.perf_counter() - start
+        results = None
+        if inference_start <= frame_idx < inference_end:
+            start = time.perf_counter()
+            results = model(frame, verbose=False, device=DEVICE)
+            ball_time += time.perf_counter() - start
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
@@ -282,7 +300,8 @@ def process_video(
                         stationary_sum += (x, y, z, roll, pitch, yaw)
                         stationary_count += 1
                     else:
-                        last_dynamic = (x, y, z, roll, pitch, yaw)
+                        last_dynamic_pose = (x, y, z, roll, pitch, yaw)
+                        last_dynamic_rt = (rvec, tvec)
                         missing_frames = 0
                         sticker_coords.append(
                             {
@@ -304,8 +323,8 @@ def process_video(
                         length * 0.5,
                         2,
                     )
-        elif last_dynamic is not None and missing_frames < 5:
-            x, y, z, roll, pitch, yaw = last_dynamic
+        elif last_dynamic_pose is not None and missing_frames < 5:
+            x, y, z, roll, pitch, yaw = last_dynamic_pose
             missing_frames += 1
             sticker_coords.append(
                 {
@@ -318,9 +337,25 @@ def process_video(
                     "yaw": round(float(yaw), 2),
                 }
             )
+            if last_dynamic_rt is not None:
+                rvec, tvec = last_dynamic_rt
+                cv2.drawFrameAxes(
+                    frame,
+                    CAMERA_MATRIX,
+                    DIST_COEFFS,
+                    rvec,
+                    tvec,
+                    DYNAMIC_MARKER_LENGTH * 0.5,
+                    2,
+                )
 
+        if frames_dir and inference_start <= frame_idx < inference_end:
+            cv2.imwrite(
+                os.path.join(frames_dir, f"frame_{frame_idx:04d}.png"), frame
+            )
         if writer is not None:
             writer.write(frame)
+        frame_idx += 1
 
     cap.release()
     if writer is not None:
@@ -360,4 +395,12 @@ if __name__ == "__main__":
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
     output_path = sys.argv[5] if len(sys.argv) > 5 else "annotated_output.mp4"
-    process_video(video_path, ball_path, sticker_path, stationary_path, output_path)
+    frames_dir = sys.argv[6] if len(sys.argv) > 6 else "ball_frames"
+    process_video(
+        video_path,
+        ball_path,
+        sticker_path,
+        stationary_path,
+        output_path,
+        frames_dir,
+    )
