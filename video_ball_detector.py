@@ -192,6 +192,11 @@ def process_video(
 
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    if total_frames > 0:
+        mid_frame = total_frames // 2
+        start_frame, end_frame, _ = find_motion_window(video_path, model, mid_frame)
+        print(f"Motion window frames: {start_frame}-{end_frame}")
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     writer = None
