@@ -193,10 +193,13 @@ def process_video(
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    start_frame, end_frame = 0, total_frames
     if total_frames > 0:
         mid_frame = total_frames // 2
         start_frame, end_frame, _ = find_motion_window(video_path, model, mid_frame)
         print(f"Motion window frames: {start_frame}-{end_frame}")
+    inference_start = max(0, start_frame - 5)
+    inference_end = min(total_frames, end_frame + 5)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     writer = None
@@ -221,10 +224,11 @@ def process_video(
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
         t = frame_idx / fps
-        frame_idx += 1
-        start = time.perf_counter()
-        results = model(frame, verbose=False, device=DEVICE)
-        ball_time += time.perf_counter() - start
+        results = None
+        if inference_start <= frame_idx < inference_end:
+            start = time.perf_counter()
+            results = model(frame, verbose=False, device=DEVICE)
+            ball_time += time.perf_counter() - start
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
@@ -339,6 +343,7 @@ def process_video(
 
         if writer is not None:
             writer.write(frame)
+        frame_idx += 1
 
     cap.release()
     if writer is not None:
