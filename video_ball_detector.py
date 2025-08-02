@@ -29,7 +29,7 @@ FOCAL_LENGTH = 1000.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
 STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
-MIN_BALL_RADIUS_PX = 3  # pixels
+MIN_BALL_RADIUS_PX = 9  # pixels
 
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
