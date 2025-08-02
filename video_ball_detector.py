@@ -24,8 +24,8 @@ DEVICE = (
     else "cpu"
 )
 
-ACTUAL_BALL_RADIUS = 2.135  # centimeters
-FOCAL_LENGTH = 1000.0  # pixels
+ACTUAL_BALL_RADIUS = 2.5  # centimeters
+FOCAL_LENGTH = 1755.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
 STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
