@@ -104,7 +104,7 @@ class SwingAnalysisCharacteristic(Characteristic):
         self.value = {'face angle': None, 'swing path': None, 'attack angle': None, 'side angle': None, 'feedback': "No swing detected! Please try again."}
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 1, self))
 
-    def ReadValue(self, options):
+    def ReadValue(self):
         # Run computer vision script here
         # Run rule-based AI with all 3 json files to recieve 4 output metrics in dict + string message
         logger.debug("Analysis finished, sending metrics: " + repr(self.value))
@@ -112,7 +112,7 @@ class SwingAnalysisCharacteristic(Characteristic):
         return [dbus.Byte(b) for b in result_bytes]
         
         
-    def WriteValue(self, value, options):
+    def WriteValue(self):
         logger.debug("Recieved command to start recording")
         try:
             subprocess.Popen(["/home/Documents/test/GScrop_improved_flip.sh"])
