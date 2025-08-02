@@ -53,6 +53,7 @@ STATIONARY_ID = 1
 DYNAMIC_ID = 0
 
 MAX_MISSING_FRAMES = 12
+MAX_MOTION_FRAMES = 40  # maximum allowed motion window length in frames
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
@@ -200,13 +201,15 @@ def find_motion_window(
     video_path: str,
     *,
     pad_frames: int = 20,
+    max_frames: int = MAX_MOTION_FRAMES,
 ) -> tuple[int, int]:
     """Return the frame range surrounding the dynamic sticker.
 
     The video is scanned frame-by-frame for the ArUco marker with ID
     ``DYNAMIC_ID``. The motion window spans from the first to the last frame
     where this sticker is detected, expanded by ``pad_frames`` on each side.
-    If the sticker never appears, the entire clip is returned."""
+    The resulting range is capped to ``max_frames`` by trimming from the
+    beginning. If the sticker never appears, the entire clip is returned."""
 
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
@@ -232,6 +235,8 @@ def find_motion_window(
 
     start_frame = max(0, first - pad_frames)
     end_frame = min(total, last + pad_frames)
+    if end_frame - start_frame > max_frames:
+        start_frame = max(end_frame - max_frames, 0)
     return start_frame, end_frame
 
 
