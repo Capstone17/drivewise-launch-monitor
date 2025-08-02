@@ -25,23 +25,17 @@ DEVICE = (
 )
 
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
+FOCAL_LENGTH = 1000.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
 STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
-MOTION_THRESHOLD_CM = 15  # centimeters
+MIN_BALL_RADIUS_PX = 3  # pixels
 
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
 _calib_data = np.load(_calib_path)
 CAMERA_MATRIX = _calib_data["K"]
 DIST_COEFFS = _calib_data["dist"]
-
-FOCAL_LENGTH_X = CAMERA_MATRIX[0, 0]
-FOCAL_LENGTH_Y = CAMERA_MATRIX[1, 1]
-# Average focal length for radial distance estimation
-FOCAL_LENGTH = (FOCAL_LENGTH_X + FOCAL_LENGTH_Y) / 2.0
-PRINCIPAL_POINT_X = CAMERA_MATRIX[0, 2]
-PRINCIPAL_POINT_Y = CAMERA_MATRIX[1, 2]
 
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
@@ -84,136 +78,45 @@ def measure_ball(box):
     return cx, cy, radius_px, distance
 
 
-def detect_center(model: YOLO, frame: np.ndarray) -> tuple[float, float, float] | None:
-    """Return the pixel center and distance of the ball or ``None`` if not found."""
-    results = model(frame, verbose=False, device=DEVICE)
-    if not results or len(results[0].boxes) == 0:
-        return None
-    boxes = results[0].boxes
-    best_idx = boxes.conf.argmax()
-    cx, cy, _, distance = measure_ball(boxes[best_idx])
-    return cx, cy, distance
-
-
 def find_motion_window(
     video_path: str,
-    model: YOLO,
     *,
-    movement_threshold_cm: float = MOTION_THRESHOLD_CM,
-    pre_frames: int | None = None,
-) -> tuple[int, int, int]:
-    """Locate the time span where the ball moves using binary search.
+    pad_frames: int = 20,
+) -> tuple[int, int]:
+    """Return the frame range surrounding the dynamic sticker.
 
-    The function first searches the entire clip for any frame containing the
-    ball by recursively splitting the range. Once a frame with the ball is
-    found, binary searches are performed on each side to find when motion
-    begins and when the ball disappears. Motion between frames must exceed
-    ``movement_threshold_cm`` to be considered movement. The total number of
-    YOLO evaluations used during this search is both printed and returned.
-    """
+    The video is scanned frame-by-frame for the ArUco marker with ID
+    ``DYNAMIC_ID``. The motion window spans from the first to the last frame
+    where this sticker is detected, expanded by ``pad_frames`` on each side.
+    If the sticker never appears, the entire clip is returned."""
 
     cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 240.0
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
 
-    if pre_frames is None:
-        pre_frames = int(fps * 0.02)
+    detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
+    first, last = None, None
 
-    cache: dict[int, tuple[float, float, float] | None] = {}
-    yolo_runs = 0
-
-    def get_pos(idx: int) -> tuple[float, float, float] | None:
-        nonlocal yolo_runs
-        if idx < 0 or idx >= total:
-            return None
-        if idx in cache:
-            return cache[idx]
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    for idx in range(total):
         ret, frame = cap.read()
         if not ret:
-            cache[idx] = None
-        else:
-            cache[idx] = detect_center(model, frame)
-            yolo_runs += 1
-        return cache[idx]
-
-    def motion_cm(p1: tuple[float, float, float], p2: tuple[float, float, float]) -> float:
-        avg_d = (p1[2] + p2[2]) / 2.0
-        dx = (p2[0] - p1[0]) * avg_d / FOCAL_LENGTH
-        dy = (p2[1] - p1[1]) * avg_d / FOCAL_LENGTH
-        dz = p2[2] - p1[2]
-        return float(np.linalg.norm([dx, dy, dz]))
-
-    def search_presence(lo: int, hi: int) -> int | None:
-        """Return a frame index containing the ball, or ``None``."""
-        if lo > hi:
-            return None
-        mid = (lo + hi) // 2
-        if get_pos(mid) is not None:
-            return mid
-        left = search_presence(lo, mid - 1)
-        if left is not None:
-            return left
-        return search_presence(mid + 1, hi)
-
-    pivot = search_presence(0, total - 1)
-    if pivot is None:
-        cap.release()
-        print(f"YOLO runs to find motion window: {yolo_runs}")
-        return 0, 0, yolo_runs
-
-    # Find last stationary frame before motion
-    low, high = 0, pivot
-    last_stationary = low
-    while low <= high:
-        mid = (low + high) // 2
-        p1 = get_pos(mid)
-        p2 = get_pos(mid + 1)
-        moved = (
-            p1 is not None
-            and p2 is not None
-            and motion_cm(p1, p2) > movement_threshold_cm
-        )
-        if moved:
-            high = mid - 1
-        else:
-            last_stationary = mid
-            low = mid + 1
-
-    start_frame = max(0, last_stationary + 1 - pre_frames)
-
-    # Find first frame after the ball disappears
-    low, high = pivot, total - 1
-    first_invisible = total
-    while low <= high:
-        mid = (low + high) // 2
-        if get_pos(mid) is None:
-            first_invisible = mid
-            high = mid - 1
-        else:
-            low = mid + 1
-
-    # Find last frame where the ball moves significantly
-    low, high = pivot, first_invisible - 1
-    last_moving = high
-    while low <= high:
-        mid = (low + high) // 2
-        p1 = get_pos(mid)
-        p2 = get_pos(mid + 1)
-        moved = (
-            p1 is not None
-            and p2 is not None
-            and motion_cm(p1, p2) > movement_threshold_cm
-        )
-        if moved:
-            last_moving = mid + 1
-            low = mid + 1
-        else:
-            high = mid - 1
+            break
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.equalizeHist(gray)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        corners, ids, _ = detector.detectMarkers(gray)
+        if ids is not None and any(m_id[0] == DYNAMIC_ID for m_id in ids):
+            if first is None:
+                first = idx
+            last = idx
 
     cap.release()
-    print(f"YOLO runs to find motion window: {yolo_runs}")
-    return start_frame, last_moving, yolo_runs
+
+    if first is None or last is None:
+        return 0, total
+
+    start_frame = max(0, first - pad_frames)
+    end_frame = min(total, last + pad_frames)
+    return start_frame, end_frame
 
 
 def process_video(
@@ -244,7 +147,7 @@ def process_video(
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
     start_frame, end_frame = 0, total_frames
     if total_frames > 0:
-        start_frame, end_frame, _ = find_motion_window(video_path, model)
+        start_frame, end_frame = find_motion_window(video_path)
         print(f"Motion window frames: {start_frame}-{end_frame}")
     inference_start = max(0, start_frame - 5)
     inference_end = min(total_frames, end_frame + 5)
@@ -288,28 +191,29 @@ def process_video(
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
             cx, cy, rad, distance = measure_ball(boxes[best_idx])
-            bx = (cx - PRINCIPAL_POINT_X) * distance / FOCAL_LENGTH_X
-            by = (cy - PRINCIPAL_POINT_Y) * distance / FOCAL_LENGTH_Y
-            bz = distance - 30.0
-            ball_coords.append(
-                {
-                    "time": round(t, 2),
-                    "x": round(bx, 2),
-                    "y": round(by, 2),
-                    "z": round(bz, 2),
-                }
-            )
-            cv2.circle(frame, (int(cx), int(cy)), int(rad), (0, 255, 0), 2)
-            cv2.putText(
-                frame,
-                f"x:{bx:.2f} y:{by:.2f} z:{bz:.2f}",
-                (int(cx) + 10, int(cy)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (0, 255, 0),
-                1,
-                cv2.LINE_AA,
-            )
+            if rad >= MIN_BALL_RADIUS_PX:
+                bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
+                by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+                bz = distance - 30.0
+                ball_coords.append(
+                    {
+                        "time": round(t, 2),
+                        "x": round(bx, 2),
+                        "y": round(by, 2),
+                        "z": round(bz, 2),
+                    }
+                )
+                cv2.circle(frame, (int(cx), int(cy)), int(rad), (0, 255, 0), 2)
+                cv2.putText(
+                    frame,
+                    f"x:{bx:.2f} y:{by:.2f} z:{bz:.2f}",
+                    (int(cx) + 10, int(cy)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
+                    1,
+                    cv2.LINE_AA,
+                )
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.equalizeHist(gray)
@@ -437,7 +341,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "exposure_test/tst_fast_120.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "exposure_test/tst_exposure_240_fast.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
