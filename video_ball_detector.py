@@ -29,6 +29,7 @@ FOCAL_LENGTH = 1000.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
 STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
+MOTION_THRESHOLD_CM = 0.5  # centimeters
 
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
@@ -77,44 +78,48 @@ def measure_ball(box):
     return cx, cy, radius_px, distance
 
 
-def detect_center(model: YOLO, frame: np.ndarray) -> tuple[float, float] | None:
-    """Return the pixel center of the ball or ``None`` if not found."""
+def detect_center(model: YOLO, frame: np.ndarray) -> tuple[float, float, float] | None:
+    """Return the pixel center and distance of the ball or ``None`` if not found."""
     results = model(frame, verbose=False, device=DEVICE)
     if not results or len(results[0].boxes) == 0:
         return None
     boxes = results[0].boxes
     best_idx = boxes.conf.argmax()
-    cx, cy, _, _ = measure_ball(boxes[best_idx])
-    return cx, cy
+    cx, cy, _, distance = measure_ball(boxes[best_idx])
+    return cx, cy, distance
 
 
 def find_motion_window(
     video_path: str,
     model: YOLO,
     *,
-    margin: float = 1.5,
-    pre_frames: int | None = None,
+    movement_threshold_cm: float = MOTION_THRESHOLD_CM,
+    pad_frames: int = 20,
 ) -> tuple[int, int, int]:
-    """Locate the time span where the ball moves using binary search.
+    """Locate the motion period of the ball using a binary-search strategy.
 
-    The function first searches the entire clip for any frame containing the
-    ball by recursively splitting the range. Once a frame with the ball is
-    found, binary searches are performed on each side to find when motion
-    begins and when the ball disappears. The total number of YOLO evaluations
-    used during this search is both printed and returned.
+    The search works in the following stages:
+
+    1.  Binary search the clip to find the first frame where the ball is not
+        detected at all. This frame must also be followed by ``pad_frames``
+        consecutive frames without a detection to ensure the ball has exited
+        the scene.
+    2.  Binary search backwards from that region to find the last frame that
+        still contains the ball.
+    3.  Step backwards from this last visible frame until the motion between
+        consecutive frames drops below ``movement_threshold_cm``. Twenty frames
+        are subtracted from this stationary point to form the start of the
+        window, while the end of the window is twenty frames after the first
+        invisible frame.
     """
 
     cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 240.0
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    if pre_frames is None:
-        pre_frames = int(fps * 0.02)
-
-    cache: dict[int, tuple[float, float] | None] = {}
+    cache: dict[int, tuple[float, float, float] | None] = {}
     yolo_runs = 0
 
-    def get_pos(idx: int) -> tuple[float, float] | None:
+    def get_pos(idx: int) -> tuple[float, float, float] | None:
         nonlocal yolo_runs
         if idx < 0 or idx >= total:
             return None
@@ -129,58 +134,75 @@ def find_motion_window(
             yolo_runs += 1
         return cache[idx]
 
-    def search_presence(lo: int, hi: int) -> int | None:
-        """Return a frame index containing the ball, or ``None``."""
-        if lo > hi:
-            return None
+    def motion_cm(p1: tuple[float, float, float], p2: tuple[float, float, float]) -> float:
+        avg_d = (p1[2] + p2[2]) / 2.0
+        dx = (p2[0] - p1[0]) * avg_d / FOCAL_LENGTH
+        dy = (p2[1] - p1[1]) * avg_d / FOCAL_LENGTH
+        dz = p2[2] - p1[2]
+        return float(np.linalg.norm([dx, dy, dz]))
+
+    # --- Stage 1: locate the first frame with no ball ---
+    lo, hi = 0, total - 1
+    first_no_ball = total
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if get_pos(mid) is None:
+            first_no_ball = mid
+            hi = mid - 1
+        else:
+            lo = mid + 1
+
+    def has_clear_run(start: int) -> bool:
+        for i in range(start, min(total, start + pad_frames)):
+            if get_pos(i) is not None:
+                return False
+        return True
+
+    while first_no_ball < total and not has_clear_run(first_no_ball):
+        first_no_ball += 1
+
+    if first_no_ball >= total:
+        cap.release()
+        print(f"YOLO runs to find motion window: {yolo_runs}")
+        return 0, total, yolo_runs
+
+    # --- Stage 2: find the last frame that still shows the ball ---
+    lo, hi = 0, first_no_ball - 1
+    last_visible = -1
+    while lo <= hi:
         mid = (lo + hi) // 2
         if get_pos(mid) is not None:
-            return mid
-        left = search_presence(lo, mid - 1)
-        if left is not None:
-            return left
-        return search_presence(mid + 1, hi)
+            last_visible = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
 
-    pivot = search_presence(0, total - 1)
-    if pivot is None:
+    if last_visible < 0:
         cap.release()
         print(f"YOLO runs to find motion window: {yolo_runs}")
         return 0, 0, yolo_runs
 
-    # Find last stationary frame before motion
-    low, high = 0, pivot
-    last_stationary = low
-    while low <= high:
-        mid = (low + high) // 2
-        p1 = get_pos(mid)
-        p2 = get_pos(mid + 1)
-        moved = (
-            p1 is not None
-            and p2 is not None
-            and np.linalg.norm(np.subtract(p2, p1)) > margin
-        )
-        if moved:
-            high = mid - 1
+    # --- Stage 3: walk backwards to find when motion stops ---
+    idx = last_visible
+    prev = get_pos(idx)
+    while idx > 0:
+        current = get_pos(idx - 1)
+        if current is None or prev is None:
+            idx -= 1
+            prev = current
+            continue
+        if motion_cm(current, prev) <= movement_threshold_cm:
+            idx -= 1
+            prev = current
         else:
-            last_stationary = mid
-            low = mid + 1
+            break
 
-    start_frame = max(0, last_stationary + 1 - pre_frames)
-
-    # Find first frame after the ball disappears
-    low, high = pivot, total - 1
-    first_invisible = total
-    while low <= high:
-        mid = (low + high) // 2
-        if get_pos(mid) is None:
-            first_invisible = mid
-            high = mid - 1
-        else:
-            low = mid + 1
+    start_frame = max(0, idx - pad_frames)
+    end_frame = min(total, first_no_ball + pad_frames)
 
     cap.release()
     print(f"YOLO runs to find motion window: {yolo_runs}")
-    return start_frame, first_invisible, yolo_runs
+    return start_frame, end_frame, yolo_runs
 
 
 def process_video(
