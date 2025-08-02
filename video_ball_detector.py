@@ -187,9 +187,27 @@ def find_motion_window(
         else:
             low = mid + 1
 
+    # Find last frame where the ball moves significantly
+    low, high = pivot, first_invisible - 1
+    last_moving = high
+    while low <= high:
+        mid = (low + high) // 2
+        p1 = get_pos(mid)
+        p2 = get_pos(mid + 1)
+        moved = (
+            p1 is not None
+            and p2 is not None
+            and motion_cm(p1, p2) > movement_threshold_cm
+        )
+        if moved:
+            last_moving = mid + 1
+            low = mid + 1
+        else:
+            high = mid - 1
+
     cap.release()
     print(f"YOLO runs to find motion window: {yolo_runs}")
-    return start_frame, first_invisible, yolo_runs
+    return start_frame, last_moving, yolo_runs
 
 
 def process_video(
