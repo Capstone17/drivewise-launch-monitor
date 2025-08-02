@@ -29,6 +29,7 @@ FOCAL_LENGTH = 1000.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
 STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
+MOTION_THRESHOLD_CM = 0.5  # centimeters
 
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
@@ -77,22 +78,22 @@ def measure_ball(box):
     return cx, cy, radius_px, distance
 
 
-def detect_center(model: YOLO, frame: np.ndarray) -> tuple[float, float] | None:
-    """Return the pixel center of the ball or ``None`` if not found."""
+def detect_center(model: YOLO, frame: np.ndarray) -> tuple[float, float, float] | None:
+    """Return the pixel center and distance of the ball or ``None`` if not found."""
     results = model(frame, verbose=False, device=DEVICE)
     if not results or len(results[0].boxes) == 0:
         return None
     boxes = results[0].boxes
     best_idx = boxes.conf.argmax()
-    cx, cy, _, _ = measure_ball(boxes[best_idx])
-    return cx, cy
+    cx, cy, _, distance = measure_ball(boxes[best_idx])
+    return cx, cy, distance
 
 
 def find_motion_window(
     video_path: str,
     model: YOLO,
     *,
-    margin: float = 1.5,
+    movement_threshold_cm: float = MOTION_THRESHOLD_CM,
     pre_frames: int | None = None,
 ) -> tuple[int, int, int]:
     """Locate the time span where the ball moves using binary search.
@@ -100,8 +101,9 @@ def find_motion_window(
     The function first searches the entire clip for any frame containing the
     ball by recursively splitting the range. Once a frame with the ball is
     found, binary searches are performed on each side to find when motion
-    begins and when the ball disappears. The total number of YOLO evaluations
-    used during this search is both printed and returned.
+    begins and when the ball disappears. Motion between frames must exceed
+    ``movement_threshold_cm`` to be considered movement. The total number of
+    YOLO evaluations used during this search is both printed and returned.
     """
 
     cap = cv2.VideoCapture(video_path)
@@ -111,10 +113,10 @@ def find_motion_window(
     if pre_frames is None:
         pre_frames = int(fps * 0.02)
 
-    cache: dict[int, tuple[float, float] | None] = {}
+    cache: dict[int, tuple[float, float, float] | None] = {}
     yolo_runs = 0
 
-    def get_pos(idx: int) -> tuple[float, float] | None:
+    def get_pos(idx: int) -> tuple[float, float, float] | None:
         nonlocal yolo_runs
         if idx < 0 or idx >= total:
             return None
@@ -128,6 +130,13 @@ def find_motion_window(
             cache[idx] = detect_center(model, frame)
             yolo_runs += 1
         return cache[idx]
+
+    def motion_cm(p1: tuple[float, float, float], p2: tuple[float, float, float]) -> float:
+        avg_d = (p1[2] + p2[2]) / 2.0
+        dx = (p2[0] - p1[0]) * avg_d / FOCAL_LENGTH
+        dy = (p2[1] - p1[1]) * avg_d / FOCAL_LENGTH
+        dz = p2[2] - p1[2]
+        return float(np.linalg.norm([dx, dy, dz]))
 
     def search_presence(lo: int, hi: int) -> int | None:
         """Return a frame index containing the ball, or ``None``."""
@@ -157,7 +166,7 @@ def find_motion_window(
         moved = (
             p1 is not None
             and p2 is not None
-            and np.linalg.norm(np.subtract(p2, p1)) > margin
+            and motion_cm(p1, p2) > movement_threshold_cm
         )
         if moved:
             high = mid - 1
