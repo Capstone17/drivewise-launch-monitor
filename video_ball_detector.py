@@ -25,7 +25,6 @@ DEVICE = (
 )
 
 ACTUAL_BALL_RADIUS = 2.135  # centimeters
-FOCAL_LENGTH = 1000.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
 STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
@@ -35,6 +34,13 @@ _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_cal
 _calib_data = np.load(_calib_path)
 CAMERA_MATRIX = _calib_data["K"]
 DIST_COEFFS = _calib_data["dist"]
+
+FOCAL_LENGTH_X = CAMERA_MATRIX[0, 0]
+FOCAL_LENGTH_Y = CAMERA_MATRIX[1, 1]
+# Average focal length for radial distance estimation
+FOCAL_LENGTH = (FOCAL_LENGTH_X + FOCAL_LENGTH_Y) / 2.0
+PRINCIPAL_POINT_X = CAMERA_MATRIX[0, 2]
+PRINCIPAL_POINT_Y = CAMERA_MATRIX[1, 2]
 
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
@@ -255,8 +261,8 @@ def process_video(
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
             cx, cy, rad, distance = measure_ball(boxes[best_idx])
-            bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-            by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+            bx = (cx - PRINCIPAL_POINT_X) * distance / FOCAL_LENGTH_X
+            by = (cy - PRINCIPAL_POINT_Y) * distance / FOCAL_LENGTH_Y
             bz = distance - 30.0
             ball_coords.append(
                 {
