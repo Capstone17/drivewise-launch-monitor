@@ -27,7 +27,7 @@ DEVICE = (
 ACTUAL_BALL_RADIUS = 2.5  # centimeters
 FOCAL_LENGTH = 1755.0  # pixels
 
-DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
+DYNAMIC_MARKER_LENGTH = 3.0  # centimeters (club sticker)
 STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
 MIN_BALL_RADIUS_PX = 9  # pixels
 

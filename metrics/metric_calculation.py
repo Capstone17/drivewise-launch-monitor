@@ -2,23 +2,10 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 
-# REFERENCE VECTOR
-def reference_vector_calc(yaw_deg):
-    """
-    Converts yaw angle to a unit direction vector in the XZ plane.
-    yaw_deg: yaw in degrees (rotation around Y-axis)
-    Returns: [x, z] unit vector
-    """
-    yaw_rad = np.radians(yaw_deg)
-    x = np.sin(yaw_rad)
-    z = np.cos(yaw_rad)
-    return np.array([x, z])
-
-
 # FACE ANGLE
-def face_angle_calc(pose1: dict, yaw_ideal: float) -> float:
+def face_angle_calc(pose1: dict, yaw_ideal=0) -> float:
     """
-    Compute the yaw difference (in degrees) between two Euler yaw angles.
+    Compute the yaw of the club face (in degrees) upon impact.
 
     Args:
         yaw_current (float): The current yaw angle in degrees.
