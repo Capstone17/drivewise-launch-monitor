@@ -1,8 +1,12 @@
 import cv2
 import numpy as np
+import os
 
-# === SET THESE VALUES ACCORDING TO YOUR CAMERA AND OBJECT ===
-FOCAL_LENGTH = 1800    # in pixels (e.g., calibrated beforehand)
+# === LOAD CAMERA CALIBRATION ===
+_calib_path = os.path.join(os.path.dirname(__file__), "..", "calibration", "camera_calib.npz")
+_calib_data = np.load(_calib_path)
+CAMERA_MATRIX = _calib_data["K"]
+FOCAL_LENGTH = (CAMERA_MATRIX[0, 0] + CAMERA_MATRIX[1, 1]) / 2.0
 REAL_RADIUS = 21.35    # real radius in mm (e.g., for a golf ball ~21.35 mm)
 
 # Load the video
