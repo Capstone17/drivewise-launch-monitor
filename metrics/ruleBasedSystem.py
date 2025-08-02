@@ -66,84 +66,100 @@ facts = {
 rules = [
     # -------------------------------
     # Shot shaping
+    # - Severity levels: 5=WORST, 1=BEST
     # -------------------------------
     {
         # Worst-case
         "name": "Pull Hook",
+        "severity": 5,
         "condition": lambda f: (f["face_slight_left"] and f["path_extreme_right"])   or   (f["face_extreme_left"] and (f["path_slight_right"] or f["path_extreme_right"])),
         "action": lambda: print("Pull hook: You're closing the clubface too much and swinging aggressively out-to-in. Try keeping your clubface more neutral and reducing how far left you're swinging.")
     },
     {
         "name": "Pull Draw",
+        "severity": 4,
         "condition": lambda f: (f["face_slight_left"] and f["path_straight"])   or   (f["face_extreme_left"] and (f["path_straight"] or f["path_slight_left"])),
         "action": lambda: print("Pull draw: Your clubface is slightly closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right.")
     },
     {
         "name": "Pull",
+        "severity": 3,
         "condition": lambda f: (f["face_slight_left"] and f["path_slight_left"] and not f["face_to_path_slight_left"])   or   (f["face_extreme_left"] and (f["path_extreme_left"])),
         "action": lambda: print("Pull: Both your face and path are left, causing a pull. Try aligning your stance and path more rightward and ensure the face matches the path.")
     },
     {
         # Ideal fade
         "name": "Pull Fade",
+        "severity": 1,
         "condition": lambda f: f["face_slight_left"] and f["path_slight_left"] and f["face_to_path_slight_left"],
         "action": lambda: print("Fade: ")
     },
     {
         "name": "Pull Slice",
+        "severity": 2,
         "condition": lambda f: f["face_slight_left"] and f["path_extreme_left"],
         "action": lambda: print("Pull slice: Your club face is aiming left and your out-to-in path are producing sidespin. Work on neutralizing your swing path and straightening the face angle to prevent excessive spin.")
     },
     {
         "name": "Straight Hook",
+        "severity": 4,
         "condition": lambda f: f["face_straight"] and f["path_extreme_right"],
         "action": lambda: print("Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.")
     },
     {
         "name": "Straight Draw",
+        "severity": 3,
         "condition": lambda f: f["face_straight"] and f["path_slight_right"],
         "action": lambda: print("Straight draw: ")
     },
     {
         # Ideal straight
         "name": "Straight",
+        "severity": 1,
         "condition": lambda f: f["face_straight"] and f["path_straight"],
         "action": lambda: print("Straight: ")
     },
     {
         "name": "Straight Fade",
+        "severity": 3,
         "condition": lambda f: f["face_straight"] and f["path_slight_left"],
         "action": lambda: print("Straight fade: ")
     },
     {
         "name": "Straight Slice",
+        "severity": 4,
         "condition": lambda f: f["face_straight"] and f["path_extreme_left"],
         "action": lambda: print("Straight slice: ")
     },
     {
         "name": "Push Hook",
+        "severity": 2,
         "condition": lambda f: f["face_slight_right"] and f["path_extreme_right"],
         "action": lambda: print("Push hook: ")
     },
     {
         # Ideal draw
         "name": "Push Draw",
+        "severity": 1,
         "condition": lambda f: f["face_slight_right"] and f["path_slight_right"] and f["face_to_path_slight_right"],
         "action": lambda: print("Draw: ")
     },
     {
         "name": "Push",
+        "severity": 3,
         "condition": lambda f: (f["face_slight_right"] and f["path_slight_right"] and not f["face_to_path_slight_right"])   or   (f["face_extreme_right"] and f["path_extreme_right"]),
         "action": lambda: print("Push: ")
     },
     {
         "name": "Push Fade",
+        "severity": 4,
         "condition": lambda f: (f["face_extreme_right"] and f["path_slight_right"])   or   (f["face_slight_right"] and f["path_straight"]),
         "action": lambda: print("Push fade: ")
     },
     {
         # Worst-case
         "name": "Push Slice",
+        "severity": 5,
         "condition": lambda f: (f["face_extreme_right"] and (f["path_straight"] or f["path_slight_left"] or f["path_extreme_left"]))   or   (f["face_slight_right"] and f["path_extreme_left"])   or   (f["face_slight_right"] and f["path_slight_left"]),
         "action": lambda: print("Push slice: ")
     },
@@ -153,6 +169,7 @@ rules = [
     # -------------------------------
     {
         "name": "Very Upward",
+        "severity": 4,
         "condition": lambda f: f["attack_extreme_up"],
         "action": lambda: print("Very upward: ")
     }
@@ -174,5 +191,30 @@ def run_inference(facts, rules):
 # -------------------------------
 # Run
 # -------------------------------
-if __name__ == "__main__":
-    run_inference(facts, rules)
+# if __name__ == "__main__":
+#     run_inference(facts, rules)
+
+# -------------------------------
+# Output as a function (for bluetooth)
+# -------------------------------
+def rule_based_system():
+    triggered_rules = []
+
+    for rule in rules:
+        if rule["condition"](facts):
+            triggered_rules.append(rule)
+
+    if triggered_rules:
+        # Pick rule with highest severity
+        best_rule = max(triggered_rules, key=lambda r: r["severity"])
+        feedback = best_rule["action"]()
+    else:
+        feedback = "No swing issues detected."
+
+    return {
+        "face angle": raw_data["face_angle"],
+        "swing path": raw_data["swing_path"],
+        "attack angle": raw_data["attack_angle"],
+        "side angle": raw_data["side_angle"],
+        "feedback": feedback
+    }
