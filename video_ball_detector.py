@@ -323,7 +323,7 @@ def process_video(
                 bz = distance - 30.0
                 ball_coords.append(
                     {
-                        "time": round(t, 2),
+                        "time": round(t, 3),
                         "x": round(bx, 2),
                         "y": round(by, 2),
                         "z": round(bz, 2),
@@ -465,7 +465,7 @@ def process_video(
             x, y, z, roll, pitch, yaw = current_pose
             sticker_coords.append(
                 {
-                    "time": round(t, 2),
+                    "time": round(t, 3),
                     "x": round(float(x), 2),
                     "y": round(float(y), 2),
                     "z": round(float(z), 2),
