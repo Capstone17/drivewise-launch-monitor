@@ -4,12 +4,14 @@ import os
 
 
 
-def load_movement_window(json_path, threshold=5.0, pre_frames=4, post_frames=4):
+def load_movement_window(json_path, threshold=5.0, pre_frames=3, post_frames=3):
     """
     Finds the first instance of major movement and returns a window of frames.
     
     Returns:
         tuple: (window, impact_idx_in_window, pre_frame, post_frame)
+        - pre_frame is considered to be the impact frame
+        - post_frame is the frame directly after impact
 
     Printing:
         Entire window:
@@ -83,15 +85,39 @@ def load_pose_at_time(json_path, target_time, tolerance=0.02):
     raise ValueError(f"No pose found for time ≈ {target_time}")
 
 
-# Find the reference yaw
-def load_reference_yaw(json_path):
-    with open(json_path, 'r') as f:
-        data = json.load(f)
-    
-    if not data or 'yaw' not in data[0]:
-        raise ValueError("Invalid JSON format or missing 'yaw' field.")
-    
-    return data[0]['yaw']
+# Approximate using least squares method
+def predict_at_time(t_values, y_values, t_target):
+    """
+    Fit a straight line through given points and predict value at t_target.
+    """
+    t = np.array(t_values)
+    y = np.array(y_values)
+    A = np.vstack([t, np.ones(len(t))]).T
+    m, b = np.linalg.lstsq(A, y, rcond=None)[0]  # slope m, intercept b
+    return m * t_target + b
+
+
+def make_synthetic_frame(frames, idx):
+    """
+    Create a synthetic frame at the time of frames[idx] using least squares slope.
+    Uses the frame at idx and one frame before and after it.
+    """
+    if idx - 1 < 0 or idx + 1 >= len(frames):
+        raise ValueError("Not enough surrounding frames for least squares fit.")
+
+    t_vals = [
+        frames[idx - 1]['time'],
+        frames[idx]['time'],
+        frames[idx + 1]['time']
+    ]
+    t_target = frames[idx]['time']
+
+    return {
+        "time": t_target,
+        "x": predict_at_time(t_vals, [frames[idx - 1]['x'], frames[idx]['x'], frames[idx + 1]['x']], t_target),
+        "y": predict_at_time(t_vals, [frames[idx - 1]['y'], frames[idx]['y'], frames[idx + 1]['y']], t_target),
+        "z": predict_at_time(t_vals, [frames[idx - 1]['z'], frames[idx]['z'], frames[idx + 1]['z']], t_target)
+    }
 
 
 def return_metrics():
@@ -107,6 +133,12 @@ def return_metrics():
     print("Impact frame index in window:", impact_idx)
     print("Pre-impact frame:", pre_frame)
     print("Post-impact frame:", post_frame)
+    for idx, frame in enumerate(window):
+        print(f"Frame {idx}: x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
+
+    synthetic_frame = make_synthetic_frame(window, impact_idx + 2)
+    print("Synthetic frame:", synthetic_frame)
+        
 
     # # Find club data
     # pose_before_impact1, pose_after_impact1 = load_pose_at_impact(sticker_coords_path, frame_before_impact1)
@@ -122,7 +154,7 @@ def return_metrics():
     # attack_angle = attack_angle_calc(pose_before_impact1, pose_after_impact1)
     # print(f'Attack angle: {attack_angle}\n')
 
-    side_angle = side_angle_calc(pre_frame, post_frame)
+    side_angle = side_angle_calc(pre_frame, synthetic_frame)
     print(f'Side angle: {side_angle}\n')
 
     # face_to_path = face_angle - swing_path
