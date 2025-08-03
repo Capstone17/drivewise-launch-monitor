@@ -24,11 +24,11 @@ DEVICE = (
     else "cpu"
 )
 
-ACTUAL_BALL_RADIUS = 2.5  # centimeters
+ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
 
-DYNAMIC_MARKER_LENGTH = 1.75  # centimeters (club sticker)
-STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
+DYNAMIC_MARKER_LENGTH = 2.38
+STATIONARY_MARKER_LENGTH = 3.5
 MIN_BALL_RADIUS_PX = 9  # pixels
 
 # Load camera calibration parameters
