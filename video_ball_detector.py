@@ -24,11 +24,11 @@ DEVICE = (
     else "cpu"
 )
 
-ACTUAL_BALL_RADIUS = 2.5  # centimeters
+ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
 
-DYNAMIC_MARKER_LENGTH = 3.0  # centimeters (club sticker)
-STATIONARY_MARKER_LENGTH = 3.5  # centimeters (block sticker)
+DYNAMIC_MARKER_LENGTH = 2.38
+STATIONARY_MARKER_LENGTH = 3.5
 MIN_BALL_RADIUS_PX = 9  # pixels
 
 # Load camera calibration parameters
@@ -290,6 +290,7 @@ def process_video(
     stationary_count = 0
     last_dynamic_pose = None
     last_dynamic_rt = None
+    last_dynamic_quat = None
     last_valid_time = None
     tracker_corners = None
     prev_gray = None
@@ -346,6 +347,7 @@ def process_video(
         sticker_time += time.perf_counter() - sticker_start
         current_rt = None
         current_pose = None
+        current_quat = None
         dynamic_corner = None
         if ids is not None and len(ids) > 0:
             valid = [
@@ -372,13 +374,21 @@ def process_video(
                     rvec = rvecs[0, 0]
                     tvec = tvecs[0, 0]
                     x, y, z = tvec
-                    roll, pitch, yaw = rvec_to_euler(rvec)
                     if marker_id == STATIONARY_ID:
+                        roll, pitch, yaw = rvec_to_euler(rvec)
                         stationary_sum += (x, y, z, roll, pitch, yaw)
                         stationary_count += 1
                     else:
+                        curr_q = rvec_to_quat(rvec)
+                        if last_dynamic_rt is not None:
+                            prev_q = rvec_to_quat(last_dynamic_rt[0])
+                            if np.dot(curr_q, prev_q) < 0.0:
+                                curr_q = -curr_q
+                                rvec = quat_to_rvec(curr_q)
+                        roll, pitch, yaw = rvec_to_euler(rvec)
                         current_rt = (rvec, tvec)
                         current_pose = (x, y, z, roll, pitch, yaw)
+                        current_quat = curr_q
                         dynamic_corner = corner
                     cv2.drawFrameAxes(
                         frame,
@@ -406,9 +416,16 @@ def process_video(
                 )
                 if ok:
                     x, y, z = tvec.ravel()
+                    curr_q = rvec_to_quat(rvec)
+                    if last_dynamic_rt is not None:
+                        prev_q = rvec_to_quat(last_dynamic_rt[0])
+                        if np.dot(curr_q, prev_q) < 0.0:
+                            curr_q = -curr_q
+                            rvec = quat_to_rvec(curr_q)
                     roll, pitch, yaw = rvec_to_euler(rvec)
                     current_rt = (rvec, tvec)
                     current_pose = (x, y, z, roll, pitch, yaw)
+                    current_quat = curr_q
                     cv2.drawFrameAxes(
                         frame,
                         CAMERA_MATRIX,
@@ -430,18 +447,20 @@ def process_video(
                 prev_gray = None
                 last_dynamic_pose = None
                 last_dynamic_rt = None
+                last_dynamic_quat = None
                 last_valid_time = None
                 pending_times.clear()
         else:
-            if last_dynamic_rt is not None and pending_times:
-                interpolate_poses(
-                    pending_times,
-                    last_dynamic_rt,
-                    current_rt,
-                    last_valid_time,
-                    t,
-                    sticker_coords,
-                )
+            if pending_times:
+                if last_dynamic_rt is not None:
+                    interpolate_poses(
+                        pending_times,
+                        last_dynamic_rt,
+                        current_rt,
+                        last_valid_time,
+                        t,
+                        sticker_coords,
+                    )
                 pending_times.clear()
             x, y, z, roll, pitch, yaw = current_pose
             sticker_coords.append(
@@ -457,6 +476,7 @@ def process_video(
             )
             last_dynamic_pose = current_pose
             last_dynamic_rt = current_rt
+            last_dynamic_quat = current_quat
             last_valid_time = t
             missing_frames = 0
             if dynamic_corner is not None:
@@ -476,6 +496,8 @@ def process_video(
     cap.release()
     if writer is not None:
         writer.release()
+    ball_coords.sort(key=lambda c: c["time"])
+    sticker_coords.sort(key=lambda c: c["time"])
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
