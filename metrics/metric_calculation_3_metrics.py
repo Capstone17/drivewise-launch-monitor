@@ -102,7 +102,8 @@ def attack_angle_calc(pose1: dict, pose2: dict, reference_vector=[0, 1]) -> floa
 
 
 # SIDE ANGLE
-def side_angle_calc(pose1: dict, pose2: dict, reference_vector=[0, 1]):
+# - "Toward the camera" is negative
+def side_angle_calc(pose1: dict, pose2: dict, reference_vector=[0, -1]):
     """
     Analyze horizontal motion and orientation change between two poses.
 

@@ -2,29 +2,50 @@ from metric_calculation_3_metrics import * # face_angle_calc, swing_path_calc, a
 import json
 import os
 
-def load_first_movement_pair(json_path, threshold=2.0):
+
+
+def load_movement_window(json_path, threshold=5.0, pre_frames=4, post_frames=4):
+    """
+    Finds the first instance of major movement and returns a window of frames.
+    
+    Returns:
+        tuple: (window, impact_idx_in_window, pre_frame, post_frame)
+
+    Printing:
+        Entire window:
+            for idx, frame in enumerate(window):
+                print(f"Frame {idx}: x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
+    """
     with open(json_path, 'r') as f:
         data = json.load(f)
 
-    if len(data) < 3:
-        raise ValueError("Not enough data points to compare.")
+    if len(data) < (pre_frames + post_frames + 1):
+        raise ValueError("Not enough data points to extract full window.")
 
-    # Search for the first two frames with a coordinate change larger than the threshold
-    # Note: for enhanced accuracy and error safety, could return more points surrounding the moment of impact
-    # Note: consider error in x y and z measurement
-    for i in range(len(data) - 2):
+    for i in range(len(data) - 1):
         frame1 = data[i]
         frame2 = data[i + 1]
-        frame3 = data[i + 2]
 
         dx = abs(frame2['x'] - frame1['x'])
         dy = abs(frame2['y'] - frame1['y'])
         dz = abs(frame2['z'] - frame1['z'])
 
         if dx > threshold or dy > threshold or dz > threshold:
-            return frame1, frame2, frame3  # Return the first pair with significant movement
+            start_idx = max(0, i - pre_frames)
+            end_idx = min(len(data), i + 1 + post_frames)
 
-    return None, None, None  # No significant movement found
+            window = data[start_idx:end_idx]
+
+            # Position of the impact frame inside the window
+            impact_idx_in_window = i - start_idx  
+
+            # Exact frames
+            pre_frame = window[impact_idx_in_window] if impact_idx_in_window >= 0 else None
+            post_frame = window[impact_idx_in_window + 1] if impact_idx_in_window + 1 < len(window) else None
+
+            return window, impact_idx_in_window, pre_frame, post_frame
+
+    return [], None, None, None  # No movement found
 
 
 def load_pose_at_impact(json_path, frame_before_impact, threshold=2.0):
@@ -82,43 +103,36 @@ def return_metrics():
 
 
     # Find ball data
-    frame_before_impact1, frame_after_impact1, frame_after_impact2 = load_first_movement_pair(ball_coords_path)  # Find the moment of impact and its surrounding frames
-    print(f'Frame before impact: {frame_before_impact1}')
-    print(f'Frame after impact: {frame_after_impact1}')
-    print(f'Frame 2 after impact: {frame_after_impact2}\n')
+    window, impact_idx, pre_frame, post_frame = load_movement_window(ball_coords_path, threshold=5.0)  # Find moment of impact and its surrounding frames
+    print("Impact frame index in window:", impact_idx)
+    print("Pre-impact frame:", pre_frame)
+    print("Post-impact frame:", post_frame)
 
-    # Find club data
-    pose_before_impact1, pose_after_impact1 = load_pose_at_impact(sticker_coords_path, frame_before_impact1)
-    print(f'Pose before impact: {pose_before_impact1}')
-    print(f'Pose after impact: {pose_after_impact1}\n')
+    # # Find club data
+    # pose_before_impact1, pose_after_impact1 = load_pose_at_impact(sticker_coords_path, frame_before_impact1)
+    # print(f'Pose before impact: {pose_before_impact1}')
+    # print(f'Pose after impact: {pose_after_impact1}\n')
 
-    # Find reference data
-    yaw_ideal = load_reference_yaw(stationary_sticker_path)  # Load the reference yaw
-    print(f'Ideal yaw: {yaw_ideal}\n')
+    # face_angle = face_angle_calc(pose_before_impact1, yaw_ideal)
+    # print(f'Face angle: {face_angle}\n')
 
-    reference_vector = reference_vector_calc(yaw_ideal)
-    print(f'Reference vector: {reference_vector}\n')
+    # swing_path = swing_path_calc(pose_before_impact1, pose_after_impact1, reference_vector)
+    # print(f'Swing path: {swing_path}\n')
 
-    face_angle = face_angle_calc(pose_before_impact1, yaw_ideal)
-    print(f'Face angle: {face_angle}\n')
+    # attack_angle = attack_angle_calc(pose_before_impact1, pose_after_impact1)
+    # print(f'Attack angle: {attack_angle}\n')
 
-    swing_path = swing_path_calc(pose_before_impact1, pose_after_impact1, reference_vector)
-    print(f'Swing path: {swing_path}\n')
-
-    attack_angle = attack_angle_calc(pose_before_impact1, pose_after_impact1)
-    print(f'Attack angle: {attack_angle}\n')
-
-    side_angle = side_angle_calc(frame_before_impact1, frame_after_impact1, reference_vector)
+    side_angle = side_angle_calc(pre_frame, post_frame)
     print(f'Side angle: {side_angle}\n')
 
-    face_to_path = face_angle - swing_path
-    print(f'Face-to-path: {face_to_path}\n')
+    # face_to_path = face_angle - swing_path
+    # print(f'Face-to-path: {face_to_path}\n')
 
-    return {
-        'face_angle': face_angle,
-        'swing_path': swing_path,
-        'attack_angle': attack_angle,
-        'side_angle': side_angle,
-        'face_to_path': face_to_path
-    }
+    # return {
+    #     'face_angle': face_angle,
+    #     'swing_path': swing_path,
+    #     'attack_angle': attack_angle,
+    #     'side_angle': side_angle,
+    #     'face_to_path': face_to_path
+    # }
 
