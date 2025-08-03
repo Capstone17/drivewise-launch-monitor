@@ -48,6 +48,7 @@ BLUEZ_SERVICE_NAME = "org.bluez"
 GATT_MANAGER_IFACE = "org.bluez.GattManager1"
 LE_ADVERTISEMENT_IFACE = "org.bluez.LEAdvertisement1"
 LE_ADVERTISING_MANAGER_IFACE = "org.bluez.LEAdvertisingManager1"
+GATT_CHRC_IFACE =    'org.bluez.GattCharacteristic1'
 
 
 class InvalidArgsException(dbus.exceptions.DBusException):
@@ -94,17 +95,17 @@ class rpiService(Service):
 
 class SwingAnalysisCharacteristic(Characteristic):
     uuid = "d9c146d3-df83-49ec-801d-70494060d6d8"
-    description = b"Start analysis and get results"
+    description = b"Start analysis and get results!"
 
     def __init__(self, bus, index, service):
         Characteristic.__init__(
-            self, bus, index, self.uuid, ["encrypt-read", "encrypt-write"], service,
+            self, bus, index, self.uuid, ["read", "write", "notify"], service,
         )
-
+        self.notifying = False
         self.value = {'face angle': None, 'swing path': None, 'attack angle': None, 'side angle': None, 'feedback': "No swing detected! Please try again."}
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 1, self))
 
-    def ReadValue(self):
+    def ReadValue(self, options):
         # Run computer vision script here
         # Run rule-based AI with all 3 json files to recieve 4 output metrics in dict + string message
         logger.debug("Analysis finished, sending metrics: " + repr(self.value))
@@ -112,12 +113,49 @@ class SwingAnalysisCharacteristic(Characteristic):
         return [dbus.Byte(b) for b in result_bytes]
         
         
-    def WriteValue(self):
-        logger.debug("Recieved command to start recording")
+    def WriteValue(self, value, options):
+        logger.debug("Received write command")
+
         try:
-            subprocess.Popen(["/home/Documents/test/GScrop_improved_flip.sh"])
+            # Run script 
+            # subprocess.run(["/home/Documents/test/GScrop_improved_flip.sh"], check=True)
+            self.value = {'face angle': 10, 'swing path': 5, 'attack angle': 1, 'side angle': 0, 'feedback': "No swing detected! Please try again."}
+            logger.debug("Updated value after script")
+
+            if self.notifying:
+                self.notify_client()
+
         except Exception as e:
-            logger.debug(f"Failed to start script: {e}")
+            logger.error(f"Failed to process write: {e}")
+        
+    def StartNotify(self):
+        if self.notifying:
+            logger.debug("Already notifying")
+            return
+        logger.debug("StartNotify called")
+        self.notifying = True
+        self.notify_client()
+
+    def StopNotify(self):
+        if not self.notifying:
+            logger.debug("Not currently notifying")
+            return
+        logger.debug("StopNotify called")
+        self.notifying = False
+
+    def notify_client(self):
+        if not self.notifying:
+            logger.debug("Not notifying, skipping notify_client")
+            return
+
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        logger.debug("Emitting PropertiesChanged with updated value")
+        self.PropertiesChanged(
+        GATT_CHRC_IFACE,
+        {"Value": [dbus.Byte(b) for b in result_bytes]},
+        []
+        )
+
 
 
 class CharacteristicUserDescriptionDescriptor(Descriptor):
@@ -214,14 +252,20 @@ def main():
         app.get_path(),
         {},
         reply_handler=register_app_cb,
-        error_handler=[register_app_error_cb],
+        error_handler=register_app_error_cb,
     )
 
     agent_manager.RequestDefaultAgent(AGENT_PATH)
 
-    mainloop.run()
-    # ad_manager.UnregisterAdvertisement(advertisement)
-    # dbus.service.Object.remove_from_connection(advertisement)
+    try:
+        mainloop.run()
+    except KeyboardInterrupt:
+        print("Interrupted. Cleaning up...")
+    finally:
+        ad_manager.UnregisterAdvertisement(advertisement)
+        dbus.service.Object.remove_from_connection(advertisement)
+        agent.Release()
+        mainloop.quit()
 
 
 if __name__ == "__main__":

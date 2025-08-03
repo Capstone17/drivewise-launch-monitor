@@ -3,8 +3,8 @@
 # Code taken and modified from https://github.com/PunchThrough/espresso-ble/blob/master/ble.py
 
 import dbus
+import dbus.mainloop.glib
 # import dbus.exceptions
-# import dbus.mainloop.glib
 # import dbus.service
 import logging
 import sys
@@ -30,6 +30,8 @@ logHandler.setFormatter(formatter)
 logger.addHandler(logHandler)
 
 logger.setLevel(logging.DEBUG)
+
+mainloop = None
 
 def find_adapter(bus):
     # Returns the first object that the bluez service has that has a GattManager1 interface
@@ -356,8 +358,8 @@ class Agent(dbus.service.Object):
     @dbus.service.method(AGENT_INTERFACE, in_signature="", out_signature="")
     def Release(self):
         logger.info("Release")
-        if self.exit_on_release:
-            mainloop.quit()
+        # if self.exit_on_release:
+        #   mainloop.quit()
 
     @dbus.service.method(AGENT_INTERFACE, in_signature="os", out_signature="")
     def AuthorizeService(self, device, uuid):
@@ -402,6 +404,7 @@ class Agent(dbus.service.Object):
         logger.info("RequestAuthorization (%s)" % (device))
         auth = ask("Authorize? (yes/no): ")
         if auth == "yes":
+            logger.info("Authorized")
             return
         raise Rejected("Pairing rejected")
 
