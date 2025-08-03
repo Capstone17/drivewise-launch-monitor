@@ -91,6 +91,7 @@ class rpiService(Service):
     def __init__(self, bus, index):
         Service.__init__(self, bus, index, self.rpi_SVC_UUID, True)
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
+        self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
 
 
 class SwingAnalysisCharacteristic(Characteristic):
@@ -103,7 +104,7 @@ class SwingAnalysisCharacteristic(Characteristic):
         )
         self.notifying = False
         self.value = {'face angle': None, 'swing path': None, 'attack angle': None, 'side angle': None, 'feedback': "No swing detected! Please try again."}
-        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 1, self))
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 0, self))
 
     def ReadValue(self, options):
         # Run computer vision script here
@@ -118,8 +119,9 @@ class SwingAnalysisCharacteristic(Characteristic):
 
         try:
             # Run script 
-            # subprocess.run(["/home/Documents/test/GScrop_improved_flip.sh"], check=True)
-            self.value = {'face angle': 10, 'swing path': 5, 'attack angle': 1, 'side angle': 0, 'feedback': "No swing detected! Please try again."}
+            subprocess.run(["home/Documents/test/GScrop_improved_flip.sh"], check=True)
+            # Worst case scenario
+            # self.value = {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900, 'feedback': "Straight draw: A gentle rightward path with a square face is causing a draw. If your shot is landing too far left of the target, try slightly weakening your grip or evening out your path."}
             logger.debug("Updated value after script")
 
             if self.notifying:
@@ -156,6 +158,22 @@ class SwingAnalysisCharacteristic(Characteristic):
         []
         )
 
+class GenerateFeedbackCharacteristic(Characteristic):
+    uuid = "047ba9de-bf0f-4aa6-be91-3856aec11c01"
+    description = b"Start analysis and get results!"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["read"], service,
+        )
+        self.value = "No swing detected! Please try again."
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 1, self))
+
+    def ReadValue(self, options):
+        # take text from json file that has feedback
+        logger.debug("sending feedback based on metrics: " + repr(self.value))
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        return [dbus.Byte(b) for b in result_bytes]
 
 
 class CharacteristicUserDescriptionDescriptor(Descriptor):
