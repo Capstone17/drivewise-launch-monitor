@@ -3,10 +3,10 @@
 # (silence shellcheck wrt $cam1 environment variable)
 
 # RUN INSTRUCTIONS:
-#   Make executable: chmod +x GScrop_centerflip.sh
-#   Usage: ./GScrop_centerflip.sh <width> <height> <framerate> <duration_ms> [shutter_us]
-#   Example: ./GScrop_centerflip.sh 816 144 387 2000 2300
-#   Example: ./GScrop_centerflip.sh 672 128 425 2000 2100
+#   Make executable: chmod +x GScrop_improved_flip.sh
+#   Usage: ./GScrop_improved_flip.sh <width> <height> <framerate> <duration_ms> [shutter_us]
+#   Example: ./GScrop_improved_flip.sh 816 144 387 2000 2300
+#   Example: ./GScrop_improved_flip.sh 672 128 425 2000 2100
 
 # -------------------------
 # Input Validation
@@ -55,7 +55,7 @@ fi
 # -------------------------
 
 for ((m=0; m<=5; ++m)); do
-    media-ctl -d /dev/media$m --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:($(((1456 - width) / 2)),$(((1088 - height) / 2)))/${width}x${height}]" -v
+    media-ctl -d /dev/media$m --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:($(((1456 - width) / 2)),$(((1088 - height) / 2) + 10))/${width}x${height}]" -v
     if [[ $? -eq 0 ]]; then
         break
     fi
