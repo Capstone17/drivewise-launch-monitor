@@ -251,6 +251,8 @@ def process_video(
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
     ``stationary_path`` stores the averaged pose of the stationary marker."""
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
     ball_compile_start = time.perf_counter()
     model = YOLO("golf_ball_detector.onnx", task="detect")
     ball_compile_time = time.perf_counter() - ball_compile_start
