@@ -19,6 +19,9 @@ import array
 import sys
 import subprocess
 import json
+import os
+
+from video_ball_detector import process_video
 
 MainLoop = None
 try:
@@ -119,8 +122,28 @@ class SwingAnalysisCharacteristic(Characteristic):
 
         try:
             # Run script
-            # ./GScrop_improved_flip.sh 816 144 387 2000 2300 
-            subprocess.run(['./GScrop_improved_flip.sh', '816', '144', '387', '3000', '500'], check=True)
+            # ./GScrop_improved_flip.sh 816 144 387 2000 2300
+            subprocess.run(
+                [
+                    "./GScrop_improved_flip.sh",
+                    "816",
+                    "144",
+                    "387",
+                    "3000",
+                    "500",
+                ],
+                check=True,
+            )
+            video_path = os.path.expanduser("~/Documents/test/tst.mp4")
+            try:
+                process_video(
+                    video_path,
+                    "ball_coords.json",
+                    "sticker_coords.json",
+                    "stationary_sticker.json",
+                )
+            except Exception as e:
+                logger.error(f"Video processing failed: {e}")
             # Worst case scenario
             logger.debug("Updated value after script")
 
