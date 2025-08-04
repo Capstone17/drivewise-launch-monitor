@@ -118,16 +118,17 @@ class SwingAnalysisCharacteristic(Characteristic):
         logger.debug("Received write command")
 
         try:
-            # Run script 
-            subprocess.run(['sh', './GScrop_centerflip.sh 816 144 387 2000 2300'], check=True)
+            # Run script
+            # ./GScrop_improved_flip.sh 816 144 387 2000 2300 
+            subprocess.run(['./GScrop_improved_flip.sh', '816', '144', '387', '3000', '500'], check=True)
             # Worst case scenario
-            # self.value = {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900, 'feedback': "Straight draw: A gentle rightward path with a square face is causing a draw. If your shot is landing too far left of the target, try slightly weakening your grip or evening out your path."}
             logger.debug("Updated value after script")
 
             if self.notifying:
                 self.notify_client()
 
         except Exception as e:
+            self.value = {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900}
             logger.error(f"Failed to process write: {e}")
         
     def StartNotify(self):
@@ -171,6 +172,7 @@ class GenerateFeedbackCharacteristic(Characteristic):
 
     def ReadValue(self, options):
         # take text from json file that has feedback
+        self.value = "Straight draw: A gentle rightward path with a square face is causing a draw. If your shot is landing too far left of the target, try slightly weakening your grip or evening out your path."
         logger.debug("sending feedback based on metrics: " + repr(self.value))
         result_bytes = json.dumps(self.value).encode('utf-8')
         return [dbus.Byte(b) for b in result_bytes]
