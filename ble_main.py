@@ -103,7 +103,7 @@ class SwingAnalysisCharacteristic(Characteristic):
             self, bus, index, self.uuid, ["read", "write", "notify"], service,
         )
         self.notifying = False
-        self.value = {'face angle': None, 'swing path': None, 'attack angle': None, 'side angle': None, 'feedback': "No swing detected! Please try again."}
+        self.value = {'face angle': None, 'swing path': None, 'attack angle': None, 'side angle': None}
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 0, self))
 
     def ReadValue(self, options):
@@ -119,7 +119,7 @@ class SwingAnalysisCharacteristic(Characteristic):
 
         try:
             # Run script 
-            subprocess.run(["home/Documents/test/GScrop_improved_flip.sh"], check=True)
+            subprocess.run(['sh', './GScrop_centerflip.sh 816 144 387 2000 2300'], check=True)
             # Worst case scenario
             # self.value = {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900, 'feedback': "Straight draw: A gentle rightward path with a square face is causing a draw. If your shot is landing too far left of the target, try slightly weakening your grip or evening out your path."}
             logger.debug("Updated value after script")
