@@ -186,7 +186,7 @@ def interpolate_poses(
         x, y, z = tvec.ravel()
         out_list.append(
             {
-                "time": round(tm, 2),
+                "time": round(tm, 3),
                 "x": round(float(x), 2),
                 "y": round(float(y), 2),
                 "z": round(float(z), 2),
