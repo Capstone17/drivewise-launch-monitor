@@ -296,6 +296,10 @@ def process_video(
     prev_gray = None
     pending_times: list[float] = []
     missing_frames = 0
+    # Tracking of last detected ball position and velocity
+    last_ball_center: np.ndarray | None = None
+    last_ball_radius: float | None = None
+    ball_velocity = np.zeros(2, dtype=float)
 
     frame_idx = 0
     while True:
@@ -308,11 +312,16 @@ def process_video(
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             writer = cv2.VideoWriter(output_path, fourcc, writer_fps, (w, h))
         t = frame_idx / video_fps
+        gray = preprocess_frame(frame)
         results = None
+        in_window = start_frame <= frame_idx < end_frame
         if inference_start <= frame_idx < inference_end:
             start = time.perf_counter()
             results = model(frame, verbose=False, device=DEVICE)
             ball_time += time.perf_counter() - start
+
+        detected = False
+        detected_center: tuple[float, float, float] | None = None
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
@@ -340,8 +349,74 @@ def process_video(
                     1,
                     cv2.LINE_AA,
                 )
+                if last_ball_center is not None:
+                    ball_velocity = np.array([cx, cy]) - last_ball_center
+                last_ball_center = np.array([cx, cy])
+                last_ball_radius = rad
+                detected_center = (cx, cy, rad)
+                detected = True
 
-        gray = preprocess_frame(frame)
+        if (
+            not detected
+            and in_window
+            and last_ball_center is not None
+            and last_ball_radius is not None
+        ):
+            expected_center = last_ball_center + ball_velocity
+            min_r = int(max(last_ball_radius * 0.7, MIN_BALL_RADIUS_PX - 2))
+            max_r = int(last_ball_radius * 1.3)
+            circles = cv2.HoughCircles(
+                gray,
+                cv2.HOUGH_GRADIENT,
+                dp=1.2,
+                minDist=max(5, int(last_ball_radius * 2)),
+                param1=100,
+                param2=15,
+                minRadius=min_r,
+                maxRadius=max_r,
+            )
+            if circles is not None:
+                c = np.round(circles[0, :]).astype(int)
+                ex, ey = expected_center
+                # choose circle nearest expected center
+                cx, cy, rad = min(
+                    c,
+                    key=lambda cir: (cir[0] - ex) ** 2 + (cir[1] - ey) ** 2,
+                )
+                dist = np.hypot(cx - ex, cy - ey)
+                if dist <= 2.0 * last_ball_radius and min_r <= rad <= max_r:
+                    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
+                    bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
+                    by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+                    bz = distance - 30.0
+                    ball_coords.append(
+                        {
+                            "time": round(t, 3),
+                            "x": round(bx, 2),
+                            "y": round(by, 2),
+                            "z": round(bz, 2),
+                        }
+                    )
+                    cv2.circle(frame, (int(cx), int(cy)), int(rad), (255, 0, 0), 2)
+                    if last_ball_center is not None:
+                        ball_velocity = np.array([cx, cy]) - last_ball_center
+                    last_ball_center = np.array([cx, cy])
+                    last_ball_radius = rad
+                    detected_center = (cx, cy, rad)
+                    detected = True
+
+        if detected and detected_center is not None:
+            cx, cy, rad = detected_center
+            if (
+                cx - rad <= 0
+                or cy - rad <= 0
+                or cx + rad >= w
+                or cy + rad >= h
+            ):
+                print("Ball exited frame; stopping detection")
+                break
+
+
         sticker_start = time.perf_counter()
         corners, ids, _ = aruco_detector.detectMarkers(gray)
         sticker_time += time.perf_counter() - sticker_start
@@ -498,6 +573,8 @@ def process_video(
         writer.release()
     ball_coords.sort(key=lambda c: c["time"])
     sticker_coords.sort(key=lambda c: c["time"])
+    if not sticker_coords:
+        raise RuntimeError("No sticker detected in the video")
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
