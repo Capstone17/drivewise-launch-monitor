@@ -4,6 +4,7 @@
 # - Side angle and launch angle are essentially the same calculations as swing path and attack angle, could be modularized more
 
 import numpy as np
+import math
 from scipy.spatial.transform import Rotation as R
 
 
@@ -32,106 +33,83 @@ def face_angle_calc(swing_path, side_angle) -> float:
     return face_angle
 
 
-# SWING PATH
-def swing_path_calc(pose1: dict, pose2: dict, reference_vector=[0, 1]):
+
+# SWING PATH & SIDE ANGLE
+# - Uses velocity components to calculate side angle
+def horizontal_movement_angle_from_rates(dx: float, dz: float, reference_vector=[0, -1]) -> float:
     """
-    Analyze horizontal motion and orientation change between two poses.
+    Calculate the horizontal angular path in the XZ plane using velocity components.
 
     Args:
-        pose1 (dict): First marker pose with x, y, z, roll, pitch, yaw.
-        pose2 (dict): Second marker pose with same format.
-        reference_vector (list or np.ndarray): Direction of reference (default [0, 1] = +Z forward).
+        dx (float): Rate of change in X (units/sec).
+        dz (float): Rate of change in Z (units/sec).
+        reference_vector (list or np.ndarray): Reference direction (default [0, -1] = -Z forward).
 
     Returns:
-        swing_path (float): The angular path of the club in the XZ plane.
-            This function should take into account sign of the direction
+        side_angle (float): Signed angle in degrees between movement vector and reference.
     """
-
-    movement_vector = [pose2["x"] - pose1["x"], pose2["z"] - pose1["z"]]
-
-    v = np.array(movement_vector, dtype=float)
+    movement_vector = np.array([dx, dz], dtype=float)
     ref = np.array(reference_vector, dtype=float)
-    
-    # Guard against zero-length vectors
-    if np.linalg.norm(v) == 0 or np.linalg.norm(ref) == 0:
-        return 0.0
-    
-    # Normalize vectors
-    v /= np.linalg.norm(v)
-    ref /= np.linalg.norm(ref)
-    
-    # Signed angle using atan2
-    swing_path = np.degrees(np.arctan2(v[0]*ref[1] - v[1]*ref[0], np.dot(v, ref)))    
 
-    return swing_path
+    # Guard against zero-length vectors
+    if np.linalg.norm(movement_vector) == 0 or np.linalg.norm(ref) == 0:
+        return 0.0
+
+    # Normalize vectors
+    movement_vector /= np.linalg.norm(movement_vector)
+    ref /= np.linalg.norm(ref)
+
+    # Signed angle using atan2
+    horizontal_movement_angle = np.degrees(
+        np.arctan2(
+            movement_vector[0] * ref[1] - movement_vector[1] * ref[0],
+            np.dot(movement_vector, ref)
+        )
+    )
+
+    return -horizontal_movement_angle  # Negate the angle due to mirroring
+
 
 # ATTACK ANGLE
-# This function assumes that the camera is perfectly level (flat)
-# This means that movement in the "y" direction represents true vertical displacement 
-def attack_angle_calc(pose1: dict, pose2: dict, reference_vector=[0, 1]) -> float:
+def vertical_movement_angle_from_rates(dy: float, dz: float, reference_vector=[0, -1]) -> float:
     """
-    Calculate the vertical (Y-axis) displacement of the club.
+    Calculate the vertical angular path in the YZ plane using velocity components.
 
     Args:
-        pose1 (dict): First marker pose with x, y, z, roll, pitch, yaw.
-        pose2 (dict): Second marker pose with same format.
-        reference_vector (list or np.ndarray): Direction of reference (default [0, 1] = +Z forward).
+        dy (float): Rate of change in Y (vertical, units/sec).
+        dz (float): Rate of change in Z (units/sec).
+        reference_vector (list or np.ndarray): Reference direction (default [0, -1] = -Z forward).
 
     Returns:
-        attack_angle (float): The angular path of the club in the YZ plane.
+        vertical_angle (float): Signed angle in degrees between movement vector and reference.
     """
-    
-    movement_vector = [pose2["y"] - pose1["y"], pose2["z"] - pose1["z"]]
-
-    v = np.array(movement_vector, dtype=float)
+    movement_vector = np.array([dy, dz], dtype=float)
     ref = np.array(reference_vector, dtype=float)
-    
+
     # Guard against zero-length vectors
-    if np.linalg.norm(v) == 0 or np.linalg.norm(ref) == 0:
+    if np.linalg.norm(movement_vector) == 0 or np.linalg.norm(ref) == 0:
         return 0.0
-    
+
     # Normalize vectors
-    v /= np.linalg.norm(v)
+    movement_vector /= np.linalg.norm(movement_vector)
     ref /= np.linalg.norm(ref)
-    
+
     # Signed angle using atan2
-    attack_angle = np.degrees(np.arctan2(v[0]*ref[1] - v[1]*ref[0], np.dot(v, ref)))    
+    vertical_angle = np.degrees(
+        np.arctan2(
+            movement_vector[0] * ref[1] - movement_vector[1] * ref[0],
+            np.dot(movement_vector, ref)
+        )
+    )
 
-    return attack_angle
+    return vertical_angle
 
 
-
-# SIDE ANGLE
-# - "Toward the camera" is negative
-def side_angle_calc(pose1: dict, pose2: dict, reference_vector=[0, -1]):
+# SPEED
+def cmps_to_speed_kmh(x_rate_cmps, y_rate_cmps, z_rate_cmps):
     """
-    Analyze horizontal motion and orientation change between two poses.
-
-    Args:
-        pose1 (dict): First ball pose with x, y, z.
-        pose2 (dict): Second ball pose with same format.
-        reference_vector (list or np.ndarray): Direction of reference (default [0, 1] = +Z forward).
-
-    Returns:
-        side_angle (float): The angular path of the ball in the XZ plane
+    Convert velocity components from cm/s to total speed in km/h.
     """
-
-    movement_vector = [pose2["x"] - pose1["x"], pose2["z"] - pose1["z"]]
-
-    v = np.array(movement_vector, dtype=float)
-    ref = np.array(reference_vector, dtype=float)
-    
-    # Guard against zero-length vectors
-    if np.linalg.norm(v) == 0 or np.linalg.norm(ref) == 0:
-        return 0.0
-    
-    # Normalize vectors
-    v /= np.linalg.norm(v)
-    ref /= np.linalg.norm(ref)
-    
-    # Signed angle using atan2
-    side_angle = np.degrees(np.arctan2(v[0]*ref[1] - v[1]*ref[0], np.dot(v, ref)))    
-
-    return side_angle
-
-
+    factor = 0.036  # 1 cm/s = 0.036 km/h
+    speed_cmps = math.sqrt(x_rate_cmps**2 + y_rate_cmps**2 + z_rate_cmps**2)
+    return speed_cmps * factor

@@ -37,7 +37,7 @@ facts = {
     "path_slight_left": -5.0 <= raw_data['swing_path'] < -2.0,  # Fade-bias
     "path_straight": -2.0 <= raw_data['swing_path'] < 2.0,  # Neutral
     "path_slight_right": 2.0 <= raw_data['swing_path'] < 5.0,  # Draw-bias
-    "path_extreme_right": 5.0 <= raw_data,  # Hook
+    "path_extreme_right": 5.0 <= raw_data['swing_path'],  # Hook
 
     "attack_extreme_up": 5.0 < raw_data['attack_angle'],
     "attack_up": 3.0 < raw_data['attack_angle'] <= 5.0,  # Ideal for driver distance
@@ -140,7 +140,7 @@ rules = [
         "id": 9,
         "severity": 4,
         "condition": lambda f: f["face_straight"] and f["path_extreme_left"],
-        "action": lambda: "Straight slice: The face is square, but your path is far left, causing a sharp slice. Try to shallow your path and swing more inside-to-out."
+        "action": lambda: "Straight slice: The face is square, but your path is far left, causing a slice. Try to shallow your path and swing more inside-to-out."
     },
     {
         "name": "Push Hook",
@@ -177,7 +177,7 @@ rules = [
         "id": 14,
         "severity": 5,
         "condition": lambda f: (f["face_extreme_right"] and (f["path_straight"] or f["path_slight_left"] or f["path_extreme_left"]))   or   (f["face_slight_right"] and f["path_extreme_left"])   or   (f["face_slight_right"] and f["path_slight_left"]),
-        "action": lambda: "Push slice: Your face is wide open and path too far left or right, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion."
+        "action": lambda: "Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion."
     },
     # -------------------------------
     # Ball flight
@@ -191,25 +191,6 @@ rules = [
         "action": lambda: "Very upward: An extremely upward attack can lead to topped shots or high spin. Try to swing down on the ball and keep your weight more centered through impact."
     }
 ]
-
-# -------------------------------
-# Inference engine
-# -------------------------------
-def run_inference(facts, rules):
-    print("Running rule-based inference...\n")
-    triggered = 0
-    for rule in rules:
-        if rule["condition"](facts):
-            rule["action"]()
-            triggered += 1
-    if triggered == 0:
-        print("No rules were triggered.")
-
-# -------------------------------
-# Run
-# -------------------------------
-# if __name__ == "__main__":
-#     run_inference(facts, rules)
 
 # -------------------------------
 # Output as a function (for bluetooth)
@@ -228,6 +209,8 @@ def rule_based_system():
     else:
         feedback = "No swing issues detected."
 
+    print(f"{feedback}")
+
     return {
         "face angle": raw_data["face_angle"],
         "swing path": raw_data["swing_path"],
@@ -235,3 +218,10 @@ def rule_based_system():
         "side angle": raw_data["side_angle"],
         "feedback": feedback
     }
+
+
+# -------------------------------
+# Main function for testing
+# -------------------------------
+if __name__ == "__main__":
+    result = rule_based_system()
