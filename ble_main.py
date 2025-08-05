@@ -93,6 +93,10 @@ class rpiService(Service):
 
     def __init__(self, bus, index):
         Service.__init__(self, bus, index, self.rpi_SVC_UUID, True)
+        shared_data = {
+            "metrics": None,
+            "feedback": None
+        }
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
         self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
 
@@ -106,7 +110,7 @@ class SwingAnalysisCharacteristic(Characteristic):
             self, bus, index, self.uuid, ["read", "write", "notify"], service,
         )
         self.notifying = False
-        self.value = {'face angle': None, 'swing path': None, 'attack angle': None, 'side angle': None}
+        self.value = self.service.shared_data["metrics"] 
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 0, self))
 
     def ReadValue(self, options):
@@ -151,7 +155,10 @@ class SwingAnalysisCharacteristic(Characteristic):
                 self.notify_client()
 
         except Exception as e:
-            self.value = {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900}
+            # Testing worst case scenario
+            self.service.shared_data["metrics"] = {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900}
+            self.service.shared_data["feedback"] = "No swing detected! Please try again."
+            self.value = self.service.shared_data["metrics"]
             logger.error(f"Failed to process write: {e}")
         
     def StartNotify(self):
@@ -190,7 +197,7 @@ class GenerateFeedbackCharacteristic(Characteristic):
         Characteristic.__init__(
             self, bus, index, self.uuid, ["read"], service,
         )
-        self.value = "No swing detected! Please try again."
+        self.value = self.service.shared_data["feedback"]
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 1, self))
 
     def ReadValue(self, options):
