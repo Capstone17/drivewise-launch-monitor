@@ -365,7 +365,7 @@ def process_video(
             expected_center = last_ball_center + ball_velocity
             rate_motion = 0.1
             min_r = int(max(last_ball_radius * (1-rate_motion), MIN_BALL_RADIUS_PX - 2))
-            max_r = int(last_ball_radius * (1-rate_motion))
+            max_r = int(last_ball_radius * (1+rate_motion))
             circles = cv2.HoughCircles(
                 gray,
                 cv2.HOUGH_GRADIENT,
