@@ -360,9 +360,10 @@ def process_video(
             and last_ball_center is not None
             and last_ball_radius is not None
         ):
+            rate_motion = 0.1
             expected_center = last_ball_center + ball_velocity
-            min_r = int(max(last_ball_radius * 0.7, MIN_BALL_RADIUS_PX - 2))
-            max_r = int(last_ball_radius * 1.3)
+            min_r = int(max(last_ball_radius * (1-rate_motion), MIN_BALL_RADIUS_PX - 2))
+            max_r = int(last_ball_radius * (1+rate_motion))
             circles = cv2.HoughCircles(
                 gray,
                 cv2.HOUGH_GRADIENT,
@@ -589,7 +590,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "exposure_test/tst_exposure_800.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "exposure_test/tst_good_120.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
