@@ -75,7 +75,7 @@ rules = [
         "id": 0,
         "severity": 5,
         "condition": lambda f: (f["face_slight_left"] and f["path_extreme_right"])   or   (f["face_extreme_left"] and (f["path_slight_right"] or f["path_extreme_right"])),
-        "action": lambda: "Pull hook: You're closing the clubface too much and swinging aggressively out-to-in. Try keeping your clubface more neutral and reducing how far left you're swinging."
+        "action": lambda: "Pull hook: You're closing the clubface too much and swinging aggressively in-to-out. Try keeping your clubface more neutral and reducing how far right you're swinging."
     },
     {
         "name": "Pull Draw",
@@ -212,10 +212,10 @@ def rule_based_system():
     print(f"{feedback}")
 
     return {
-        "face angle": raw_data["face_angle"],
-        "swing path": raw_data["swing_path"],
-        "attack angle": raw_data["attack_angle"],
-        "side angle": raw_data["side_angle"],
+        "metrics": {"face angle": raw_data["face_angle"],
+                    "swing path": raw_data["swing_path"],
+                    "attack angle": raw_data["attack_angle"],
+                    "side angle": raw_data["side_angle"]},
         "feedback": feedback
     }
 
