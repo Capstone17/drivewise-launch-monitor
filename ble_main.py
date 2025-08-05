@@ -125,7 +125,7 @@ class SwingAnalysisCharacteristic(Characteristic):
             # ./GScrop_improved_flip.sh 816 144 387 2000 2300
             subprocess.run(
                 [
-                    "./GScrop_improved_flip.sh",
+                    "./embedded/GScrop_improved_flip.sh",
                     "816",
                     "144",
                     "387",
