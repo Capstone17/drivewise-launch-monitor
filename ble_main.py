@@ -93,7 +93,7 @@ class rpiService(Service):
 
     def __init__(self, bus, index):
         Service.__init__(self, bus, index, self.rpi_SVC_UUID, True)
-        shared_data = {
+        self.shared_data = {
             "metrics": None,
             "feedback": None
         }
