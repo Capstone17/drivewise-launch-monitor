@@ -202,14 +202,15 @@ def find_motion_window(
     *,
     pad_frames: int = 20,
     max_frames: int = MAX_MOTION_FRAMES,
-) -> tuple[int, int]:
+) -> tuple[int, int, bool]:
     """Return the frame range surrounding the dynamic sticker.
 
     The video is scanned frame-by-frame for the ArUco marker with ID
     ``DYNAMIC_ID``. The motion window spans from the first to the last frame
     where this sticker is detected, expanded by ``pad_frames`` on each side.
     The resulting range is capped to ``max_frames`` by trimming from the
-    beginning. If the sticker never appears, the entire clip is returned."""
+    beginning. If the sticker never appears, the entire clip is returned and
+    ``False`` is included in the return value."""
 
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
@@ -231,13 +232,13 @@ def find_motion_window(
     cap.release()
 
     if first is None or last is None:
-        return 0, total
+        return 0, total, False
 
     start_frame = max(0, first - pad_frames)
     end_frame = min(total, last + pad_frames)
     if end_frame - start_frame > max_frames:
         start_frame = max(end_frame - max_frames, 0)
-    return start_frame, end_frame
+    return start_frame, end_frame, True
 
 
 def process_video(
@@ -253,6 +254,11 @@ def process_video(
     ``stationary_path`` stores the averaged pose of the stationary marker."""
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
+    start_frame, end_frame, found = find_motion_window(video_path)
+    print(f"Motion window frames: {start_frame}-{end_frame}")
+    if not found:
+        raise RuntimeError("No sticker detected in the video")
+
     ball_compile_start = time.perf_counter()
     model = YOLO("golf_ball_detector.onnx", task="detect")
     ball_compile_time = time.perf_counter() - ball_compile_start
@@ -268,10 +274,6 @@ def process_video(
     if writer_fps * 1000 > 65535:
         writer_fps = 60.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    start_frame, end_frame = 0, total_frames
-    if total_frames > 0:
-        start_frame, end_frame = find_motion_window(video_path)
-        print(f"Motion window frames: {start_frame}-{end_frame}")
     inference_start = max(0, start_frame - 5)
     inference_end = min(total_frames, end_frame + 5)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
