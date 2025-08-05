@@ -321,6 +321,7 @@ def process_video(
             ball_time += time.perf_counter() - start
 
         detected = False
+        detected_center: tuple[float, float, float] | None = None
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
@@ -352,6 +353,7 @@ def process_video(
                     ball_velocity = np.array([cx, cy]) - last_ball_center
                 last_ball_center = np.array([cx, cy])
                 last_ball_radius = rad
+                detected_center = (cx, cy, rad)
                 detected = True
 
         if (
@@ -360,8 +362,8 @@ def process_video(
             and last_ball_center is not None
             and last_ball_radius is not None
         ):
-            rate_motion = 0.1
             expected_center = last_ball_center + ball_velocity
+            rate_motion = 0.1
             min_r = int(max(last_ball_radius * (1-rate_motion), MIN_BALL_RADIUS_PX - 2))
             max_r = int(last_ball_radius * (1+rate_motion))
             circles = cv2.HoughCircles(
@@ -401,7 +403,19 @@ def process_video(
                         ball_velocity = np.array([cx, cy]) - last_ball_center
                     last_ball_center = np.array([cx, cy])
                     last_ball_radius = rad
+                    detected_center = (cx, cy, rad)
                     detected = True
+
+        if detected and detected_center is not None:
+            cx, cy, rad = detected_center
+            if (
+                cx - rad <= 0
+                or cy - rad <= 0
+                or cx + rad >= w
+                or cy + rad >= h
+            ):
+                print("Ball exited frame; stopping detection")
+                break
 
 
         sticker_start = time.perf_counter()
@@ -560,6 +574,8 @@ def process_video(
         writer.release()
     ball_coords.sort(key=lambda c: c["time"])
     sticker_coords.sort(key=lambda c: c["time"])
+    if not sticker_coords:
+        raise RuntimeError("No sticker detected in the video")
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
@@ -590,7 +606,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "exposure_test/tst_good_120.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "exposure_test/tst_exposure_800.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
