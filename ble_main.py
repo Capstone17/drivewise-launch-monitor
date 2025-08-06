@@ -22,6 +22,7 @@ import json
 import os
 
 from video_ball_detector import process_video
+from metrics.ruleBasedSystem import rule_based_system
 
 MainLoop = None
 try:
@@ -146,6 +147,10 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "sticker_coords.json",
                     "stationary_sticker.json",
                 )
+                try: 
+                    self.service.shared_data = rule_based_system()
+                except Exception as e:
+                    logger.error(f"Metric calculation failed: {e}")
             except Exception as e:
                 logger.error(f"Video processing failed: {e}")
             # change values for testing
