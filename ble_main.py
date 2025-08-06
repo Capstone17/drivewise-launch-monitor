@@ -138,7 +138,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                 ],
                 check=True,
             )
-            video_path = os.path.expanduser("~/Documents/test/tst.mp4")
+            video_path = os.path.expanduser("~/Documents/test/fail.mp4")
             # try:
             #     process_video(
             #         video_path,
@@ -202,7 +202,7 @@ class GenerateFeedbackCharacteristic(Characteristic):
 
     def ReadValue(self, options):
         # take text from json file that has feedback
-        self.value = "Straight draw: A gentle rightward path with a square face is causing a draw. If your shot is landing too far left of the target, try slightly weakening your grip or evening out your path."
+        self.value = self.service.shared_date["feedback"]
         logger.debug("sending feedback based on metrics: " + repr(self.value))
         result_bytes = json.dumps(self.value).encode('utf-8')
         return [dbus.Byte(b) for b in result_bytes]
