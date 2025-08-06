@@ -28,3 +28,24 @@
 2025-08-04 17:04:50,248 - __main__ - DEBUG - StartNotify called
 2025-08-04 17:04:50,249 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
 2025-08-04 17:04:56,038 - __main__ - DEBUG - Received write command
+2025-08-06 15:52:13,404 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-06 15:52:13,405 - __main__ - INFO - Registering GATT application...
+2025-08-06 15:52:13,416 - __main__ - INFO - GATT application registered
+2025-08-06 15:52:13,418 - __main__ - INFO - Advertisement registered
+2025-08-06 15:52:31,381 - __main__ - DEBUG - StartNotify called
+2025-08-06 15:52:31,382 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-06 15:53:00,632 - __main__ - DEBUG - Received write command
+2025-08-06 15:54:15,771 - __main__ - ERROR - Processing failed: rule_based_system() missing 1 required positional argument: 'club_selection'
+2025-08-06 15:54:15,772 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-06 15:54:15,772 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+2025-08-06 15:57:29,728 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-06 15:57:29,728 - __main__ - INFO - Registering GATT application...
+2025-08-06 15:57:29,740 - __main__ - INFO - GATT application registered
+2025-08-06 15:57:29,742 - __main__ - INFO - Advertisement registered
+2025-08-06 15:57:41,015 - __main__ - DEBUG - StartNotify called
+2025-08-06 15:57:41,015 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-06 15:57:59,225 - __main__ - DEBUG - Received write command
+2025-08-06 15:59:12,345 - __main__ - DEBUG - Updated value after script
+2025-08-06 15:59:12,345 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-06 15:59:12,345 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': np.float64(49.820477961880066), 'swing path': np.float64(6.79033190836048), 'attack angle': np.float64(0.9827777246794971), 'side angle': np.float64(36.898134145824194)}
+2025-08-06 15:59:21,577 - __main__ - DEBUG - sending feedback based on metrics: 'Push: A rightward path and open face are sending shots directly right. Work on squaring the clubface and adjusting alignment toward the target.'
