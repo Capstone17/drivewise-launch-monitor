@@ -84,8 +84,8 @@ if grep -q "Revision.*: ...17." /proc/cpuinfo; then
         --hflip --vflip \
         -o "$output_file" -n
 
-    echo
-    ~/venv/bin/python ~/rpicam-apps/utils/timestamp.py --plot ${narrow:+--narrow} "$output_file"
+    # echo
+    # ~/venv/bin/python ~/rpicam-apps/utils/timestamp.py --plot ${narrow:+--narrow} "$output_file"
 
 else
     # Other Pi models using libcamera-vid
