@@ -148,7 +148,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "ball_frames"
                 )
                 try:
-                    self.service.shared_data = rule_based_system()
+                    self.service.shared_data = rule_based_system("mid-iron")
                     self.value = self.service.shared_data["metrics"]
                 except Exception as e:
                     logger.error(f"Metric calculation failed: {e}")
