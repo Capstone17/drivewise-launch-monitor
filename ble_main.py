@@ -127,7 +127,6 @@ class SwingAnalysisCharacteristic(Characteristic):
 
         try:
             # Run script
-            # ./GScrop_improved_flip.sh 816 144 387 2000 2300
             subprocess.run(
                 [
                     "./embedded/GScrop_improved_flip.sh",
@@ -139,33 +138,41 @@ class SwingAnalysisCharacteristic(Characteristic):
                 ],
                 check=True,
             )
-            #video_path = os.path.expanduser("~/Documents/test/tst.mp4")
-            try:
-                process_video(
-                    "exposure_test/tst_skinny_240.mp4",
-                    "ball_coords.json",
-                    "sticker_coords.json",
-                    "ball_frames"
-                )
-                try:
-                    self.service.shared_data = rule_based_system("mid-iron")
-                    self.value = self.service.shared_data["metrics"]
-                except Exception as e:
-                    logger.error(f"Metric calculation failed: {e}")
-            except Exception as e:
-                logger.error(f"Video processing failed: {e}")
-            # change values for testing
-            logger.debug("Updated value after script")
 
+            # Process video
+            process_video(
+                "tst.mp4",
+                "ball_coords.json",
+                "sticker_coords.json",
+                "ball_frames"
+            )
+
+            # Run metric calculations
+            self.service.shared_data = rule_based_system()
+            self.value = self.service.shared_data["metrics"]
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Shell script failed: {e}")
+            self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+            self.service.shared_data["feedback"] = "Script execution failed!"
+            self.value = self.service.shared_data["metrics"]
             if self.notifying:
                 self.notify_client()
 
         except Exception as e:
-            # Testing worst case scenario
+            logger.error(f"Processing failed: {e}")
             self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
             self.service.shared_data["feedback"] = "Swing analysis failed! Please try again."
             self.value = self.service.shared_data["metrics"]
-            logger.error(f"Failed to process write: {e}")
+            if self.notifying:
+                self.notify_client()
+
+        else:
+            # This block runs only if try block completes without exception
+            logger.debug("Updated value after script")
+            if self.notifying:
+                self.notify_client()
+
         
     def StartNotify(self):
         if self.notifying:
