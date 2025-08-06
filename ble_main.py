@@ -141,7 +141,7 @@ class SwingAnalysisCharacteristic(Characteristic):
 
             # Process video
             process_video(
-                "exposure_test/tst_skinny_240.mp4",
+                "tst.mp4",
                 "ball_coords.json",
                 "sticker_coords.json",
                 "ball_frames"
