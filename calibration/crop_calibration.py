@@ -28,8 +28,10 @@ def adjust_camera_matrix(K, crop_offset, new_size=None, original_size=None):
 
     # Adjust for resizing if needed
     if new_size and original_size:
-        scale_x = new_size[0] / (original_size[0] - x_off * 2) if original_size else 1
-        scale_y = new_size[1] / (original_size[1] - y_off * 2) if original_size else 1
+        cropped_width = original_size[0] - 2 * x_off
+        cropped_height = original_size[1] - 2 * y_off
+        scale_x = new_size[0] / cropped_width
+        scale_y = new_size[1] / cropped_height
 
         fx *= scale_x
         fy *= scale_y

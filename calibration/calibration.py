@@ -43,25 +43,25 @@ for fname in images:
         imgpoints.append(corners)
 
 # Calibration
-ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
+ret, K_original, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
 print("====BEFORE CROPPING====")
-print("Camera matrix:\n", K)
-print("Focal lengths (fx, fy):", K[0, 0], K[1, 1])
-print("Principal point (cx, cy):", K[0, 2], K[1, 2])
+print("Camera matrix:\n", K_original)
+print("Focal lengths (fx, fy):", K_original[0, 0], K_original[1, 1])
+print("Principal point (cx, cy):", K_original[0, 2], K_original[1, 2])
 print("Distortion coefficients:", dist.ravel())
 
 # Adjust for cropping
 crop_x_offset = (1456 - 400) // 2  # = 312
 crop_y_offset = (1088 - 144) // 2  # = 472
-K_cropped = adjust_camera_matrix(K,
+K = adjust_camera_matrix(K_original,
                                  crop_offset=(crop_x_offset, crop_y_offset),          # crop 100px left, 50px top
                                  new_size=None,                   # no resize
-                                 original_size=(1456, 1080))       # full-res size from calibration
+                                 original_size=(1456, 1088))       # full-res size from calibration
 print("====AFTER CROPPING====")
-print("Camera matrix:\n", K_cropped)
-print("Focal lengths (fx, fy):", K_cropped[0, 0], K_cropped[1, 1])
-print("Principal point (cx, cy):", K_cropped[0, 2], K_cropped[1, 2])
+print("Camera matrix:\n", K)
+print("Focal lengths (fx, fy):", K[0, 0], K[1, 1])
+print("Principal point (cx, cy):", K[0, 2], K[1, 2])
 print("Distortion coefficients:", dist.ravel())
 
 # Save to file
-np.savez("camera_calib.npz", camera_matrix=K_cropped, dist_coeffs=dist)
+np.savez("camera_calib.npz", camera_matrix=K, dist_coeffs=dist)
