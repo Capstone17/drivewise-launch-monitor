@@ -202,10 +202,12 @@ class GenerateFeedbackCharacteristic(Characteristic):
         )
         self.value = self.service.shared_data["feedback"]
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 1, self))
+        logger.debug("Entered generatefeedback characteristic")
+
 
     def ReadValue(self, options):
         # take text from json file that has feedback
-        self.value = self.service.shared_date["feedback"]
+        self.value = self.service.shared_data["feedback"]
         logger.debug("sending feedback based on metrics: " + repr(self.value))
         result_bytes = json.dumps(self.value).encode('utf-8')
         return [dbus.Byte(b) for b in result_bytes]
