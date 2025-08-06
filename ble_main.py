@@ -148,7 +148,10 @@ class SwingAnalysisCharacteristic(Characteristic):
             #     )
             # except Exception as e:
             #     logger.error(f"Video processing failed: {e}")
-            # Worst case scenario
+            # change values for testing
+            self.service.shared_data["metrics"] = {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900}
+            self.service.shared_data["feedback"] = "No swing detected! Please try again."
+            self.value = self.service.shared_data["metrics"]
             logger.debug("Updated value after script")
 
             if self.notifying:
