@@ -146,6 +146,8 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "ball_coords.json",
                     "sticker_coords.json",
                     "stationary_sticker.json",
+                    "annotated_output.mp4",
+                    "ball_frames"
                 )
                 try: 
                     self.service.shared_data = rule_based_system()
