@@ -21,12 +21,15 @@ pip install imageio opencv-python ultralytics
 
 ```bash
 python video_ball_detector.py video.mp4 \
-    ball_coords.json sticker_coords.json stationary_sticker.json
+    ball_coords.json sticker_coords.json \
+    ball_frames
 ```
 
+The optional fourth argument specifies the directory where extracted frames are
+written.
+
 The first JSON file will contain ball coordinates. The second stores the
-position and orientation of the moving sticker while the third contains the
-average pose of the stationary sticker, for example:
+position and orientation of the moving sticker, for example:
 
 ```json
 [
@@ -34,6 +37,9 @@ average pose of the stationary sticker, for example:
   {"time": 1.76, "x": 0.59, "y": 5.75, "z": 11.26}
 ]
 ```
+
+The club's ArUco sticker must use ID 0. The marker comes from the 4x4 dictionary
+(`DICT_4X4_1000`). Any other detected IDs will be ignored.
 
 ## Go Implementation
 
