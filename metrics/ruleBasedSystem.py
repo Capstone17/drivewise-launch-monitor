@@ -1,6 +1,6 @@
 
 # from metric_output import return_metrics
-from metric_output_3_metrics import return_metrics  # Use this until face angle can be accurately detected
+from .metric_output_3_metrics import return_metrics  # Use this until face angle can be accurately detected
 
 # -------------------------------
 # Raw input data

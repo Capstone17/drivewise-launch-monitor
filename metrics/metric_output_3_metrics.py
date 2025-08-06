@@ -1,4 +1,4 @@
-from metric_calculation_3_metrics import *
+from .metric_calculation_3_metrics import *
 import json
 import os
 import matplotlib.pyplot as plt
