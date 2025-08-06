@@ -139,15 +139,15 @@ class SwingAnalysisCharacteristic(Characteristic):
                 check=True,
             )
             video_path = os.path.expanduser("~/Documents/test/tst.mp4")
-            try:
-                process_video(
-                    video_path,
-                    "ball_coords.json",
-                    "sticker_coords.json",
-                    "stationary_sticker.json",
-                )
-            except Exception as e:
-                logger.error(f"Video processing failed: {e}")
+            # try:
+            #     process_video(
+            #         video_path,
+            #         "ball_coords.json",
+            #         "sticker_coords.json",
+            #         "stationary_sticker.json",
+            #     )
+            # except Exception as e:
+            #     logger.error(f"Video processing failed: {e}")
             # Worst case scenario
             logger.debug("Updated value after script")
 
