@@ -142,7 +142,7 @@ class SwingAnalysisCharacteristic(Characteristic):
             #video_path = os.path.expanduser("~/Documents/test/tst.mp4")
             try:
                 process_video(
-                    "exposure_test/tst_skinny_240.mp4"
+                    "exposure_test/tst_skinny_240.mp4",
                     "ball_coords.json",
                     "sticker_coords.json",
                     "stationary_sticker.json",
