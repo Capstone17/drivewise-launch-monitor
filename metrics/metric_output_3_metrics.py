@@ -183,7 +183,7 @@ def return_metrics():
     # Filepaths
     # ---------------------------------
     # Coordinate source paths
-    src_coords = '../'
+    src_coords = './'
     ball_coords_path = os.path.join(src_coords, 'ball_coords.json')
     sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')
 
