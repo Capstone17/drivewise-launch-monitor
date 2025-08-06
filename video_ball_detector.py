@@ -28,7 +28,6 @@ ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 2.38
-STATIONARY_MARKER_LENGTH = 3.5
 MIN_BALL_RADIUS_PX = 9  # pixels
 
 # Load camera calibration parameters
@@ -49,7 +48,6 @@ ARUCO_PARAMS.cornerRefinementWinSize = 7
 ARUCO_PARAMS.cornerRefinementMinAccuracy = 0.01
 ARUCO_PARAMS.adaptiveThreshConstant = 7
 
-STATIONARY_ID = 1
 DYNAMIC_ID = 0
 
 MAX_MISSING_FRAMES = 12
@@ -245,13 +243,9 @@ def process_video(
     video_path: str,
     ball_path: str,
     sticker_path: str,
-    stationary_path: str,
-    output_path: str = "annotated_output.mp4",
     frames_dir: str = "ball_frames",
 ) -> None:
-    """Process ``video_path`` saving ball and sticker coordinates to JSON.
-
-    ``stationary_path`` stores the averaged pose of the stationary marker."""
+    """Process ``video_path`` saving ball and sticker coordinates to JSON."""
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
     # Scan for the sticker before expensive model compilation
@@ -270,16 +264,11 @@ def process_video(
 
     cap = cv2.VideoCapture(video_path)
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    writer_fps = video_fps
-    # mpeg4 codecs fail when the timebase denominator exceeds 65535
-    if writer_fps * 1000 > 65535:
-        writer_fps = 60.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
     inference_start = max(0, start_frame - 5)
     inference_end = min(total_frames, end_frame + 5)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
-    writer = None
     if frames_dir:
         os.makedirs(frames_dir, exist_ok=True)
         for name in os.listdir(frames_dir):
@@ -291,8 +280,6 @@ def process_video(
     sticker_time = 0.0
     ball_coords = []
     sticker_coords = []
-    stationary_sum = np.zeros(6, dtype=float)
-    stationary_count = 0
     last_dynamic_pose = None
     last_dynamic_rt = None
     last_dynamic_quat = None
@@ -317,9 +304,6 @@ def process_video(
             break
         if h is None:
             h, w = frame.shape[:2]
-        if writer is None:
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(output_path, fourcc, writer_fps, (w, h))
         t = frame_idx / video_fps
         gray = preprocess_frame(frame)
         gray = preprocess_frame(frame)
@@ -510,52 +494,41 @@ def process_video(
         dynamic_corner = None
         if ids is not None and len(ids) > 0:
             valid = [
-                (corners[i], ids[i][0])
+                corners[i]
                 for i in range(len(ids))
-                if ids[i][0] in (STATIONARY_ID, DYNAMIC_ID)
+                if ids[i][0] == DYNAMIC_ID
             ]
             if valid:
-                valid_corners = [c for c, _ in valid]
-                valid_ids = np.array([[mid] for _, mid in valid])
-                cv2.aruco.drawDetectedMarkers(frame, valid_corners, valid_ids)
-                for corner, marker_id in valid:
-                    length = (
-                        STATIONARY_MARKER_LENGTH
-                        if marker_id == STATIONARY_ID
-                        else DYNAMIC_MARKER_LENGTH
-                    )
+                valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
+                cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
+                for corner in valid:
                     rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
                         [corner],
-                        length,
+                        DYNAMIC_MARKER_LENGTH,
                         CAMERA_MATRIX,
                         DIST_COEFFS,
                     )
                     rvec = rvecs[0, 0]
                     tvec = tvecs[0, 0]
                     x, y, z = tvec
-                    if marker_id == STATIONARY_ID:
-                        roll, pitch, yaw = rvec_to_euler(rvec)
-                        stationary_sum += (x, y, z, roll, pitch, yaw)
-                        stationary_count += 1
-                    else:
-                        curr_q = rvec_to_quat(rvec)
-                        if last_dynamic_rt is not None:
-                            prev_q = rvec_to_quat(last_dynamic_rt[0])
-                            if np.dot(curr_q, prev_q) < 0.0:
-                                curr_q = -curr_q
-                                rvec = quat_to_rvec(curr_q)
-                        roll, pitch, yaw = rvec_to_euler(rvec)
-                        current_rt = (rvec, tvec)
-                        current_pose = (x, y, z, roll, pitch, yaw)
-                        current_quat = curr_q
-                        dynamic_corner = corner
+                    curr_q = rvec_to_quat(rvec)
+                    if last_dynamic_rt is not None:
+                        prev_q = rvec_to_quat(last_dynamic_rt[0])
+                        if np.dot(curr_q, prev_q) < 0.0:
+                            curr_q = -curr_q
+                            rvec = quat_to_rvec(curr_q)
+                    roll, pitch, yaw = rvec_to_euler(rvec)
+                    current_rt = (rvec, tvec)
+                    current_pose = (x, y, z, roll, pitch, yaw)
+                    current_quat = curr_q
+                    dynamic_corner = corner
                     cv2.drawFrameAxes(
                         frame,
                         CAMERA_MATRIX,
                         DIST_COEFFS,
                         rvec,
                         tvec,
-                        length * 0.5,
+                        DYNAMIC_MARKER_LENGTH * 0.5,
                         2,
                     )
         if current_rt is None and tracker_corners is not None and prev_gray is not None:
@@ -648,42 +621,19 @@ def process_video(
             cv2.imwrite(
                 os.path.join(frames_dir, f"frame_{frame_idx:04d}.png"), frame
             )
-        if writer is not None:
-            writer.write(frame)
         frame_idx += 1
 
     cap.release()
-    if writer is not None:
-        writer.release()
     ball_coords.sort(key=lambda c: c["time"])
     sticker_coords.sort(key=lambda c: c["time"])
-    if not sticker_coords:
-        raise RuntimeError("No sticker detected in the video")
     if not sticker_coords:
         raise RuntimeError("No sticker detected in the video")
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
         json.dump(sticker_coords, f, indent=2)
-    stationary_output = []
-    if stationary_count:
-        avg = stationary_sum / stationary_count
-        stationary_output.append(
-            {
-                "x": round(float(avg[0]), 2),
-                "y": round(float(avg[1]), 2),
-                "z": round(float(avg[2]), 2),
-                "roll": round(float(avg[3]), 2),
-                "pitch": round(float(avg[4]), 2),
-                "yaw": round(float(avg[5]), 2),
-            }
-        )
-    with open(stationary_path, "w") as f:
-        json.dump(stationary_output, f, indent=2)
     print(f"Saved {len(ball_coords)} ball points to {ball_path}")
     print(f"Saved {len(sticker_coords)} sticker points to {sticker_path}")
-    if stationary_count:
-        print(f"Saved averaged stationary sticker pose to {stationary_path}")
     print(f"Ball detection compile time: {ball_compile_time:.2f}s")
     print(f"Sticker detection compile time: {sticker_compile_time:.2f}s")
     print(f"Ball detection time: {ball_time:.2f}s")
@@ -694,14 +644,10 @@ if __name__ == "__main__":
     video_path = sys.argv[1] if len(sys.argv) > 1 else "exposure_test/tst_skinny_240.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
-    stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
-    output_path = sys.argv[5] if len(sys.argv) > 5 else "annotated_output.mp4"
-    frames_dir = sys.argv[6] if len(sys.argv) > 6 else "ball_frames"
+    frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
     process_video(
         video_path,
         ball_path,
         sticker_path,
-        stationary_path,
-        output_path,
         frames_dir,
     )

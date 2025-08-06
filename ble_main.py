@@ -145,11 +145,9 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "exposure_test/tst_skinny_240.mp4",
                     "ball_coords.json",
                     "sticker_coords.json",
-                    "stationary_sticker.json",
-                    "annotated_output.mp4",
                     "ball_frames"
                 )
-                try: 
+                try:
                     self.service.shared_data = rule_based_system()
                     self.value = self.service.shared_data["metrics"]
                 except Exception as e:

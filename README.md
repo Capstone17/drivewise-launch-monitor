@@ -21,16 +21,15 @@ pip install imageio opencv-python ultralytics
 
 ```bash
 python video_ball_detector.py video.mp4 \
-    ball_coords.json sticker_coords.json stationary_sticker.json \
-    annotated.mp4 10
+    ball_coords.json sticker_coords.json \
+    ball_frames
 ```
 
-The last number specifies how often YOLOv8 detection runs (every Nth frame).
-If omitted, it defaults to 10.
+The optional fourth argument specifies the directory where extracted frames are
+written.
 
 The first JSON file will contain ball coordinates. The second stores the
-position and orientation of the moving sticker while the third contains the
-average pose of the stationary sticker, for example:
+position and orientation of the moving sticker, for example:
 
 ```json
 [
@@ -39,9 +38,8 @@ average pose of the stationary sticker, for example:
 ]
 ```
 
-The stationary block sticker must use ArUco ID 0 while the club's sticker uses
-ID 1. Both markers come from the 4x4 dictionary (`DICT_4X4_1000`). Any other
-detected IDs will be ignored.
+The club's ArUco sticker must use ID 0. The marker comes from the 4x4 dictionary
+(`DICT_4X4_1000`). Any other detected IDs will be ignored.
 
 ## Go Implementation
 

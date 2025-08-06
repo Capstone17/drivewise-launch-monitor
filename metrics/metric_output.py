@@ -61,24 +61,21 @@ def load_pose_at_time(json_path, target_time, tolerance=0.02):
     
     raise ValueError(f"No pose found for time ≈ {target_time}")
 
-
-# Find the reference yaw
+# Find the reference yaw from the first club pose
 def load_reference_yaw(json_path):
     with open(json_path, 'r') as f:
         data = json.load(f)
-    
+
     if not data or 'yaw' not in data[0]:
         raise ValueError("Invalid JSON format or missing 'yaw' field.")
-    
-    return data[0]['yaw']
 
+    return data[0]['yaw']
 
 def return_metrics():
     # Coordinate source paths
     src_coords = '../'
     ball_coords_path = os.path.join(src_coords, 'ball_coords.json')
     sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')
-    stationary_sticker_path = os.path.join(src_coords, 'stationary_sticker.json')
 
 
     # Find ball data
@@ -92,8 +89,8 @@ def return_metrics():
     print(f'Pose before impact: {pose_before_impact1}')
     print(f'Pose after impact: {pose_after_impact1}\n')
 
-    # Find reference data
-    yaw_ideal = load_reference_yaw(stationary_sticker_path)  # Load the reference yaw
+    # Reference yaw from the first recorded orientation
+    yaw_ideal = load_reference_yaw(sticker_coords_path)
     print(f'Ideal yaw: {yaw_ideal}\n')
 
     reference_vector = reference_vector_calc(yaw_ideal)
