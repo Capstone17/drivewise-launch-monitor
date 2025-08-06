@@ -67,7 +67,7 @@ def horizontal_movement_angle_from_rates(dx: float, dz: float, reference_vector=
         )
     )
 
-    return -horizontal_movement_angle  # Negate the angle due to mirroring
+    return horizontal_movement_angle  # Negate the angle due to mirroring
 
 
 # ATTACK ANGLE
