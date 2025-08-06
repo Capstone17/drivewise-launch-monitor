@@ -34,8 +34,8 @@ MIN_BALL_RADIUS_PX = 9  # pixels
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
 _calib_data = np.load(_calib_path)
-CAMERA_MATRIX = _calib_data["K"]
-DIST_COEFFS = _calib_data["dist"]
+CAMERA_MATRIX = _calib_data["camera_matrix"]
+DIST_COEFFS = _calib_data["dist_coeffs"]
 
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
