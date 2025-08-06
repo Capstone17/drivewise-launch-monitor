@@ -193,7 +193,7 @@ class SwingAnalysisCharacteristic(Characteristic):
         )
 
 class GenerateFeedbackCharacteristic(Characteristic):
-    uuid = "047ba9de-bf0f-4aa6-be91-3856aec11c01"
+    uuid = "2c58a217-0a9b-445f-adac-0b37bd8635c3"
     description = b"Generate feedback based on swing metrics!"
 
     def __init__(self, bus, index, service):
