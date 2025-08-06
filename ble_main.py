@@ -156,12 +156,16 @@ class SwingAnalysisCharacteristic(Characteristic):
             self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
             self.service.shared_data["feedback"] = "Script execution failed!"
             self.value = self.service.shared_data["metrics"]
+            if self.notifying:
+                self.notify_client()
 
         except Exception as e:
             logger.error(f"Processing failed: {e}")
             self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
             self.service.shared_data["feedback"] = "Swing analysis failed! Please try again."
             self.value = self.service.shared_data["metrics"]
+            if self.notifying:
+                self.notify_client()
 
         else:
             # This block runs only if try block completes without exception
