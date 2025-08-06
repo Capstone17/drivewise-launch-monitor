@@ -54,12 +54,31 @@ fi
 # media-ctl Setup (center crop)
 # -------------------------
 
+crop_x=$(((1456 - width) / 2))
+crop_y=$((((1088 - height) / 2) + 100))
+max_crop_y=$((1088 - height))
+
+if (( crop_y > max_crop_y )); then
+    crop_y=$max_crop_y
+fi
+
+echo "Cropping at: ($crop_x, $crop_y)"
+
 for ((m=0; m<=5; ++m)); do
-    media-ctl -d /dev/media$m --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:($(((1456 - width) / 2)),$(((1088 - height) / 2) + 100))/${width}x${height}]" -v
+    media-ctl -d /dev/media$m \
+        --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:(${crop_x},${crop_y})/${width}x${height}]" -v
     if [[ $? -eq 0 ]]; then
+        media-ctl -d /dev/media$m --get-v4l2  # <-- Confirm crop
         break
     fi
 done
+
+# for ((m=0; m<=5; ++m)); do
+#     media-ctl -d /dev/media$m --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:($(((1456 - width) / 2)),$(((1088 - height) / 2) + 100))/${width}x${height}]" -v
+#     if [[ $? -eq 0 ]]; then
+#         break
+#     fi
+# done
 
 # -------------------------
 # Prepare Output Directory
