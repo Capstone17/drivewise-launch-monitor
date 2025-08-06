@@ -156,7 +156,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "~/Documents/test/video.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "~/Documents/test/tst.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
