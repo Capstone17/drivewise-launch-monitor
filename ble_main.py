@@ -134,7 +134,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "144",
                     "387",
                     "3000",
-                    "2000",
+                    "800",
                 ],
                 check=True,
             )
@@ -148,7 +148,7 @@ class SwingAnalysisCharacteristic(Characteristic):
             )
 
             # Run metric calculations
-            self.service.shared_data = rule_based_system()
+            self.service.shared_data = rule_based_system("mid-iron")
             self.value = self.service.shared_data["metrics"]
 
         except subprocess.CalledProcessError as e:
