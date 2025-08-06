@@ -134,7 +134,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "144",
                     "387",
                     "3000",
-                    "500",
+                    "2000",
                 ],
                 check=True,
             )
