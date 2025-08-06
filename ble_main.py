@@ -139,18 +139,18 @@ class SwingAnalysisCharacteristic(Characteristic):
                 check=True,
             )
             video_path = os.path.expanduser("~/Documents/test/fail.mp4")
-            # try:
-            #     process_video(
-            #         video_path,
-            #         "ball_coords.json",
-            #         "sticker_coords.json",
-            #         "stationary_sticker.json",
-            #     )
-            # except Exception as e:
-            #     logger.error(f"Video processing failed: {e}")
+            try:
+                process_video(
+                    video_path,
+                    "ball_coords.json",
+                    "sticker_coords.json",
+                    "stationary_sticker.json",
+                )
+            except Exception as e:
+                logger.error(f"Video processing failed: {e}")
             # change values for testing
-            self.service.shared_data["metrics"] = {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900}
-            self.service.shared_data["feedback"] = "No swing detected! Please try again."
+            self.service.shared_data["metrics"] = {'face angle': 420, 'swing path': 420, 'attack angle': 420, 'side angle': 420}
+            self.service.shared_data["feedback"] = "Video recorded and processed ."
             self.value = self.service.shared_data["metrics"]
             logger.debug("Updated value after script")
 
