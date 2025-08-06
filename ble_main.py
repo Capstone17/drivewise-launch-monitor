@@ -139,10 +139,9 @@ class SwingAnalysisCharacteristic(Characteristic):
                 ],
                 check=True,
             )
-            video_path = os.path.expanduser("~/Documents/test/tst.mp4")
+            #video_path = os.path.expanduser("~/Documents/test/tst.mp4")
             try:
                 process_video(
-                    video_path,
                     "ball_coords.json",
                     "sticker_coords.json",
                     "stationary_sticker.json",
