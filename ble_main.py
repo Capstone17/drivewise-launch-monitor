@@ -149,6 +149,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                 )
                 try: 
                     self.service.shared_data = rule_based_system()
+                    self.value = self.service.shared_data["metrics"]
                 except Exception as e:
                     logger.error(f"Metric calculation failed: {e}")
             except Exception as e:
@@ -161,8 +162,8 @@ class SwingAnalysisCharacteristic(Characteristic):
 
         except Exception as e:
             # Testing worst case scenario
-            self.service.shared_data["metrics"] = {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900}
-            self.service.shared_data["feedback"] = "No swing detected! Please try again."
+            self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+            self.service.shared_data["feedback"] = "Swing analysis failed! Please try again."
             self.value = self.service.shared_data["metrics"]
             logger.error(f"Failed to process write: {e}")
         
