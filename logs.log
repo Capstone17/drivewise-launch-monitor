@@ -1,0 +1,30 @@
+2025-08-04 16:59:31,209 - __main__ - INFO - Registering GATT application...
+2025-08-04 16:59:31,224 - __main__ - INFO - GATT application registered
+2025-08-04 16:59:31,226 - __main__ - INFO - Advertisement registered
+2025-08-04 17:00:36,145 - __main__ - DEBUG - StartNotify called
+2025-08-04 17:00:36,145 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-04 17:00:41,155 - __main__ - DEBUG - Received write command
+2025-08-04 17:00:41,156 - __main__ - ERROR - Failed to process write: [Errno 2] No such file or directory: './GScrop_improved_flip.sh'
+2025-08-04 17:00:41,246 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900}
+2025-08-04 17:02:22,225 - __main__ - INFO - Registering GATT application...
+2025-08-04 17:02:22,235 - __main__ - INFO - GATT application registered
+2025-08-04 17:02:22,237 - __main__ - INFO - Advertisement registered
+2025-08-04 17:02:34,227 - __main__ - DEBUG - StartNotify called
+2025-08-04 17:02:34,227 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-04 17:02:40,107 - __main__ - DEBUG - Received write command
+2025-08-04 17:02:40,107 - __main__ - ERROR - Failed to process write: [Errno 13] Permission denied: './embedded/GScrop_improved_flip.sh'
+2025-08-04 17:02:40,167 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900}
+2025-08-04 17:03:22,999 - __main__ - INFO - Registering GATT application...
+2025-08-04 17:03:23,009 - __main__ - INFO - GATT application registered
+2025-08-04 17:03:23,012 - __main__ - INFO - Advertisement registered
+2025-08-04 17:03:32,217 - __main__ - DEBUG - StartNotify called
+2025-08-04 17:03:32,218 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-04 17:03:37,827 - __main__ - DEBUG - Received write command
+2025-08-04 17:03:42,093 - __main__ - ERROR - Failed to process write: Command '['./embedded/GScrop_improved_flip.sh', '816', '144', '387', '3000', '500']' returned non-zero exit status 127.
+2025-08-04 17:03:42,147 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 100, 'swing path': 500, 'attack angle': 100, 'side angle': 900}
+2025-08-04 17:04:44,199 - __main__ - INFO - Registering GATT application...
+2025-08-04 17:04:44,210 - __main__ - INFO - GATT application registered
+2025-08-04 17:04:44,212 - __main__ - INFO - Advertisement registered
+2025-08-04 17:04:50,248 - __main__ - DEBUG - StartNotify called
+2025-08-04 17:04:50,249 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-04 17:04:56,038 - __main__ - DEBUG - Received write command
