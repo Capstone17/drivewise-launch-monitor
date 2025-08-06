@@ -34,8 +34,8 @@ MIN_BALL_RADIUS_PX = 9  # pixels
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
 _calib_data = np.load(_calib_path)
-CAMERA_MATRIX = _calib_data["K"]
-DIST_COEFFS = _calib_data["dist"]
+CAMERA_MATRIX = _calib_data["camera_matrix"]
+DIST_COEFFS = _calib_data["dist_coeffs"]
 
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
@@ -202,14 +202,15 @@ def find_motion_window(
     *,
     pad_frames: int = 20,
     max_frames: int = MAX_MOTION_FRAMES,
-) -> tuple[int, int]:
-    """Return the frame range surrounding the dynamic sticker.
+) -> tuple[int, int, bool]:
+    """Return the frame range surrounding the dynamic sticker and whether it was found.
 
     The video is scanned frame-by-frame for the ArUco marker with ID
     ``DYNAMIC_ID``. The motion window spans from the first to the last frame
     where this sticker is detected, expanded by ``pad_frames`` on each side.
     The resulting range is capped to ``max_frames`` by trimming from the
-    beginning. If the sticker never appears, the entire clip is returned."""
+    beginning. If the sticker never appears, the entire clip is returned and the
+    flag is ``False``."""
 
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
@@ -231,13 +232,13 @@ def find_motion_window(
     cap.release()
 
     if first is None or last is None:
-        return 0, total
+        return 0, total, False
 
     start_frame = max(0, first - pad_frames)
     end_frame = min(total, last + pad_frames)
     if end_frame - start_frame > max_frames:
         start_frame = max(end_frame - max_frames, 0)
-    return start_frame, end_frame
+    return start_frame, end_frame, True
 
 
 def process_video(
@@ -251,6 +252,14 @@ def process_video(
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
     ``stationary_path`` stores the averaged pose of the stationary marker."""
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+    # Scan for the sticker before expensive model compilation
+    start_frame, end_frame, sticker_found = find_motion_window(video_path)
+    if not sticker_found:
+        raise RuntimeError("No sticker detected in the video")
+    print(f"Motion window frames: {start_frame}-{end_frame}")
+
     ball_compile_start = time.perf_counter()
     model = YOLO("golf_ball_detector.onnx", task="detect")
     ball_compile_time = time.perf_counter() - ball_compile_start
@@ -266,10 +275,6 @@ def process_video(
     if writer_fps * 1000 > 65535:
         writer_fps = 60.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    start_frame, end_frame = 0, total_frames
-    if total_frames > 0:
-        start_frame, end_frame = find_motion_window(video_path)
-        print(f"Motion window frames: {start_frame}-{end_frame}")
     inference_start = max(0, start_frame - 5)
     inference_end = min(total_frames, end_frame + 5)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
@@ -296,6 +301,14 @@ def process_video(
     prev_gray = None
     pending_times: list[float] = []
     missing_frames = 0
+    # Tracking of last detected ball position and velocity
+    last_ball_center: np.ndarray | None = None
+    last_ball_radius: float | None = None
+    ball_velocity = np.zeros(2, dtype=float)
+    # Tracking of last detected ball position and velocity
+    last_ball_center: np.ndarray | None = None
+    last_ball_radius: float | None = None
+    ball_velocity = np.zeros(2, dtype=float)
 
     frame_idx = 0
     while True:
@@ -308,11 +321,21 @@ def process_video(
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             writer = cv2.VideoWriter(output_path, fourcc, writer_fps, (w, h))
         t = frame_idx / video_fps
+        gray = preprocess_frame(frame)
+        gray = preprocess_frame(frame)
         results = None
+        in_window = start_frame <= frame_idx < end_frame
+        in_window = start_frame <= frame_idx < end_frame
         if inference_start <= frame_idx < inference_end:
             start = time.perf_counter()
             results = model(frame, verbose=False, device=DEVICE)
             ball_time += time.perf_counter() - start
+
+        detected = False
+        detected_center: tuple[float, float, float] | None = None
+
+        detected = False
+        detected_center: tuple[float, float, float] | None = None
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
@@ -340,8 +363,144 @@ def process_video(
                     1,
                     cv2.LINE_AA,
                 )
+                if last_ball_center is not None:
+                    ball_velocity = np.array([cx, cy]) - last_ball_center
+                last_ball_center = np.array([cx, cy])
+                last_ball_radius = rad
+                detected_center = (cx, cy, rad)
+                detected = True
 
-        gray = preprocess_frame(frame)
+        if (
+            not detected
+            and in_window
+            and last_ball_center is not None
+            and last_ball_radius is not None
+        ):
+            expected_center = last_ball_center + ball_velocity
+            rate_motion = 0.1
+            min_r = int(max(last_ball_radius * (1-rate_motion), MIN_BALL_RADIUS_PX - 2))
+            max_r = int(last_ball_radius * (1+rate_motion))
+            circles = cv2.HoughCircles(
+                gray,
+                cv2.HOUGH_GRADIENT,
+                dp=1.2,
+                minDist=max(5, int(last_ball_radius * 2)),
+                param1=100,
+                param2=15,
+                minRadius=min_r,
+                maxRadius=max_r,
+            )
+            if circles is not None:
+                c = np.round(circles[0, :]).astype(int)
+                ex, ey = expected_center
+                # choose circle nearest expected center
+                cx, cy, rad = min(
+                    c,
+                    key=lambda cir: (cir[0] - ex) ** 2 + (cir[1] - ey) ** 2,
+                )
+                dist = np.hypot(cx - ex, cy - ey)
+                if dist <= 2.0 * last_ball_radius and min_r <= rad <= max_r:
+                    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
+                    bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
+                    by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+                    bz = distance - 30.0
+                    ball_coords.append(
+                        {
+                            "time": round(t, 3),
+                            "x": round(bx, 2),
+                            "y": round(by, 2),
+                            "z": round(bz, 2),
+                        }
+                    )
+                    cv2.circle(frame, (int(cx), int(cy)), int(rad), (255, 0, 0), 2)
+                    if last_ball_center is not None:
+                        ball_velocity = np.array([cx, cy]) - last_ball_center
+                    last_ball_center = np.array([cx, cy])
+                    last_ball_radius = rad
+                    detected_center = (cx, cy, rad)
+                    detected = True
+
+        if detected and detected_center is not None:
+            cx, cy, rad = detected_center
+            if (
+                cx - rad <= 0
+                or cy - rad <= 0
+                or cx + rad >= w
+                or cy + rad >= h
+            ):
+                print("Ball exited frame; stopping detection")
+                break
+
+
+                if last_ball_center is not None:
+                    ball_velocity = np.array([cx, cy]) - last_ball_center
+                last_ball_center = np.array([cx, cy])
+                last_ball_radius = rad
+                detected_center = (cx, cy, rad)
+                detected = True
+
+        if (
+            not detected
+            and in_window
+            and last_ball_center is not None
+            and last_ball_radius is not None
+        ):
+            expected_center = last_ball_center + ball_velocity
+            rate_motion = 0.1
+            min_r = int(max(last_ball_radius * (1-rate_motion), MIN_BALL_RADIUS_PX - 2))
+            max_r = int(last_ball_radius * (1+rate_motion))
+            circles = cv2.HoughCircles(
+                gray,
+                cv2.HOUGH_GRADIENT,
+                dp=1.2,
+                minDist=max(5, int(last_ball_radius * 2)),
+                param1=100,
+                param2=15,
+                minRadius=min_r,
+                maxRadius=max_r,
+            )
+            if circles is not None:
+                c = np.round(circles[0, :]).astype(int)
+                ex, ey = expected_center
+                # choose circle nearest expected center
+                cx, cy, rad = min(
+                    c,
+                    key=lambda cir: (cir[0] - ex) ** 2 + (cir[1] - ey) ** 2,
+                )
+                dist = np.hypot(cx - ex, cy - ey)
+                if dist <= 2.0 * last_ball_radius and min_r <= rad <= max_r:
+                    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
+                    bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
+                    by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+                    bz = distance - 30.0
+                    ball_coords.append(
+                        {
+                            "time": round(t, 3),
+                            "x": round(bx, 2),
+                            "y": round(by, 2),
+                            "z": round(bz, 2),
+                        }
+                    )
+                    cv2.circle(frame, (int(cx), int(cy)), int(rad), (255, 0, 0), 2)
+                    if last_ball_center is not None:
+                        ball_velocity = np.array([cx, cy]) - last_ball_center
+                    last_ball_center = np.array([cx, cy])
+                    last_ball_radius = rad
+                    detected_center = (cx, cy, rad)
+                    detected = True
+
+        if detected and detected_center is not None:
+            cx, cy, rad = detected_center
+            if (
+                cx - rad <= 0
+                or cy - rad <= 0
+                or cx + rad >= w
+                or cy + rad >= h
+            ):
+                print("Ball exited frame; stopping detection")
+                break
+
+
         sticker_start = time.perf_counter()
         corners, ids, _ = aruco_detector.detectMarkers(gray)
         sticker_time += time.perf_counter() - sticker_start
@@ -498,6 +657,10 @@ def process_video(
         writer.release()
     ball_coords.sort(key=lambda c: c["time"])
     sticker_coords.sort(key=lambda c: c["time"])
+    if not sticker_coords:
+        raise RuntimeError("No sticker detected in the video")
+    if not sticker_coords:
+        raise RuntimeError("No sticker detected in the video")
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
@@ -528,7 +691,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "exposure_test/tst_exposure_240_fast.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "exposure_test/tst_skinny_240_fast.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     stationary_path = sys.argv[4] if len(sys.argv) > 4 else "stationary_sticker.json"
