@@ -139,16 +139,16 @@ class SwingAnalysisCharacteristic(Characteristic):
                 ],
                 check=True,
             )
-            time.sleep(0.5)
+            time.sleep(10)
             logger.info("processing video now")
             # Process video
             process_video(
-                "tst.mp4",
+                "exposure_test/tst_skinny_240.mp4",
                 "ball_coords.json",
                 "sticker_coords.json",
                 "ball_frames"
             )
-            time.sleep(0.5)
+            time.sleep(10)
             # Run metric calculations
             self.service.shared_data = rule_based_system("mid-iron")
             self.value = self.service.shared_data["metrics"]
