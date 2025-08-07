@@ -148,7 +148,9 @@ class SwingAnalysisCharacteristic(Characteristic):
                 "sticker_coords.json",
                 "ball_frames"
             )
+            logger.info("sleep after process video")
             time.sleep(10)
+            logger.info("starting metrics after sleep")
             # Run metric calculations
             self.service.shared_data = rule_based_system("mid-iron")
             self.value = self.service.shared_data["metrics"]
