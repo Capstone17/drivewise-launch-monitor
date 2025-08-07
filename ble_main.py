@@ -143,7 +143,7 @@ class SwingAnalysisCharacteristic(Characteristic):
             logger.info("processing video now")
             # Process video
             process_video(
-                "tst",
+                "tst.mp4",
                 "ball_coords.json",
                 "sticker_coords.json",
                 "ball_frames"
