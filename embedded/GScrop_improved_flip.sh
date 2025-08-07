@@ -84,7 +84,7 @@ done
 # Prepare Output Directory
 # -------------------------
 
-output_dir=~/Documents/test
+output_dir=~/Documents/webcamGolf
 mkdir -p "$output_dir"
 rm -f "$output_dir/tst.pts"
 
