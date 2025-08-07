@@ -142,12 +142,14 @@ class SwingAnalysisCharacteristic(Characteristic):
             time.sleep(0.5)
             logger.info("processing video now")
             # Process video
-            process_video(
+            result = process_video(
                 "tst.mp4",
                 "ball_coords.json",
                 "sticker_coords.json",
-                "ball_frames"
+                "ball_frames",
             )
+            if result != "skibidi":
+                raise RuntimeError("Video processing did not complete")
             time.sleep(0.5)
             # Run metric calculations
             self.service.shared_data = rule_based_system("mid-iron")
