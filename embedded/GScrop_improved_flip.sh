@@ -88,6 +88,22 @@ output_dir=~/Documents/webcamGolf
 mkdir -p "$output_dir"
 rm -f "$output_dir/tst.pts"
 
+# Find next available output file name (tst.mp4, tst1.mp4, tst2.mp4, ...)
+find_next_output_file() {
+    base="$1"
+    ext="$2"
+    n=0
+    while :; do
+        if [[ $n -eq 0 ]]; then
+            f="$output_dir/${base}${cam1:+1}.$ext"
+        else
+            f="$output_dir/${base}${cam1:+1}_$n.$ext"
+        fi
+        [[ ! -e "$f" ]] && { echo "$f"; return; }
+        ((n++))
+    done
+}
+
 # -------------------------
 # Run Camera Capture (with live flip)
 # -------------------------
@@ -97,7 +113,7 @@ libcamera-hello --list-cameras
 echo
 if grep -q "Revision.*: ...17." /proc/cpuinfo; then
     # Raspberry Pi 5 with rpicam-vid
-    output_file="$output_dir/tst${cam1:+1}.mp4"
+    output_file=$(find_next_output_file "tst" "mp4")
     rpicam-vid "$workaround" ${cam1:+--camera 1} --width "$width" --height "$height" \
         --denoise cdn_off --framerate "$framerate" -t "$duration" "$SHTR" "$shutter" \
         --hflip --vflip \
@@ -108,7 +124,8 @@ if grep -q "Revision.*: ...17." /proc/cpuinfo; then
 
 else
     # Other Pi models using libcamera-vid
-    output_file="$output_dir/tst.h264"
+# Other Pi models using libcamera-vid
+    output_file=$(find_next_output_file "tst" "h264")
     pts_file="$output_dir/tst.pts"
     libcamera-vid "$workaround" --width "$width" --height "$height" \
         --denoise cdn_off --framerate "$framerate" --save-pts "$pts_file" \
