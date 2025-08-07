@@ -192,3 +192,15 @@
 2025-08-07 11:22:26,486 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
 2025-08-07 11:22:26,486 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
 2025-08-07 11:27:02,491 - __main__ - DEBUG - sending feedback based on metrics: 'Swing analysis failed! Please try again.'
+2025-08-07 11:30:19,282 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-07 11:30:19,283 - __main__ - INFO - Registering GATT application...
+2025-08-07 11:30:19,295 - __main__ - INFO - GATT application registered
+2025-08-07 11:30:19,297 - __main__ - INFO - Advertisement registered
+2025-08-07 11:31:36,321 - __main__ - DEBUG - StartNotify called
+2025-08-07 11:31:36,321 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-07 11:31:39,921 - __main__ - DEBUG - Received write command
+2025-08-07 11:31:46,550 - __main__ - INFO - processing video now
+2025-08-07 11:32:27,533 - __main__ - DEBUG - Updated value after script
+2025-08-07 11:32:27,533 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-07 11:32:27,534 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': np.float64(0.288986481121807), 'swing path': np.float64(5.042451069170933), 'attack angle': np.float64(6.947171768959719), 'side angle': np.float64(1.7017258575365446)}
+2025-08-07 11:32:38,181 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
