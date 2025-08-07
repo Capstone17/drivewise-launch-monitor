@@ -132,15 +132,15 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "400",
                     "144",
                     "387",
-                    "3000",
-                    "400",
+                    "5000",
+                    "2000",
                 ],
                 check=True,
             )
             logger.info("processing video now")
             # Process video
             result = process_video(
-                "tst.mp4",
+                "tst_skinny_240_fast.mp4",
                 "ball_coords.json",
                 "sticker_coords.json",
                 "ball_frames",
