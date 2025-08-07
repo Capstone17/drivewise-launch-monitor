@@ -19,6 +19,8 @@ import array
 import sys
 import subprocess
 import json
+import os
+import glob
 
 from video_ball_detector import process_video
 from metrics.ruleBasedSystem import rule_based_system
@@ -133,14 +135,23 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "144",
                     "387",
                     "5000",
-                    "2000",
+                    "375",
                 ],
                 check=True,
             )
             logger.info("processing video now")
+             # Find most recent tst*.mp4 file in output directory
+            output_dir = os.path.expanduser("~/Documents/webcamGolf")
+            mp4_files = glob.glob(os.path.join(output_dir, "tst*.mp4"))
+            if not mp4_files:
+                raise FileNotFoundError("No tst*.mp4 files found in webcamGolf directory")
+
+            latest_file = max(mp4_files, key=os.path.getmtime)
+            logger.info(f"Latest video file: {latest_file}")
+
             # Process video
             result = process_video(
-                "exposure_test/tst_skinny_240.mp4",
+                latest_file,
                 "ball_coords.json",
                 "sticker_coords.json",
                 "ball_frames",
