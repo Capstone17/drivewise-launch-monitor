@@ -85,12 +85,18 @@ def measure_ball(box):
     return cx, cy, radius_px, distance
 
 
-def preprocess_frame(frame: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Enhance ``frame`` for low light and return both color and gray images."""
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l = CLAHE.apply(l)
+    lab = cv2.merge((l, a, b))
+    enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    gray = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
     gray = CLAHE.apply(gray)
     if USE_BLUR:
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    return gray
+    return enhanced, gray
 
 
 def rotmat_to_quat(R: np.ndarray) -> np.ndarray:
@@ -220,7 +226,7 @@ def find_motion_window(
         ret, frame = cap.read()
         if not ret:
             break
-        gray = preprocess_frame(frame)
+        frame, gray = preprocess_frame(frame)
         corners, ids, _ = detector.detectMarkers(gray)
         if ids is not None and any(m_id[0] == DYNAMIC_ID for m_id in ids):
             if first is None:
@@ -308,21 +314,16 @@ def process_video(
         ret, frame = cap.read()
         if not ret:
             break
+        frame, gray = preprocess_frame(frame)
         if h is None:
             h, w = frame.shape[:2]
         t = frame_idx / video_fps
-        gray = preprocess_frame(frame)
-        gray = preprocess_frame(frame)
         results = None
-        in_window = start_frame <= frame_idx < end_frame
         in_window = start_frame <= frame_idx < end_frame
         if inference_start <= frame_idx < inference_end:
             start = time.perf_counter()
             results = model(frame, verbose=False, device=DEVICE)
             ball_time += time.perf_counter() - start
-
-        detected = False
-        detected_center: tuple[float, float, float] | None = None
 
         detected = False
         detected_center: tuple[float, float, float] | None = None
