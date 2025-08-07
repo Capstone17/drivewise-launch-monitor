@@ -19,8 +19,6 @@ import array
 import sys
 import subprocess
 import json
-import os
-import time
 
 from video_ball_detector import process_video
 from metrics.ruleBasedSystem import rule_based_system
@@ -139,19 +137,28 @@ class SwingAnalysisCharacteristic(Characteristic):
                 ],
                 check=True,
             )
-            time.sleep(0.5)
             logger.info("processing video now")
             # Process video
-            process_video(
+            result = process_video(
                 "tst.mp4",
                 "ball_coords.json",
                 "sticker_coords.json",
-                "ball_frames"
+                "ball_frames",
             )
-            time.sleep(0.5)
-            # Run metric calculations
-            self.service.shared_data = rule_based_system("mid-iron")
-            self.value = self.service.shared_data["metrics"]
+            if result == "skibidi":
+                # Run metric calculations only when processing succeeds
+                self.service.shared_data = rule_based_system("mid-iron")
+                self.value = self.service.shared_data["metrics"]
+            else:
+                logger.error(f"Unexpected video processing result: {result!r}")
+                self.service.shared_data["metrics"] = {
+                    'face angle': 0,
+                    'swing path': 0,
+                    'attack angle': 0,
+                    'side angle': 0
+                }
+                self.service.shared_data["feedback"] = "Swing analysis failed! Please try again."
+                self.value = self.service.shared_data["metrics"]
 
         except subprocess.CalledProcessError as e:
             logger.error(f"Shell script failed: {e}")
