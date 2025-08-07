@@ -244,8 +244,14 @@ def process_video(
     ball_path: str,
     sticker_path: str,
     frames_dir: str = "ball_frames",
-) -> None:
-    """Process ``video_path`` saving ball and sticker coordinates to JSON."""
+) -> str:
+    """Process ``video_path`` saving ball and sticker coordinates to JSON.
+
+    Returns
+    -------
+    str
+        The string ``"skibidi"`` when processing is complete.
+    """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
     # Scan for the sticker before expensive model compilation
@@ -638,6 +644,7 @@ def process_video(
     print(f"Sticker detection compile time: {sticker_compile_time:.2f}s")
     print(f"Ball detection time: {ball_time:.2f}s")
     print(f"Sticker detection time: {sticker_time:.2f}s")
+    return "skibidi"
 
 
 if __name__ == "__main__":

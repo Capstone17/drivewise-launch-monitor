@@ -19,8 +19,6 @@ import array
 import sys
 import subprocess
 import json
-import os
-import time
 
 from video_ball_detector import process_video
 from metrics.ruleBasedSystem import rule_based_system
@@ -139,16 +137,16 @@ class SwingAnalysisCharacteristic(Characteristic):
                 ],
                 check=True,
             )
-            time.sleep(0.5)
             logger.info("processing video now")
             # Process video
-            process_video(
+            result = process_video(
                 "tst.mp4",
                 "ball_coords.json",
                 "sticker_coords.json",
-                "ball_frames"
+                "ball_frames",
             )
-            time.sleep(0.5)
+            if result != "skibidi":
+                raise RuntimeError("Video processing did not complete")
             # Run metric calculations
             self.service.shared_data = rule_based_system("mid-iron")
             self.value = self.service.shared_data["metrics"]
