@@ -10,7 +10,7 @@ FOCAL_LENGTH = (CAMERA_MATRIX[0, 0] + CAMERA_MATRIX[1, 1]) / 2.0
 REAL_RADIUS = 21.35    # real radius in mm (e.g., for a golf ball ~21.35 mm)
 
 # Load the video
-video_path = 'tst.mp4'
+video_path = 'frame_0751.png'
 cap = cv2.VideoCapture(video_path)
 
 if not cap.isOpened():
