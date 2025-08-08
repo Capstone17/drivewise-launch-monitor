@@ -524,3 +524,69 @@
 2025-08-07 12:47:38,294 - __main__ - INFO - Registering GATT application...
 2025-08-07 12:47:38,307 - __main__ - INFO - GATT application registered
 2025-08-07 12:47:38,310 - __main__ - INFO - Advertisement registered
+2025-08-08 15:58:20,649 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-08 15:58:20,651 - __main__ - INFO - Registering GATT application...
+2025-08-08 15:58:20,662 - __main__ - INFO - GATT application registered
+2025-08-08 15:58:20,665 - __main__ - INFO - Advertisement registered
+2025-08-08 15:58:23,885 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-08 15:58:23,886 - __main__ - INFO - Registering GATT application...
+2025-08-08 15:58:23,896 - __main__ - INFO - GATT application registered
+2025-08-08 15:58:23,897 - __main__ - INFO - Advertisement registered
+2025-08-08 16:00:15,519 - __main__ - DEBUG - StartNotify called
+2025-08-08 16:00:15,519 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 16:00:19,989 - __main__ - DEBUG - Received write command
+2025-08-08 16:00:26,589 - __main__ - INFO - processing video now
+2025-08-08 16:00:26,590 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_3.mp4
+2025-08-08 16:01:08,343 - __main__ - DEBUG - Updated value after script
+2025-08-08 16:01:08,343 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 16:01:08,344 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': np.float64(0.774630629220436), 'swing path': np.float64(5.153908561227807), 'attack angle': np.float64(3.590322602139619), 'side angle': np.float64(2.075114008822647)}
+2025-08-08 16:10:37,828 - __main__ - DEBUG - StartNotify called
+2025-08-08 16:10:37,828 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 16:11:16,439 - __main__ - DEBUG - Received write command
+2025-08-08 16:11:22,484 - __main__ - INFO - processing video now
+2025-08-08 16:11:22,485 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_4.mp4
+2025-08-08 16:12:02,514 - __main__ - DEBUG - Updated value after script
+2025-08-08 16:12:02,514 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 16:12:02,515 - __main__ - DEBUG - Received write command
+2025-08-08 16:12:08,533 - __main__ - INFO - processing video now
+2025-08-08 16:12:08,534 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_5.mp4
+2025-08-08 16:12:46,863 - __main__ - DEBUG - Updated value after script
+2025-08-08 16:12:46,863 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 16:12:46,864 - __main__ - DEBUG - Received write command
+2025-08-08 16:12:52,881 - __main__ - INFO - processing video now
+2025-08-08 16:12:52,881 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_6.mp4
+2025-08-08 16:13:31,517 - __main__ - DEBUG - Updated value after script
+2025-08-08 16:13:31,518 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 16:13:31,518 - __main__ - DEBUG - Received write command
+2025-08-08 16:13:37,521 - __main__ - INFO - processing video now
+2025-08-08 16:13:37,522 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_7.mp4
+2025-08-08 16:14:16,506 - __main__ - DEBUG - Updated value after script
+2025-08-08 16:14:16,506 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 16:14:16,506 - __main__ - DEBUG - Received write command
+2025-08-08 16:14:22,513 - __main__ - INFO - processing video now
+2025-08-08 16:14:22,513 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_8.mp4
+2025-08-08 16:15:01,786 - __main__ - DEBUG - Updated value after script
+2025-08-08 16:15:01,786 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 16:15:01,786 - __main__ - DEBUG - Received write command
+2025-08-08 16:15:07,825 - __main__ - INFO - processing video now
+2025-08-08 16:15:07,825 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_9.mp4
+2025-08-08 16:15:48,374 - __main__ - DEBUG - Updated value after script
+2025-08-08 16:15:48,375 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 16:15:48,376 - __main__ - DEBUG - Received write command
+2025-08-08 16:16:13,699 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-08 16:16:13,701 - __main__ - INFO - Registering GATT application...
+2025-08-08 16:16:13,713 - __main__ - INFO - GATT application registered
+2025-08-08 16:16:13,716 - __main__ - INFO - Advertisement registered
+2025-08-08 16:17:11,300 - __main__ - DEBUG - StartNotify called
+2025-08-08 16:17:11,301 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 16:17:58,711 - __main__ - DEBUG - Received write command
+2025-08-08 16:18:05,271 - __main__ - INFO - processing video now
+2025-08-08 16:18:05,271 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_11.mp4
+2025-08-08 16:18:47,223 - __main__ - DEBUG - Updated value after script
+2025-08-08 16:18:47,223 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 16:20:00,925 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 16:20:48,261 - __main__ - DEBUG - Received write command
+2025-08-08 16:20:54,284 - __main__ - INFO - processing video now
+2025-08-08 16:20:54,285 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_12.mp4
+2025-08-08 16:21:32,822 - __main__ - DEBUG - Updated value after script
+2025-08-08 16:21:32,822 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
