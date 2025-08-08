@@ -151,7 +151,7 @@ class SwingAnalysisCharacteristic(Characteristic):
 
             # Process video
             result = process_video(
-                latest_file,
+                "Indoor_Sim_0807/tst_40.mp4",
                 "ball_coords.json",
                 "sticker_coords.json",
                 "ball_frames",
