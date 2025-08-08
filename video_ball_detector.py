@@ -85,12 +85,18 @@ def measure_ball(box):
     return cx, cy, radius_px, distance
 
 
-def preprocess_frame(frame: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Enhance ``frame`` for low light and return both color and gray images."""
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l = CLAHE.apply(l)
+    lab = cv2.merge((l, a, b))
+    enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    gray = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
     gray = CLAHE.apply(gray)
     if USE_BLUR:
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    return gray
+    return enhanced, gray
 
 
 def rotmat_to_quat(R: np.ndarray) -> np.ndarray:
@@ -173,6 +179,13 @@ def interpolate_poses(
 ) -> None:
     rvec0, tvec0 = last_rt
     rvec1, tvec1 = curr_rt
+    # Ensure translation vectors are 1D to avoid broadcasting issues during
+    # interpolation. The pose estimation functions sometimes return a column
+    # vector (shape (3, 1)), while other parts of the pipeline use a flat array
+    # (shape (3,)). Mixing these shapes causes numpy to broadcast the vectors
+    # into a larger matrix, resulting in more than three values when unpacking.
+    tvec0 = tvec0.reshape(3)
+    tvec1 = tvec1.reshape(3)
     q0 = rvec_to_quat(rvec0)
     q1 = rvec_to_quat(rvec1)
     for tm in times:
@@ -220,7 +233,10 @@ def find_motion_window(
         ret, frame = cap.read()
         if not ret:
             break
-        gray = preprocess_frame(frame)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = CLAHE.apply(gray)
+        if USE_BLUR:
+            gray = cv2.GaussianBlur(gray, (3, 3), 0)
         corners, ids, _ = detector.detectMarkers(gray)
         if ids is not None and any(m_id[0] == DYNAMIC_ID for m_id in ids):
             if first is None:
@@ -308,21 +324,21 @@ def process_video(
         ret, frame = cap.read()
         if not ret:
             break
+        orig = frame
+        frame, gray = preprocess_frame(frame)
+        marker_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
+        marker_gray = CLAHE.apply(marker_gray)
+        if USE_BLUR:
+            marker_gray = cv2.GaussianBlur(marker_gray, (3, 3), 0)
         if h is None:
             h, w = frame.shape[:2]
         t = frame_idx / video_fps
-        gray = preprocess_frame(frame)
-        gray = preprocess_frame(frame)
         results = None
-        in_window = start_frame <= frame_idx < end_frame
         in_window = start_frame <= frame_idx < end_frame
         if inference_start <= frame_idx < inference_end:
             start = time.perf_counter()
             results = model(frame, verbose=False, device=DEVICE)
             ball_time += time.perf_counter() - start
-
-        detected = False
-        detected_center: tuple[float, float, float] | None = None
 
         detected = False
         detected_center: tuple[float, float, float] | None = None
@@ -492,7 +508,7 @@ def process_video(
 
 
         sticker_start = time.perf_counter()
-        corners, ids, _ = aruco_detector.detectMarkers(gray)
+        corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
         sticker_time += time.perf_counter() - sticker_start
         current_rt = None
         current_pose = None
@@ -515,7 +531,9 @@ def process_video(
                         DIST_COEFFS,
                     )
                     rvec = rvecs[0, 0]
-                    tvec = tvecs[0, 0]
+                    # Flatten the translation vector to a 1D array for
+                    # consistency with solvePnP outputs.
+                    tvec = tvecs[0, 0].reshape(3)
                     x, y, z = tvec
                     curr_q = rvec_to_quat(rvec)
                     if last_dynamic_rt is not None:
@@ -538,7 +556,7 @@ def process_video(
                         2,
                     )
         if current_rt is None and tracker_corners is not None and prev_gray is not None:
-            new_corners, st, err = cv2.calcOpticalFlowPyrLK(prev_gray, gray, tracker_corners, None)
+            new_corners, st, err = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
             if st.sum() == 4:
                 object_pts = np.array(
                     [
@@ -553,7 +571,11 @@ def process_video(
                     object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
                 )
                 if ok:
-                    x, y, z = tvec.ravel()
+                    # ``solvePnP`` returns a column vector; flatten it so that the
+                    # rest of the pipeline always works with a 1D translation
+                    # vector.
+                    tvec = tvec.reshape(3)
+                    x, y, z = tvec
                     curr_q = rvec_to_quat(rvec)
                     if last_dynamic_rt is not None:
                         prev_q = rvec_to_quat(last_dynamic_rt[0])
@@ -574,7 +596,7 @@ def process_video(
                         2,
                     )
                 tracker_corners = new_corners
-                prev_gray = gray
+                prev_gray = marker_gray
             else:
                 tracker_corners = None
                 prev_gray = None
@@ -619,7 +641,7 @@ def process_video(
             missing_frames = 0
             if dynamic_corner is not None:
                 tracker_corners = dynamic_corner.reshape(4, 1, 2).astype(np.float32)
-            prev_gray = gray
+            prev_gray = marker_gray
         if current_rt is None:
             missing_frames = len(pending_times)
 
@@ -648,7 +670,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "Indoor_Sim_0807/tst_44.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "tst_2.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
