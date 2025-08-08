@@ -24,11 +24,17 @@ DEVICE = (
     else "cpu"
 )
 
-ACTUAL_BALL_RADIUS = 2.38
+ACTUAL_BALL_RADIUS = 2.135
 FOCAL_LENGTH = 1755.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 2.38
-MIN_BALL_RADIUS_PX = 9  # pixels
+MIN_BALL_RADIUS_PX = 5  # pixels
+
+BALL_CLASS_ID = 0
+YOLO_CONF = 0.10
+YOLO_IOU = 0.50
+# ONNX model expects 512x512 input; override default 960 size
+YOLO_IMGSZ = 512
 
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
@@ -211,7 +217,7 @@ def interpolate_poses(
 def find_motion_window(
     video_path: str,
     *,
-    pad_frames: int = 20,
+    pad_frames: int = 40,
     max_frames: int = MAX_MOTION_FRAMES,
 ) -> tuple[int, int, bool]:
     """Return the frame range surrounding the dynamic sticker and whether it was found.
@@ -287,8 +293,8 @@ def process_video(
     cap = cv2.VideoCapture(video_path)
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    inference_start = max(0, start_frame - 5)
-    inference_end = min(total_frames, end_frame + 5)
+    inference_start = max(0, start_frame - 15)
+    inference_end = min(total_frames, end_frame + 15)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     if frames_dir:
@@ -314,10 +320,9 @@ def process_video(
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
     ball_velocity = np.zeros(2, dtype=float)
-    # Tracking of last detected ball position and velocity
-    last_ball_center: np.ndarray | None = None
-    last_ball_radius: float | None = None
-    ball_velocity = np.zeros(2, dtype=float)
+    out_of_frame_streak = 0
+    min_detected_rad = float("inf")
+    max_detected_rad = 0.0
 
     frame_idx = 0
     while True:
@@ -335,18 +340,83 @@ def process_video(
         t = frame_idx / video_fps
         results = None
         in_window = start_frame <= frame_idx < end_frame
+        roi_y0 = int(h * 0.35)
+        roi = frame[roi_y0:h, :]
+        gray_roi = gray[roi_y0:h, :]
+        roi_h, roi_w = gray_roi.shape[:2]
+        min_ball_radius_px = MIN_BALL_RADIUS_PX
+        if h < 400:
+            min_ball_radius_px = max(4, int(0.008 * min(h, w)))
         if inference_start <= frame_idx < inference_end:
             start = time.perf_counter()
-            results = model(frame, verbose=False, device=DEVICE)
+            results = model(
+                roi,
+                verbose=False,
+                device=DEVICE,
+                conf=YOLO_CONF,
+                iou=YOLO_IOU,
+                classes=[BALL_CLASS_ID],
+                imgsz=YOLO_IMGSZ,
+            )
             ball_time += time.perf_counter() - start
 
         detected = False
         detected_center: tuple[float, float, float] | None = None
-        if results and len(results[0].boxes) > 0:
+        pred_conf = 0.0
+        pred_rad = 0.0
+
+        # Cold-start Hough if no previous center
+        if (
+            not detected
+            and in_window
+            and last_ball_center is None
+            and inference_start <= frame_idx < inference_end
+        ):
+            circles = cv2.HoughCircles(
+                gray_roi,
+                cv2.HOUGH_GRADIENT,
+                dp=1.2,
+                minDist=max(6, int(0.02 * roi_h)),
+                param1=120,
+                param2=14,
+                minRadius=int(min_ball_radius_px),
+                maxRadius=int(min(roi_h, roi_w) * 0.06),
+            )
+            if circles is not None:
+                cx, cy, rad = np.round(circles[0, 0]).astype(int)
+                cy += roi_y0
+                distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
+                bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
+                by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+                bz = distance - 30.0
+                ball_coords.append(
+                    {
+                        "time": round(t, 3),
+                        "x": round(bx, 2),
+                        "y": round(by, 2),
+                        "z": round(bz, 2),
+                    }
+                )
+                cv2.circle(frame, (int(cx), int(cy)), int(rad), (255, 0, 0), 2)
+                last_ball_center = np.array([cx, cy])
+                last_ball_radius = rad
+                detected_center = (cx, cy, rad)
+                detected = True
+                pred_rad = rad
+
+        # YOLO detection on ROI
+        if (
+            not detected
+            and results
+            and len(results[0].boxes) > 0
+        ):
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
+            pred_conf = float(boxes.conf[best_idx])
             cx, cy, rad, distance = measure_ball(boxes[best_idx])
-            if rad >= MIN_BALL_RADIUS_PX:
+            cy += roi_y0
+            pred_rad = rad
+            if rad >= min_ball_radius_px:
                 bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
                 by = (cy - h / 2.0) * distance / FOCAL_LENGTH
                 bz = distance - 30.0
@@ -376,18 +446,20 @@ def process_video(
                 detected_center = (cx, cy, rad)
                 detected = True
 
+        # Velocity-guided Hough
         if (
             not detected
             and in_window
             and last_ball_center is not None
             and last_ball_radius is not None
         ):
-            expected_center = last_ball_center + ball_velocity
-            rate_motion = 0.1
-            min_r = int(max(last_ball_radius * (1-rate_motion), MIN_BALL_RADIUS_PX - 2))
-            max_r = int(last_ball_radius * (1+rate_motion))
+            expected_center_full = last_ball_center + ball_velocity
+            expected_center = expected_center_full - np.array([0, roi_y0])
+            rate_motion = 0.2
+            min_r = int(max(last_ball_radius * (1 - rate_motion), min_ball_radius_px - 2))
+            max_r = int(last_ball_radius * (1 + rate_motion))
             circles = cv2.HoughCircles(
-                gray,
+                gray_roi,
                 cv2.HOUGH_GRADIENT,
                 dp=1.2,
                 minDist=max(5, int(last_ball_radius * 2)),
@@ -399,33 +471,55 @@ def process_video(
             if circles is not None:
                 c = np.round(circles[0, :]).astype(int)
                 ex, ey = expected_center
-                # choose circle nearest expected center
                 cx, cy, rad = min(
                     c,
                     key=lambda cir: (cir[0] - ex) ** 2 + (cir[1] - ey) ** 2,
                 )
                 dist = np.hypot(cx - ex, cy - ey)
                 if dist <= 2.0 * last_ball_radius and min_r <= rad <= max_r:
-                    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
-                    bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-                    by = (cy - h / 2.0) * distance / FOCAL_LENGTH
-                    bz = distance - 30.0
-                    ball_coords.append(
-                        {
-                            "time": round(t, 3),
-                            "x": round(bx, 2),
-                            "y": round(by, 2),
-                            "z": round(bz, 2),
-                        }
-                    )
-                    cv2.circle(frame, (int(cx), int(cy)), int(rad), (255, 0, 0), 2)
-                    if last_ball_center is not None:
+                    # Roundness check
+                    x0 = max(cx - rad, 0)
+                    y0 = max(cy - rad, 0)
+                    x1 = min(cx + rad, roi_w)
+                    y1 = min(cy + rad, roi_h)
+                    patch = gray_roi[y0:y1, x0:x1]
+                    round_ok = False
+                    if patch.size > 0:
+                        _, th = cv2.threshold(
+                            patch, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+                        )
+                        cnts, _ = cv2.findContours(
+                            th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                        )
+                        if cnts:
+                            x, y, w_box, h_box = cv2.boundingRect(
+                                max(cnts, key=cv2.contourArea)
+                            )
+                            if (w_box + h_box) > 0 and abs(w_box - h_box) / (w_box + h_box) < 0.25:
+                                round_ok = True
+                    if round_ok:
+                        cy += roi_y0
+                        distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
+                        bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
+                        by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+                        bz = distance - 30.0
+                        ball_coords.append(
+                            {
+                                "time": round(t, 3),
+                                "x": round(bx, 2),
+                                "y": round(by, 2),
+                                "z": round(bz, 2),
+                            }
+                        )
+                        cv2.circle(frame, (int(cx), int(cy)), int(rad), (255, 0, 0), 2)
                         ball_velocity = np.array([cx, cy]) - last_ball_center
-                    last_ball_center = np.array([cx, cy])
-                    last_ball_radius = rad
-                    detected_center = (cx, cy, rad)
-                    detected = True
+                        last_ball_center = np.array([cx, cy])
+                        last_ball_radius = rad
+                        detected_center = (cx, cy, rad)
+                        detected = True
+                        pred_rad = rad
 
+        # Boundary handling
         if detected and detected_center is not None:
             cx, cy, rad = detected_center
             if (
@@ -434,77 +528,33 @@ def process_video(
                 or cx + rad >= w
                 or cy + rad >= h
             ):
+                out_of_frame_streak += 1
+            else:
+                out_of_frame_streak = 0
+            if out_of_frame_streak >= 3:
                 print("Ball exited frame; stopping detection")
                 break
+            if last_ball_center is not None:
+                ball_velocity = np.array([cx, cy]) - last_ball_center
+            last_ball_center = np.array([cx, cy])
+            last_ball_radius = rad
 
-
-                if last_ball_center is not None:
-                    ball_velocity = np.array([cx, cy]) - last_ball_center
-                last_ball_center = np.array([cx, cy])
-                last_ball_radius = rad
-                detected_center = (cx, cy, rad)
-                detected = True
-
-        if (
-            not detected
-            and in_window
-            and last_ball_center is not None
-            and last_ball_radius is not None
-        ):
-            expected_center = last_ball_center + ball_velocity
-            rate_motion = 0.1
-            min_r = int(max(last_ball_radius * (1-rate_motion), MIN_BALL_RADIUS_PX - 2))
-            max_r = int(last_ball_radius * (1+rate_motion))
-            circles = cv2.HoughCircles(
-                gray,
-                cv2.HOUGH_GRADIENT,
-                dp=1.2,
-                minDist=max(5, int(last_ball_radius * 2)),
-                param1=100,
-                param2=15,
-                minRadius=min_r,
-                maxRadius=max_r,
-            )
-            if circles is not None:
-                c = np.round(circles[0, :]).astype(int)
-                ex, ey = expected_center
-                # choose circle nearest expected center
-                cx, cy, rad = min(
-                    c,
-                    key=lambda cir: (cir[0] - ex) ** 2 + (cir[1] - ey) ** 2,
-                )
-                dist = np.hypot(cx - ex, cy - ey)
-                if dist <= 2.0 * last_ball_radius and min_r <= rad <= max_r:
-                    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
-                    bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-                    by = (cy - h / 2.0) * distance / FOCAL_LENGTH
-                    bz = distance - 30.0
-                    ball_coords.append(
-                        {
-                            "time": round(t, 3),
-                            "x": round(bx, 2),
-                            "y": round(by, 2),
-                            "z": round(bz, 2),
-                        }
-                    )
-                    cv2.circle(frame, (int(cx), int(cy)), int(rad), (255, 0, 0), 2)
-                    if last_ball_center is not None:
-                        ball_velocity = np.array([cx, cy]) - last_ball_center
-                    last_ball_center = np.array([cx, cy])
-                    last_ball_radius = rad
-                    detected_center = (cx, cy, rad)
-                    detected = True
-
-        if detected and detected_center is not None:
-            cx, cy, rad = detected_center
-            if (
-                cx - rad <= 0
-                or cy - rad <= 0
-                or cx + rad >= w
-                or cy + rad >= h
-            ):
-                print("Ball exited frame; stopping detection")
-                break
+        # ROI box and debug text
+        cv2.rectangle(frame, (0, roi_y0), (w - 1, h - 1), (0, 255, 255), 1)
+        cv2.putText(
+            frame,
+            f"conf:{pred_conf:.2f} rad:{pred_rad:.1f}",
+            (10, 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        if pred_rad > 0:
+            min_detected_rad = min(min_detected_rad, pred_rad)
+            max_detected_rad = max(max_detected_rad, pred_rad)
+        print(f"Frame {frame_idx}: conf={pred_conf:.2f}, rad={pred_rad:.1f}")
 
 
         sticker_start = time.perf_counter()
@@ -666,6 +716,10 @@ def process_video(
     print(f"Sticker detection compile time: {sticker_compile_time:.2f}s")
     print(f"Ball detection time: {ball_time:.2f}s")
     print(f"Sticker detection time: {sticker_time:.2f}s")
+    if max_detected_rad > 0 and min_detected_rad < float("inf"):
+        print(
+            f"Radius range: {min_detected_rad:.1f}px - {max_detected_rad:.1f}px"
+        )
     return "skibidi"
 
 
