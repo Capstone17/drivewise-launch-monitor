@@ -324,9 +324,8 @@ def process_video(
         ret, frame = cap.read()
         if not ret:
             break
-        orig = frame
-        frame, gray = preprocess_frame(frame)
-        marker_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
+        _, gray = preprocess_frame(frame)
+        marker_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         marker_gray = CLAHE.apply(marker_gray)
         if USE_BLUR:
             marker_gray = cv2.GaussianBlur(marker_gray, (3, 3), 0)
