@@ -42,10 +42,12 @@ ARUCO_PARAMS.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
 ARUCO_PARAMS.adaptiveThreshWinSizeMin = 3
 ARUCO_PARAMS.adaptiveThreshWinSizeMax = 53
 ARUCO_PARAMS.adaptiveThreshWinSizeStep = 4
-ARUCO_PARAMS.minMarkerPerimeterRate = 0.02
-ARUCO_PARAMS.polygonalApproxAccuracyRate = 0.03
-ARUCO_PARAMS.cornerRefinementWinSize = 7
-ARUCO_PARAMS.cornerRefinementMinAccuracy = 0.01
+ARUCO_PARAMS.minMarkerPerimeterRate = 0.015
+ARUCO_PARAMS.maxMarkerPerimeterRate = 4.0
+ARUCO_PARAMS.polygonalApproxAccuracyRate = 0.04
+ARUCO_PARAMS.cornerRefinementWinSize = 9
+ARUCO_PARAMS.cornerRefinementMaxIterations = 50
+ARUCO_PARAMS.cornerRefinementMinAccuracy = 1e-3
 ARUCO_PARAMS.adaptiveThreshConstant = 7
 
 DYNAMIC_ID = 0
@@ -204,14 +206,145 @@ def interpolate_poses(
                 "roll": round(float(roll), 2),
                 "pitch": round(float(pitch), 2),
                 "yaw": round(float(yaw), 2),
+                "interpolated": True,
             }
         )
 
 
+def order_corners_clockwise(pts: np.ndarray, last_pts: np.ndarray | None) -> np.ndarray:
+    """Return corners in clockwise order starting from top-left.
+
+    If ``last_pts`` is provided, choose the rotation that minimizes the distance
+    to ``last_pts``.
+    """
+    pts = pts.reshape(4, 2).astype(np.float32)
+    s = pts.sum(axis=1)
+    diff = np.diff(pts, axis=1).ravel()
+    ordered = np.zeros((4, 2), dtype=np.float32)
+    ordered[0] = pts[np.argmin(s)]  # top-left
+    ordered[2] = pts[np.argmax(s)]  # bottom-right
+    ordered[1] = pts[np.argmin(diff)]  # top-right
+    ordered[3] = pts[np.argmax(diff)]  # bottom-left
+    if last_pts is not None:
+        candidates = [np.roll(ordered, k, axis=0) for k in range(4)]
+        ordered = min(candidates, key=lambda p: np.linalg.norm(p - last_pts))
+    return ordered
+
+
+def sanitize_corners(corners: np.ndarray, last_pts: np.ndarray | None) -> np.ndarray | None:
+    """Validate that ``corners`` form a plausible marker and return ordered pts."""
+    pts = order_corners_clockwise(corners, last_pts)
+    cross = []
+    for i in range(4):
+        a = pts[(i + 1) % 4] - pts[i]
+        b = pts[(i + 2) % 4] - pts[(i + 1) % 4]
+        cross.append(np.cross(a, b))
+    cross = np.array(cross)
+    if not (np.all(cross > 0) or np.all(cross < 0)):
+        return None
+    sides = np.linalg.norm(pts - np.roll(pts, -1, axis=0), axis=1)
+    if sides.max() / sides.min() > 1.6:
+        return None
+    for i in range(4):
+        p0 = pts[i]
+        p1 = pts[(i - 1) % 4]
+        p2 = pts[(i + 1) % 4]
+        v1 = p1 - p0
+        v2 = p2 - p0
+        ang = np.degrees(
+            np.arccos(
+                np.clip(
+                    np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)),
+                    -1.0,
+                    1.0,
+                )
+            )
+        )
+        if not 60.0 <= ang <= 120.0:
+            return None
+    return pts
+
+
+def track_corners(
+    prev_gray: np.ndarray, curr_gray: np.ndarray, last_pts: np.ndarray
+) -> np.ndarray | None:
+    lk_params = dict(
+        winSize=(15, 15),
+        maxLevel=2,
+        criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01),
+    )
+    x0 = max(int(last_pts[:, 0].min() - 80), 0)
+    y0 = max(int(last_pts[:, 1].min() - 80), 0)
+    x1 = min(int(last_pts[:, 0].max() + 80), prev_gray.shape[1])
+    y1 = min(int(last_pts[:, 1].max() + 80), prev_gray.shape[0])
+    prev_roi = prev_gray[y0:y1, x0:x1]
+    curr_roi = curr_gray[y0:y1, x0:x1]
+    pts0 = (last_pts - np.array([x0, y0])).reshape(-1, 1, 2).astype(np.float32)
+    pts1, st, _ = cv2.calcOpticalFlowPyrLK(prev_roi, curr_roi, pts0, None, **lk_params)
+    if pts1 is not None:
+        pts1 += np.array([x0, y0], dtype=np.float32)
+    st = st.reshape(-1).astype(bool)
+    if st.sum() < 2:
+        return None
+    prev_in = last_pts[st]
+    curr_in = pts1.reshape(-1, 2)[st]
+    H, mask = cv2.findHomography(prev_in, curr_in, cv2.RANSAC, 5.0)
+    if H is not None and mask.sum() >= 2:
+        pred = cv2.perspectiveTransform(last_pts.reshape(-1, 1, 2), H).reshape(4, 2)
+    else:
+        shift = curr_in.mean(axis=0) - prev_in.mean(axis=0)
+        pred = last_pts + shift
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 1e-3)
+    pred = cv2.cornerSubPix(curr_gray, pred.reshape(-1, 1, 2), (7, 7), (-1, -1), criteria)
+    return pred.reshape(4, 2)
+
+
+def rotation_angle(rvec1: np.ndarray, rvec2: np.ndarray) -> float:
+    R1, _ = cv2.Rodrigues(rvec1)
+    R2, _ = cv2.Rodrigues(rvec2)
+    R = R2 @ R1.T
+    angle = np.degrees(np.arccos(np.clip((np.trace(R) - 1) / 2.0, -1.0, 1.0)))
+    return float(angle)
+
+
+def solve_pose(
+    img_pts: np.ndarray, last_rt: tuple[np.ndarray, np.ndarray] | None
+) -> tuple[np.ndarray, np.ndarray] | None:
+    object_pts = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [DYNAMIC_MARKER_LENGTH, 0.0, 0.0],
+            [DYNAMIC_MARKER_LENGTH, DYNAMIC_MARKER_LENGTH, 0.0],
+            [0.0, DYNAMIC_MARKER_LENGTH, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    ok, rvecs, tvecs, reproj = cv2.solvePnPGeneric(
+        object_pts,
+        img_pts.reshape(-1, 2),
+        CAMERA_MATRIX,
+        DIST_COEFFS,
+        flags=cv2.SOLVEPNP_IPPE_SQUARE,
+    )
+    if not ok or len(rvecs) == 0:
+        return None
+    errors = [np.sqrt((e ** 2).mean()) for e in reproj]
+    idx = int(np.argmin(errors))
+    if errors[idx] > 2.0:
+        return None
+    rvec = rvecs[idx]
+    tvec = tvecs[idx].reshape(3)
+    if last_rt is not None:
+        dt = np.linalg.norm(tvec - last_rt[1].reshape(3))
+        drot = rotation_angle(last_rt[0], rvec)
+        if dt > 0.05 or drot > 25.0:
+            return None
+    return rvec, tvec
+
 def find_motion_window(
     video_path: str,
     *,
-    pad_frames: int = 20,
+    pad_frames: int = 60,
     max_frames: int = MAX_MOTION_FRAMES,
 ) -> tuple[int, int, bool]:
     """Return the frame range surrounding the dynamic sticker and whether it was found.
@@ -306,7 +439,7 @@ def process_video(
     last_dynamic_rt = None
     last_dynamic_quat = None
     last_valid_time = None
-    tracker_corners = None
+    last_img_pts: np.ndarray | None = None
     prev_gray = None
     pending_times: list[float] = []
     missing_frames = 0
@@ -513,97 +646,58 @@ def process_video(
         current_rt = None
         current_pose = None
         current_quat = None
-        dynamic_corner = None
-        if ids is not None and len(ids) > 0:
-            valid = [
-                corners[i]
-                for i in range(len(ids))
-                if ids[i][0] == DYNAMIC_ID
-            ]
-            if valid:
-                valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
-                cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
-                for corner in valid:
-                    rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                        [corner],
-                        DYNAMIC_MARKER_LENGTH,
-                        CAMERA_MATRIX,
-                        DIST_COEFFS,
-                    )
-                    rvec = rvecs[0, 0]
-                    # Flatten the translation vector to a 1D array for
-                    # consistency with solvePnP outputs.
-                    tvec = tvecs[0, 0].reshape(3)
-                    x, y, z = tvec
-                    curr_q = rvec_to_quat(rvec)
-                    if last_dynamic_rt is not None:
-                        prev_q = rvec_to_quat(last_dynamic_rt[0])
-                        if np.dot(curr_q, prev_q) < 0.0:
-                            curr_q = -curr_q
-                            rvec = quat_to_rvec(curr_q)
-                    roll, pitch, yaw = rvec_to_euler(rvec)
-                    current_rt = (rvec, tvec)
-                    current_pose = (x, y, z, roll, pitch, yaw)
-                    current_quat = curr_q
-                    dynamic_corner = corner
-                    cv2.drawFrameAxes(
-                        frame,
-                        CAMERA_MATRIX,
-                        DIST_COEFFS,
-                        rvec,
-                        tvec,
-                        DYNAMIC_MARKER_LENGTH * 0.5,
-                        2,
-                    )
-        if current_rt is None and tracker_corners is not None and prev_gray is not None:
-            new_corners, st, err = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
-            if st.sum() == 4:
-                object_pts = np.array(
-                    [
-                        [0.0, 0.0, 0.0],
-                        [DYNAMIC_MARKER_LENGTH, 0.0, 0.0],
-                        [DYNAMIC_MARKER_LENGTH, DYNAMIC_MARKER_LENGTH, 0.0],
-                        [0.0, DYNAMIC_MARKER_LENGTH, 0.0],
-                    ],
-                    dtype=np.float32,
+        img_pts = None
+        if ids is not None and len(ids) > 0 and DYNAMIC_ID in ids.flatten():
+            idx = list(ids.flatten()).index(DYNAMIC_ID)
+            corner = corners[idx].reshape(4, 2)
+            cv2.aruco.drawDetectedMarkers(frame, [corners[idx]], np.array([[DYNAMIC_ID]]))
+            criteria = (
+                cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+                50,
+                1e-3,
+            )
+            corner = cv2.cornerSubPix(
+                marker_gray,
+                corner.reshape(-1, 1, 2),
+                (7, 7),
+                (-1, -1),
+                criteria,
+            ).reshape(4, 2)
+            img_pts = sanitize_corners(corner, last_img_pts)
+        if img_pts is None and last_img_pts is not None and prev_gray is not None:
+            tracked = track_corners(prev_gray, marker_gray, last_img_pts)
+            if tracked is not None:
+                img_pts = sanitize_corners(tracked, last_img_pts)
+        if img_pts is not None:
+            rt = solve_pose(img_pts, last_dynamic_rt)
+            if rt is not None:
+                rvec, tvec = rt
+                x, y, z = tvec
+                curr_q = rvec_to_quat(rvec)
+                if last_dynamic_rt is not None:
+                    prev_q = rvec_to_quat(last_dynamic_rt[0])
+                    if np.dot(curr_q, prev_q) < 0.0:
+                        curr_q = -curr_q
+                        rvec = quat_to_rvec(curr_q)
+                roll, pitch, yaw = rvec_to_euler(rvec)
+                current_rt = (rvec, tvec)
+                current_pose = (x, y, z, roll, pitch, yaw)
+                current_quat = curr_q
+                cv2.drawFrameAxes(
+                    frame,
+                    CAMERA_MATRIX,
+                    DIST_COEFFS,
+                    rvec,
+                    tvec,
+                    DYNAMIC_MARKER_LENGTH * 0.5,
+                    2,
                 )
-                ok, rvec, tvec = cv2.solvePnP(
-                    object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
-                )
-                if ok:
-                    # ``solvePnP`` returns a column vector; flatten it so that the
-                    # rest of the pipeline always works with a 1D translation
-                    # vector.
-                    tvec = tvec.reshape(3)
-                    x, y, z = tvec
-                    curr_q = rvec_to_quat(rvec)
-                    if last_dynamic_rt is not None:
-                        prev_q = rvec_to_quat(last_dynamic_rt[0])
-                        if np.dot(curr_q, prev_q) < 0.0:
-                            curr_q = -curr_q
-                            rvec = quat_to_rvec(curr_q)
-                    roll, pitch, yaw = rvec_to_euler(rvec)
-                    current_rt = (rvec, tvec)
-                    current_pose = (x, y, z, roll, pitch, yaw)
-                    current_quat = curr_q
-                    cv2.drawFrameAxes(
-                        frame,
-                        CAMERA_MATRIX,
-                        DIST_COEFFS,
-                        rvec,
-                        tvec,
-                        DYNAMIC_MARKER_LENGTH * 0.5,
-                        2,
-                    )
-                tracker_corners = new_corners
-                prev_gray = marker_gray
-            else:
-                tracker_corners = None
-                prev_gray = None
+                last_img_pts = img_pts
+                prev_gray = marker_gray.copy()
         if current_rt is None:
             pending_times.append(t)
             if len(pending_times) > MAX_MISSING_FRAMES:
-                tracker_corners = None
+                last_img_pts = None
                 prev_gray = None
                 last_dynamic_pose = None
                 last_dynamic_rt = None
@@ -632,6 +726,7 @@ def process_video(
                     "roll": round(float(roll), 2),
                     "pitch": round(float(pitch), 2),
                     "yaw": round(float(yaw), 2),
+                    "interpolated": False,
                 }
             )
             last_dynamic_pose = current_pose
@@ -639,9 +734,6 @@ def process_video(
             last_dynamic_quat = current_quat
             last_valid_time = t
             missing_frames = 0
-            if dynamic_corner is not None:
-                tracker_corners = dynamic_corner.reshape(4, 1, 2).astype(np.float32)
-            prev_gray = marker_gray
         if current_rt is None:
             missing_frames = len(pending_times)
 
