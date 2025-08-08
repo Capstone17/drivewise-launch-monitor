@@ -379,6 +379,54 @@ def process_video(
         if (
             not detected
             and in_window
+            and len(ball_coords) == 0
+            and frame_idx < start_frame + 5
+        ):
+            # If YOLO fails to detect the ball in the initial frames of the
+            # motion window, fall back to a coarse circle search around the
+            # center of the frame while the ball is still on the ground. This
+            # provides an initial location so that subsequent tracking has a
+            # starting point.
+            cx_mid, cy_mid = w // 2, h // 2
+            rx, ry = int(w * 0.15), int(h * 0.15)
+            x0, x1 = cx_mid - rx, cx_mid + rx
+            y0, y1 = cy_mid - ry, cy_mid + ry
+            center_roi = gray[y0:y1, x0:x1]
+            circles = cv2.HoughCircles(
+                center_roi,
+                cv2.HOUGH_GRADIENT,
+                dp=1.2,
+                minDist=5,
+                param1=100,
+                param2=15,
+                minRadius=MIN_BALL_RADIUS_PX,
+                maxRadius=int(MIN_BALL_RADIUS_PX * 3),
+            )
+            if circles is not None:
+                cx, cy, rad = np.round(circles[0, 0]).astype(int)
+                cx += x0
+                cy += y0
+                distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
+                bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
+                by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+                bz = distance - 30.0
+                ball_coords.append(
+                    {
+                        "time": round(t, 3),
+                        "x": round(bx, 2),
+                        "y": round(by, 2),
+                        "z": round(bz, 2),
+                    }
+                )
+                cv2.circle(frame, (int(cx), int(cy)), int(rad), (0, 255, 255), 2)
+                last_ball_center = np.array([cx, cy])
+                last_ball_radius = rad
+                detected_center = (cx, cy, rad)
+                detected = True
+
+        if (
+            not detected
+            and in_window
             and last_ball_center is not None
             and last_ball_radius is not None
         ):
