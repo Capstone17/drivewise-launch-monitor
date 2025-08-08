@@ -85,12 +85,18 @@ def measure_ball(box):
     return cx, cy, radius_px, distance
 
 
-def preprocess_frame(frame: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Enhance ``frame`` for low light and return both color and gray images."""
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l = CLAHE.apply(l)
+    lab = cv2.merge((l, a, b))
+    enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    gray = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
     gray = CLAHE.apply(gray)
     if USE_BLUR:
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    return gray
+    return enhanced, gray
 
 
 def rotmat_to_quat(R: np.ndarray) -> np.ndarray:
@@ -220,7 +226,10 @@ def find_motion_window(
         ret, frame = cap.read()
         if not ret:
             break
-        gray = preprocess_frame(frame)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = CLAHE.apply(gray)
+        if USE_BLUR:
+            gray = cv2.GaussianBlur(gray, (3, 3), 0)
         corners, ids, _ = detector.detectMarkers(gray)
         if ids is not None and any(m_id[0] == DYNAMIC_ID for m_id in ids):
             if first is None:
@@ -308,21 +317,21 @@ def process_video(
         ret, frame = cap.read()
         if not ret:
             break
+        orig = frame
+        frame, gray = preprocess_frame(frame)
+        marker_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
+        marker_gray = CLAHE.apply(marker_gray)
+        if USE_BLUR:
+            marker_gray = cv2.GaussianBlur(marker_gray, (3, 3), 0)
         if h is None:
             h, w = frame.shape[:2]
         t = frame_idx / video_fps
-        gray = preprocess_frame(frame)
-        gray = preprocess_frame(frame)
         results = None
-        in_window = start_frame <= frame_idx < end_frame
         in_window = start_frame <= frame_idx < end_frame
         if inference_start <= frame_idx < inference_end:
             start = time.perf_counter()
             results = model(frame, verbose=False, device=DEVICE)
             ball_time += time.perf_counter() - start
-
-        detected = False
-        detected_center: tuple[float, float, float] | None = None
 
         detected = False
         detected_center: tuple[float, float, float] | None = None
@@ -492,7 +501,7 @@ def process_video(
 
 
         sticker_start = time.perf_counter()
-        corners, ids, _ = aruco_detector.detectMarkers(gray)
+        corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
         sticker_time += time.perf_counter() - sticker_start
         current_rt = None
         current_pose = None
@@ -538,7 +547,7 @@ def process_video(
                         2,
                     )
         if current_rt is None and tracker_corners is not None and prev_gray is not None:
-            new_corners, st, err = cv2.calcOpticalFlowPyrLK(prev_gray, gray, tracker_corners, None)
+            new_corners, st, err = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
             if st.sum() == 4:
                 object_pts = np.array(
                     [
@@ -574,7 +583,7 @@ def process_video(
                         2,
                     )
                 tracker_corners = new_corners
-                prev_gray = gray
+                prev_gray = marker_gray
             else:
                 tracker_corners = None
                 prev_gray = None
@@ -619,7 +628,7 @@ def process_video(
             missing_frames = 0
             if dynamic_corner is not None:
                 tracker_corners = dynamic_corner.reshape(4, 1, 2).astype(np.float32)
-            prev_gray = gray
+            prev_gray = marker_gray
         if current_rt is None:
             missing_frames = len(pending_times)
 
