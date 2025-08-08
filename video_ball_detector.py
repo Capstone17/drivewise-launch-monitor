@@ -33,8 +33,7 @@ MIN_BALL_RADIUS_PX = 5  # pixels
 BALL_CLASS_ID = 0
 YOLO_CONF = 0.10
 YOLO_IOU = 0.50
-# ONNX model expects 512x512 input; override default 960 size
-YOLO_IMGSZ = 512
+YOLO_IMGSZ = 960
 
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
