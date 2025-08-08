@@ -1,4 +1,4 @@
-from metric_calculation_3_metrics import *
+from .metric_calculation_3_metrics import *
 import json
 import os
 import matplotlib.pyplot as plt
@@ -268,7 +268,7 @@ def return_metrics() -> dict:
     # Filepaths
     # ---------------------------------
     # Coordinate source paths
-    src_coords = '../'
+    src_coords = './'
     ball_coords_path = os.path.join(src_coords, 'ball_coords.json')
     sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')
 
