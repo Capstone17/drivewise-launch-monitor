@@ -179,6 +179,13 @@ def interpolate_poses(
 ) -> None:
     rvec0, tvec0 = last_rt
     rvec1, tvec1 = curr_rt
+    # Ensure translation vectors are 1D to avoid broadcasting issues during
+    # interpolation. The pose estimation functions sometimes return a column
+    # vector (shape (3, 1)), while other parts of the pipeline use a flat array
+    # (shape (3,)). Mixing these shapes causes numpy to broadcast the vectors
+    # into a larger matrix, resulting in more than three values when unpacking.
+    tvec0 = tvec0.reshape(3)
+    tvec1 = tvec1.reshape(3)
     q0 = rvec_to_quat(rvec0)
     q1 = rvec_to_quat(rvec1)
     for tm in times:
@@ -524,7 +531,9 @@ def process_video(
                         DIST_COEFFS,
                     )
                     rvec = rvecs[0, 0]
-                    tvec = tvecs[0, 0]
+                    # Flatten the translation vector to a 1D array for
+                    # consistency with solvePnP outputs.
+                    tvec = tvecs[0, 0].reshape(3)
                     x, y, z = tvec
                     curr_q = rvec_to_quat(rvec)
                     if last_dynamic_rt is not None:
@@ -562,7 +571,11 @@ def process_video(
                     object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
                 )
                 if ok:
-                    x, y, z = tvec.ravel()
+                    # ``solvePnP`` returns a column vector; flatten it so that the
+                    # rest of the pipeline always works with a 1D translation
+                    # vector.
+                    tvec = tvec.reshape(3)
+                    x, y, z = tvec
                     curr_q = rvec_to_quat(rvec)
                     if last_dynamic_rt is not None:
                         prev_q = rvec_to_quat(last_dynamic_rt[0])
