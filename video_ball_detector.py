@@ -42,24 +42,11 @@ ARUCO_PARAMS.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
 ARUCO_PARAMS.adaptiveThreshWinSizeMin = 3
 ARUCO_PARAMS.adaptiveThreshWinSizeMax = 53
 ARUCO_PARAMS.adaptiveThreshWinSizeStep = 4
-ARUCO_PARAMS.minMarkerPerimeterRate = 0.015
-ARUCO_PARAMS.maxMarkerPerimeterRate = 4.0
+ARUCO_PARAMS.minMarkerPerimeterRate = 0.02
 ARUCO_PARAMS.polygonalApproxAccuracyRate = 0.03
 ARUCO_PARAMS.cornerRefinementWinSize = 7
-ARUCO_PARAMS.cornerRefinementMaxIterations = 50
-ARUCO_PARAMS.cornerRefinementMinAccuracy = 0.001
+ARUCO_PARAMS.cornerRefinementMinAccuracy = 0.01
 ARUCO_PARAMS.adaptiveThreshConstant = 7
-
-# Object points for a square marker in the XY plane
-OBJ_PTS = np.array(
-    [
-        [0.0, 0.0, 0.0],
-        [DYNAMIC_MARKER_LENGTH, 0.0, 0.0],
-        [DYNAMIC_MARKER_LENGTH, DYNAMIC_MARKER_LENGTH, 0.0],
-        [0.0, DYNAMIC_MARKER_LENGTH, 0.0],
-    ],
-    dtype=np.float32,
-)
 
 DYNAMIC_ID = 0
 
@@ -511,7 +498,6 @@ def process_video(
         current_pose = None
         current_quat = None
         dynamic_corner = None
-        pose_label = "INTERPOLATED"
         if ids is not None and len(ids) > 0:
             valid = [
                 corners[i]
@@ -522,17 +508,15 @@ def process_video(
                 valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
                 cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
                 for corner in valid:
-                    img_pts = corner.reshape(-1, 2).astype(np.float32)
-                    ok, rvec, tvec = cv2.solvePnP(
-                        OBJ_PTS,
-                        img_pts,
+                    rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+                        [corner],
+                        DYNAMIC_MARKER_LENGTH,
                         CAMERA_MATRIX,
                         DIST_COEFFS,
-                        flags=cv2.SOLVEPNP_IPPE_SQUARE,
                     )
-                    if not ok:
-                        continue
-                    x, y, z = tvec.ravel()
+                    rvec = rvecs[0, 0]
+                    tvec = tvecs[0, 0]
+                    x, y, z = tvec
                     curr_q = rvec_to_quat(rvec)
                     if last_dynamic_rt is not None:
                         prev_q = rvec_to_quat(last_dynamic_rt[0])
@@ -540,25 +524,10 @@ def process_video(
                             curr_q = -curr_q
                             rvec = quat_to_rvec(curr_q)
                     roll, pitch, yaw = rvec_to_euler(rvec)
-                    if (
-                        last_dynamic_rt is not None
-                        and np.linalg.norm(tvec - last_dynamic_rt[1]) > 5.0
-                    ):
-                        continue
                     current_rt = (rvec, tvec)
                     current_pose = (x, y, z, roll, pitch, yaw)
                     current_quat = curr_q
                     dynamic_corner = corner
-                    pose_label = "DETECTED"
-                    cv2.polylines(frame, [img_pts.astype(np.int32)], True, (0, 255, 0), 2)
-                    if tracker_corners is not None:
-                        cv2.polylines(
-                            frame,
-                            [tracker_corners.reshape(-1, 2).astype(np.int32)],
-                            True,
-                            (255, 0, 0),
-                            1,
-                        )
                     cv2.drawFrameAxes(
                         frame,
                         CAMERA_MATRIX,
@@ -569,90 +538,46 @@ def process_video(
                         2,
                     )
         if current_rt is None and tracker_corners is not None and prev_gray is not None:
-            new_corners, st, err = cv2.calcOpticalFlowPyrLK(
-                prev_gray, gray, tracker_corners, None
-            )
-            st = st.reshape(-1)
-            valid_idx = np.where(st == 1)[0]
-            if len(valid_idx) >= 2:
-                pts = new_corners.reshape(-1, 2)
-                missing_idx = [i for i in range(4) if i not in valid_idx]
-                if len(valid_idx) == 3:
-                    src = OBJ_PTS[valid_idx, :2].astype(np.float32)
-                    dst = pts[valid_idx].astype(np.float32)
-                    M = cv2.getAffineTransform(src, dst)
-                    for idx in missing_idx:
-                        x, y = OBJ_PTS[idx, :2]
-                        est = M @ np.array([x, y, 1], dtype=np.float32)
-                        pts[idx] = est
-                elif len(valid_idx) == 2:
-                    i0, i1 = valid_idx
-                    base = pts[i1] - pts[i0]
-                    perp = np.array([-base[1], base[0]], dtype=np.float32)
-                    n = np.linalg.norm(perp)
-                    if n > 0:
-                        perp = perp / n * np.linalg.norm(base)
-                    full = pts.copy()
-                    idx_set = set(valid_idx)
-                    if idx_set == {0, 1}:
-                        full[2] = pts[1] + perp
-                        full[3] = pts[0] + perp
-                    elif idx_set == {1, 2}:
-                        full[3] = pts[2] + perp
-                        full[0] = pts[1] + perp
-                    elif idx_set == {2, 3}:
-                        full[0] = pts[3] + perp
-                        full[1] = pts[2] + perp
-                    elif idx_set == {3, 0}:
-                        full[1] = pts[0] + perp
-                        full[2] = pts[3] + perp
-                    else:
-                        valid_idx = []
-                    pts = full
-                if len(valid_idx) >= 2:
-                    ok, rvec, tvec = cv2.solvePnP(
-                        OBJ_PTS, pts, CAMERA_MATRIX, DIST_COEFFS, flags=cv2.SOLVEPNP_IPPE_SQUARE
+            new_corners, st, err = cv2.calcOpticalFlowPyrLK(prev_gray, gray, tracker_corners, None)
+            if st.sum() == 4:
+                object_pts = np.array(
+                    [
+                        [0.0, 0.0, 0.0],
+                        [DYNAMIC_MARKER_LENGTH, 0.0, 0.0],
+                        [DYNAMIC_MARKER_LENGTH, DYNAMIC_MARKER_LENGTH, 0.0],
+                        [0.0, DYNAMIC_MARKER_LENGTH, 0.0],
+                    ],
+                    dtype=np.float32,
+                )
+                ok, rvec, tvec = cv2.solvePnP(
+                    object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
+                )
+                if ok:
+                    x, y, z = tvec.ravel()
+                    curr_q = rvec_to_quat(rvec)
+                    if last_dynamic_rt is not None:
+                        prev_q = rvec_to_quat(last_dynamic_rt[0])
+                        if np.dot(curr_q, prev_q) < 0.0:
+                            curr_q = -curr_q
+                            rvec = quat_to_rvec(curr_q)
+                    roll, pitch, yaw = rvec_to_euler(rvec)
+                    current_rt = (rvec, tvec)
+                    current_pose = (x, y, z, roll, pitch, yaw)
+                    current_quat = curr_q
+                    cv2.drawFrameAxes(
+                        frame,
+                        CAMERA_MATRIX,
+                        DIST_COEFFS,
+                        rvec,
+                        tvec,
+                        DYNAMIC_MARKER_LENGTH * 0.5,
+                        2,
                     )
-                    if ok:
-                        x, y, z = tvec.ravel()
-                        curr_q = rvec_to_quat(rvec)
-                        if last_dynamic_rt is not None:
-                            prev_q = rvec_to_quat(last_dynamic_rt[0])
-                            if np.dot(curr_q, prev_q) < 0.0:
-                                curr_q = -curr_q
-                                rvec = quat_to_rvec(curr_q)
-                        roll, pitch, yaw = rvec_to_euler(rvec)
-                        if (
-                            last_dynamic_rt is not None
-                            and np.linalg.norm(tvec - last_dynamic_rt[1]) > 5.0
-                        ):
-                            ok = False
-                        if ok:
-                            current_rt = (rvec, tvec)
-                            current_pose = (x, y, z, roll, pitch, yaw)
-                            current_quat = curr_q
-                            pose_label = "TRACKED"
-                            cv2.polylines(
-                                frame, [pts.astype(np.int32)], True, (255, 0, 0), 2
-                            )
-                    tracker_corners = pts.reshape(4, 1, 2)
-                    prev_gray = gray
-                else:
-                    tracker_corners = None
-                    prev_gray = None
+                tracker_corners = new_corners
+                prev_gray = gray
             else:
                 tracker_corners = None
                 prev_gray = None
-        cv2.putText(
-            frame,
-            f"POSE: {pose_label}",
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
         if current_rt is None:
             pending_times.append(t)
             if len(pending_times) > MAX_MISSING_FRAMES:
