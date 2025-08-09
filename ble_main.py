@@ -150,7 +150,7 @@ class SwingAnalysisCharacteristic(Characteristic):
             logger.info(f"Latest video file: {latest_file}")
 
             # For testing
-            # latest_file = "exposure_test/tst_skinny_240.mp4"
+            latest_file = "exposure_test/tst_skinny_240.mp4"
 
             # Process video
             result = process_video(
