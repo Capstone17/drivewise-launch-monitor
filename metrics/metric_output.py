@@ -313,7 +313,7 @@ def return_metrics() -> dict:
         print("\nMarker Frames:")  
         print("Marker impact frame:", marker_target_time)
         for idx, frame in enumerate(marker_window):
-            print(f"Frame {idx}: time={frame["time"]:.3f}, x={frame["x"]:.3f}, y={frame["y"]:.3f}, z={frame["z"]:.3f}, yaw={frame["yaw"]:.2f}")
+            print(f"Frame {idx}: time={frame['time']:.3f}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}, yaw={frame['yaw']:.2f}")
        
         # ---------------------------------
         # Marker Velocity Approximation
