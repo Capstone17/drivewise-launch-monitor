@@ -300,7 +300,7 @@ def return_metrics() -> dict:
     ball_window, ball_impact_idx, ball_pre_frame, ball_post_frame, ball_last_frame = load_ball_movement_window(ball_coords_path, threshold=5.0)  # Find moment of impact and its surrounding frames
     
     # Check if no movement was found
-    if not ball_window or ball_impact_idx is None:
+    if (not ball_window) or (ball_impact_idx is None) or (len(ball_window) < 3):
 
         # ---------------------------------
         # Load Window & Print

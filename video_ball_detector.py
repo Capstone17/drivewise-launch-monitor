@@ -319,10 +319,6 @@ def process_video(
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
     ball_velocity = np.zeros(2, dtype=float)
-    # Tracking of last detected ball position and velocity
-    last_ball_center: np.ndarray | None = None
-    last_ball_radius: float | None = None
-    ball_velocity = np.zeros(2, dtype=float)
 
     frame_idx = 0
     while True:
@@ -340,14 +336,14 @@ def process_video(
         t = frame_idx / video_fps
         results = None
         in_window = start_frame <= frame_idx < end_frame
-        if inference_start <= frame_idx < inference_end:
+        if in_window:
             start = time.perf_counter()
             results = model(frame, verbose=False, device=DEVICE)
             ball_time += time.perf_counter() - start
 
         detected = False
         detected_center: tuple[float, float, float] | None = None
-        if results and len(results[0].boxes) > 0:
+        if in_window and results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
             cx, cy, rad, distance = measure_ball(boxes[best_idx])
@@ -380,125 +376,6 @@ def process_video(
                 last_ball_radius = rad
                 detected_center = (cx, cy, rad)
                 detected = True
-
-        if (
-            not detected
-            and in_window
-            and last_ball_center is not None
-            and last_ball_radius is not None
-        ):
-            expected_center = last_ball_center + ball_velocity
-            rate_motion = 0.1
-            min_r = int(max(last_ball_radius * (1-rate_motion), MIN_BALL_RADIUS_PX - 2))
-            max_r = int(last_ball_radius * (1+rate_motion))
-            circles = cv2.HoughCircles(
-                gray,
-                cv2.HOUGH_GRADIENT,
-                dp=1.2,
-                minDist=max(5, int(last_ball_radius * 2)),
-                param1=100,
-                param2=15,
-                minRadius=min_r,
-                maxRadius=max_r,
-            )
-            if circles is not None:
-                c = np.round(circles[0, :]).astype(int)
-                ex, ey = expected_center
-                # choose circle nearest expected center
-                cx, cy, rad = min(
-                    c,
-                    key=lambda cir: (cir[0] - ex) ** 2 + (cir[1] - ey) ** 2,
-                )
-                dist = np.hypot(cx - ex, cy - ey)
-                if dist <= 2.0 * last_ball_radius and min_r <= rad <= max_r:
-                    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
-                    bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-                    by = (cy - h / 2.0) * distance / FOCAL_LENGTH
-                    bz = distance - 30.0
-                    ball_coords.append(
-                        {
-                            "time": round(t, 3),
-                            "x": round(bx, 2),
-                            "y": round(by, 2),
-                            "z": round(bz, 2),
-                        }
-                    )
-                    cv2.circle(frame, (int(cx), int(cy)), int(rad), (255, 0, 0), 2)
-                    if last_ball_center is not None:
-                        ball_velocity = np.array([cx, cy]) - last_ball_center
-                    last_ball_center = np.array([cx, cy])
-                    last_ball_radius = rad
-                    detected_center = (cx, cy, rad)
-                    detected = True
-
-        if detected and detected_center is not None:
-            cx, cy, rad = detected_center
-            if (
-                cx - rad <= 0
-                or cy - rad <= 0
-                or cx + rad >= w
-                or cy + rad >= h
-            ):
-                print("Ball exited frame; stopping detection")
-                break
-
-
-                if last_ball_center is not None:
-                    ball_velocity = np.array([cx, cy]) - last_ball_center
-                last_ball_center = np.array([cx, cy])
-                last_ball_radius = rad
-                detected_center = (cx, cy, rad)
-                detected = True
-
-        if (
-            not detected
-            and in_window
-            and last_ball_center is not None
-            and last_ball_radius is not None
-        ):
-            expected_center = last_ball_center + ball_velocity
-            rate_motion = 0.1
-            min_r = int(max(last_ball_radius * (1-rate_motion), MIN_BALL_RADIUS_PX - 2))
-            max_r = int(last_ball_radius * (1+rate_motion))
-            circles = cv2.HoughCircles(
-                gray,
-                cv2.HOUGH_GRADIENT,
-                dp=1.2,
-                minDist=max(5, int(last_ball_radius * 2)),
-                param1=100,
-                param2=15,
-                minRadius=min_r,
-                maxRadius=max_r,
-            )
-            if circles is not None:
-                c = np.round(circles[0, :]).astype(int)
-                ex, ey = expected_center
-                # choose circle nearest expected center
-                cx, cy, rad = min(
-                    c,
-                    key=lambda cir: (cir[0] - ex) ** 2 + (cir[1] - ey) ** 2,
-                )
-                dist = np.hypot(cx - ex, cy - ey)
-                if dist <= 2.0 * last_ball_radius and min_r <= rad <= max_r:
-                    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
-                    bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-                    by = (cy - h / 2.0) * distance / FOCAL_LENGTH
-                    bz = distance - 30.0
-                    ball_coords.append(
-                        {
-                            "time": round(t, 3),
-                            "x": round(bx, 2),
-                            "y": round(by, 2),
-                            "z": round(bz, 2),
-                        }
-                    )
-                    cv2.circle(frame, (int(cx), int(cy)), int(rad), (255, 0, 0), 2)
-                    if last_ball_center is not None:
-                        ball_velocity = np.array([cx, cy]) - last_ball_center
-                    last_ball_center = np.array([cx, cy])
-                    last_ball_radius = rad
-                    detected_center = (cx, cy, rad)
-                    detected = True
 
         if detected and detected_center is not None:
             cx, cy, rad = detected_center
