@@ -919,3 +919,14 @@
 2025-08-09 09:46:05,186 - __main__ - DEBUG - Updated value after script
 2025-08-09 09:46:05,186 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
 2025-08-09 09:46:05,187 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 6.09, 'swing path': np.float64(-2.43), 'attack angle': np.float64(-6.12), 'side angle': np.float64(3.52)}
+2025-08-09 09:50:14,424 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 09:50:14,425 - __main__ - INFO - Registering GATT application...
+2025-08-09 09:50:14,435 - __main__ - INFO - GATT application registered
+2025-08-09 09:50:14,437 - __main__ - INFO - Advertisement registered
+2025-08-09 09:50:55,353 - __main__ - DEBUG - StartNotify called
+2025-08-09 09:51:04,353 - __main__ - DEBUG - Received write command
+2025-08-09 09:51:10,393 - __main__ - INFO - processing video now
+2025-08-09 09:51:10,393 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst.mp4
+2025-08-09 09:51:54,557 - __main__ - DEBUG - Updated value after script
+2025-08-09 09:51:54,557 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 09:51:54,558 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 2.69, 'swing path': np.float64(-0.82), 'attack angle': np.float64(9.35), 'side angle': np.float64(1.62)}
