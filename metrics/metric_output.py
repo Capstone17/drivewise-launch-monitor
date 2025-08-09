@@ -1,4 +1,4 @@
-from .metric_calculation_3_metrics import *
+from metric_calculation_3_metrics import *
 import json
 import os
 import matplotlib.pyplot as plt
@@ -40,43 +40,50 @@ def load_ball_movement_window(json_path, threshold=5.0):
     return [], None, None, None, None  # No movement found
 
 
-def load_marker_poses_using_impact_time(json_path, t_target, time_window=0.3):
+# Load the marker pose immediately before and immediately after impact
+def load_marker_poses_with_impact_time(json_path, t_target, time_window=0.3):
     """
-    Load marker poses from JSON and return poses within ±time_window of t_target,
-    along with the impact pose (exact or closest to t_target).
+    Load marker poses from JSON and:
+      - return poses within ±time_window around t_target
+      - return the closest pose before impact
+      - return the closest pose after impact
 
     Args:
         json_path (str): Path to JSON file containing pose data.
         t_target (float): Target time in seconds.
-        time_window (float): Time window around t_target to filter poses.
+        time_window (float): Time window around t_target for filtering.
 
     Returns:
-        tuple: (filtered_poses, impact_pose)
+        tuple: (filtered_poses, pose_before, pose_after)
             filtered_poses (list): Poses within ±time_window of t_target.
-            impact_pose (dict or None): Pose matching t_target or closest if no exact match.
+            pose_before (dict or None): Pose closest before t_target in full dataset.
+            pose_after (dict or None): Pose closest after t_target in full dataset.
     """
     with open(json_path, 'r') as f:
         poses = json.load(f)
 
     if not poses:
-        return [], None
+        return [], None, None
 
-    # Filter poses within the time window
+    # Sort by time
+    poses.sort(key=lambda p: p['time'])
+
+    # Filtered poses: same as original function
     filtered_poses = [p for p in poses if abs(p['time'] - t_target) <= time_window]
 
-    if not filtered_poses:
-        return [], None
+    # Find closest before and after in full dataset
+    pose_before = None
+    pose_after = None
 
-    # Try exact match first
-    for pose in filtered_poses:
-        if pose['time'] == t_target:
-            return filtered_poses, pose
+    for pose in poses:
+        if pose['time'] < t_target:
+            pose_before = pose
+        elif pose['time'] > t_target:
+            pose_after = pose
+            break
+        # If exactly at t_target, skip for before/after calculation
 
-    # No exact match → find closest time within filtered poses
-    impact_pose = min(filtered_poses, key=lambda p: abs(p['time'] - t_target))
-
-    return filtered_poses, impact_pose
-
+    return filtered_poses, pose_before, pose_after
 
 # Load the marker poses without knowing the moment of impact
 def load_marker_poses_without_impact_time(json_path, time_jump_threshold=0.1):
@@ -189,11 +196,24 @@ def finite_diff_velocity(frames, t_target=None):
 
 
 # Find the metrics using ball data
-def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz) -> dict:
+def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz, marker_yaw_at_impact) -> dict:
 
     swing_path = horizontal_movement_angle_from_rates(marker_dx, marker_dz)
     side_angle = horizontal_movement_angle_from_rates(ball_dx, ball_dy)
     face_angle = face_angle_calc(swing_path, side_angle)
+
+    # Check for an extreme side angle or face angle
+    # If these angles are extreme then we discard them and use the marker yaw
+    if (abs(side_angle) > 25) or (abs(face_angle) > 25):
+        print("Extreme angles detected, discarding ball data\n")
+        face_angle = marker_yaw_at_impact
+        side_angle = side_angle_without_ball(swing_path, face_angle)
+
+    # If the angles are still extreme, set both to zero
+    if (abs(side_angle) > 25) or (abs(face_angle) > 25):
+        face_angle = 0.00
+        side_angle = 0.00
+
     attack_angle = vertical_movement_angle_from_rates(marker_dy, marker_dz)
     face_to_path = face_angle - swing_path
 
@@ -268,7 +288,7 @@ def return_metrics() -> dict:
     # Filepaths
     # ---------------------------------
     # Coordinate source paths
-    src_coords = './'
+    src_coords = '../'
     ball_coords_path = os.path.join(src_coords, 'ball_coords.json')
     sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')
 
@@ -280,7 +300,7 @@ def return_metrics() -> dict:
     ball_window, ball_impact_idx, ball_pre_frame, ball_post_frame, ball_last_frame = load_ball_movement_window(ball_coords_path, threshold=5.0)  # Find moment of impact and its surrounding frames
     
     # Check if no movement was found
-    if not ball_window or ball_impact_idx is None:
+    if (not ball_window) or (ball_impact_idx is None) or (len(ball_window) < 3):
 
         # ---------------------------------
         # Load Window & Print
@@ -293,7 +313,7 @@ def return_metrics() -> dict:
         print("\nMarker Frames:")  
         print("Marker impact frame:", marker_target_time)
         for idx, frame in enumerate(marker_window):
-            print(f"Frame {idx}: time={frame['time']:.3f}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}, yaw={frame['yaw']:.2f}")
+            print(f"Frame {idx}: time={frame["time"]:.3f}, x={frame["x"]:.3f}, y={frame["y"]:.3f}, z={frame["z"]:.3f}, yaw={frame["yaw"]:.2f}")
        
         # ---------------------------------
         # Marker Velocity Approximation
@@ -305,14 +325,32 @@ def return_metrics() -> dict:
         marker_yaw_at_impact = marker_frame_closest_impact["yaw"] 
         metrics = metrics_without_ball(marker_dx, marker_dy, marker_dz, marker_yaw_at_impact)
         
+    # Ball impact has been detected, proceed normally
     else:
 
         # ---------------------------------
         # Load Window & Print
         # ---------------------------------
         print("Movement detected, using ball and sticker")
-        marker_window, marker_frame_closest_impact = load_marker_poses_using_impact_time(sticker_coords_path, ball_pre_frame['time'])
-        marker_target_time = marker_frame_closest_impact["time"]
+        marker_window, marker_frame_before_impact, marker_frame_after_impact = load_marker_poses_with_impact_time(sticker_coords_path, ball_pre_frame['time'])
+
+        # Compare the absolute time differences to find the frame closest to impact
+        if marker_frame_before_impact and marker_frame_after_impact:
+
+            # Yaw is equal to the average between the two poses
+            marker_yaw_at_impact = (marker_frame_before_impact["yaw"] + marker_frame_after_impact["yaw"]) / 2 
+
+            # Compare absolute time differences
+            if abs(marker_frame_before_impact["time"] - ball_pre_frame["time"]) <= abs(marker_frame_after_impact["time"] - ball_pre_frame["time"]):
+                marker_target_time = marker_frame_before_impact["time"]
+            else:
+                marker_target_time = marker_frame_after_impact["time"]
+        elif marker_frame_before_impact:
+            marker_target_time = marker_frame_before_impact["time"]
+            marker_yaw_at_impact = marker_frame_before_impact["yaw"]
+        elif marker_frame_after_impact:
+            marker_target_time = marker_frame_after_impact["time"]
+            marker_yaw_at_impact = marker_frame_after_impact["yaw"]
 
         # Print ball data
         print("Impact frame index in window:", ball_impact_idx)
@@ -336,7 +374,9 @@ def return_metrics() -> dict:
         marker_dx, marker_dy, marker_dz = finite_diff_velocity(marker_window, t_target=marker_target_time)
         print(f"At time {marker_target_time}, Marker dx: {marker_dx}, Marker dy: {marker_dy}, Marker dz: {marker_dz}")
 
-        metrics = metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz)
+
+        # Calculate the metrics
+        metrics = metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz, marker_yaw_at_impact)
    
 
     # ---------------------------------
