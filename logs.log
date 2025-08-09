@@ -709,3 +709,64 @@
 2025-08-08 17:33:34,149 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_9.mp4
 2025-08-08 17:33:53,241 - __main__ - DEBUG - Updated value after script
 2025-08-08 17:33:53,242 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 18:24:41,858 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-08 18:24:41,859 - __main__ - INFO - Registering GATT application...
+2025-08-08 18:24:41,871 - __main__ - INFO - GATT application registered
+2025-08-08 18:24:41,872 - __main__ - INFO - Advertisement registered
+2025-08-08 18:25:10,683 - __main__ - DEBUG - StartNotify called
+2025-08-08 18:25:10,683 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 18:25:15,063 - __main__ - DEBUG - Received write command
+2025-08-08 18:25:21,093 - __main__ - INFO - processing video now
+2025-08-08 18:25:21,094 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_10.mp4
+2025-08-08 18:26:00,510 - __main__ - DEBUG - Updated value after script
+2025-08-08 18:26:00,510 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 18:26:00,510 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': np.float64(0.77), 'swing path': np.float64(5.15), 'attack angle': np.float64(3.59), 'side angle': np.float64(2.08)}
+2025-08-08 18:26:00,510 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:26:00,511 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:26:00,511 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:26:00,511 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:26:00,511 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:26:00,512 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:26:00,512 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:26:00,512 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:26:00,573 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:26:00,633 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:26:00,693 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:26:00,753 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:30:21,785 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-08 18:30:21,785 - __main__ - INFO - Registering GATT application...
+2025-08-08 18:30:21,796 - __main__ - INFO - GATT application registered
+2025-08-08 18:30:21,796 - __main__ - INFO - Advertisement registered
+2025-08-08 18:30:36,185 - __main__ - DEBUG - StartNotify called
+2025-08-08 18:30:36,185 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 18:30:40,175 - __main__ - DEBUG - Received write command
+2025-08-08 18:30:46,211 - __main__ - INFO - processing video now
+2025-08-08 18:30:46,212 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_11.mp4
+2025-08-08 18:31:25,299 - __main__ - DEBUG - Received write command
+2025-08-08 18:31:26,067 - __main__ - DEBUG - Updated value after script
+2025-08-08 18:31:26,067 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 18:31:26,067 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:31:26,068 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': np.float64(0.77), 'swing path': np.float64(5.15), 'attack angle': np.float64(3.59), 'side angle': np.float64(2.08)}
+2025-08-08 18:31:26,068 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:31:31,492 - __main__ - INFO - processing video now
+2025-08-08 18:31:31,492 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_12.mp4
+2025-08-08 18:31:38,446 - __main__ - ERROR - Processing failed: No sticker detected in the video
+2025-08-08 18:31:38,446 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 18:31:59,976 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-08 18:34:23,270 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-08 18:34:23,271 - __main__ - INFO - Registering GATT application...
+2025-08-08 18:34:23,280 - __main__ - INFO - GATT application registered
+2025-08-08 18:34:23,281 - __main__ - INFO - Advertisement registered
+2025-08-08 18:34:31,358 - __main__ - DEBUG - StartNotify called
+2025-08-08 18:35:28,809 - __main__ - DEBUG - Received write command
+2025-08-08 18:35:34,853 - __main__ - INFO - processing video now
+2025-08-08 18:35:34,854 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_13.mp4
+2025-08-08 18:36:14,324 - __main__ - DEBUG - Updated value after script
+2025-08-08 18:36:14,324 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 18:36:14,324 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': np.float64(0.77), 'swing path': np.float64(5.15), 'attack angle': np.float64(3.59), 'side angle': np.float64(2.08)}
+2025-08-08 18:36:22,150 - __main__ - DEBUG - Received write command
+2025-08-08 18:36:28,197 - __main__ - INFO - processing video now
+2025-08-08 18:36:28,197 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_14.mp4
+2025-08-08 18:37:06,766 - __main__ - DEBUG - Updated value after script
+2025-08-08 18:37:06,766 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-08 18:37:06,767 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': np.float64(0.77), 'swing path': np.float64(5.15), 'attack angle': np.float64(3.59), 'side angle': np.float64(2.08)}
