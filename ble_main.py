@@ -194,7 +194,7 @@ class SwingAnalysisCharacteristic(Characteristic):
             return
         logger.debug("StartNotify called")
         self.notifying = True
-        self.notify_client()
+        # self.notify_client()
 
     def StopNotify(self):
         if not self.notifying:
