@@ -125,7 +125,7 @@ class SwingAnalysisCharacteristic(Characteristic):
         
     def WriteValue(self, value, options):
         logger.debug("Received write command")
-
+        self.service.shared_data["feedback"] = "Camera and Swing Analysis is currently running"
         try:
             # Run script
             subprocess.run(
