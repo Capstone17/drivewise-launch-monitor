@@ -8,7 +8,7 @@ import math
 from scipy.spatial.transform import Rotation as R
 
 
-# FACE ANGLE
+# FACE ANGLE WITHOUT YAW
 def face_angle_calc(swing_path, side_angle) -> float:
     """
     Estimate the face angle using the swing path and the side angle.
@@ -31,6 +31,7 @@ def face_angle_calc(swing_path, side_angle) -> float:
     
     face_angle = (side_angle - 0.3 * swing_path) / 0.7 + 0.019
     return face_angle
+
 
 
 
@@ -113,3 +114,33 @@ def cmps_to_speed_kmh(x_rate_cmps, y_rate_cmps, z_rate_cmps):
     factor = 0.036  # 1 cm/s = 0.036 km/h
     speed_cmps = math.sqrt(x_rate_cmps**2 + y_rate_cmps**2 + z_rate_cmps**2)
     return speed_cmps * factor
+
+
+
+# ----------------------------------
+# NO BALL FOUND
+# ----------------------------------
+
+# SIDE ANGLE WITHOUT BALL
+def side_angle_without_ball(swing_path, face_angle) -> float:
+    """
+    Estimate the face angle using the swing path and the side angle.
+    The formula used is from https://www.researchgate.net/publication/323373897_The_Influence_of_Face_Angle_and_Club_Path_on_the_Resultant_Launch_Angle_of_a_Golf_Ball.
+    For 7-iron:
+        Horizontal launch = Side angle = H, Face angle = F, Swing path = P
+        H =~ 0.7F + 0.3P - 0.013
+        F = (H - 0.3P) / 0.7 + 0.019
+    I have done some testing on this based on videos such as this one: https://youtu.be/sOlladSBOak.
+        We should be within a degree of accuracy for face angle.
+    Currently I only use path and face angle, not considering gear effect or any other factor.
+
+    Args:
+        swing_path (float): The angular path of the club in the XZ plane.
+        face_angle (float): The angular direction of the club face in the XZ plane.
+
+    Returns:
+        float: The horizontal launch angle in degrees
+    """
+    
+    side_angle = 0.7 * face_angle + 0.3 * swing_path - 0.013
+    return side_angle

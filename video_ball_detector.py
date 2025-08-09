@@ -55,6 +55,11 @@ MAX_MOTION_FRAMES = 40  # maximum allowed motion window length in frames
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
+# Pose quality thresholds
+MAX_REPROJECTION_ERROR = 2.0  # pixels
+MAX_TRANSLATION_DELTA = 30.0  # translation jump threshold
+MAX_ROTATION_DELTA = 45.0  # degrees
+
 
 def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
     """Convert a rotation vector to roll, pitch and yaw in degrees."""
@@ -582,19 +587,52 @@ def process_video(
                         if np.dot(curr_q, prev_q) < 0.0:
                             curr_q = -curr_q
                             rvec = quat_to_rvec(curr_q)
-                    roll, pitch, yaw = rvec_to_euler(rvec)
-                    current_rt = (rvec, tvec)
-                    current_pose = (x, y, z, roll, pitch, yaw)
-                    current_quat = curr_q
-                    cv2.drawFrameAxes(
-                        frame,
-                        CAMERA_MATRIX,
-                        DIST_COEFFS,
-                        rvec,
-                        tvec,
-                        DYNAMIC_MARKER_LENGTH * 0.5,
-                        2,
+
+                    # Reprojection error check
+                    reproj, _ = cv2.projectPoints(
+                        object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS
                     )
+                    reproj_err = np.linalg.norm(
+                        new_corners.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
+                    ).mean()
+
+                    pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
+
+                    # Motion delta check
+                    if pose_ok and last_dynamic_rt is not None:
+                        trans_delta = np.linalg.norm(tvec - last_dynamic_rt[1])
+                        ang_delta = 0.0
+                        if last_dynamic_quat is not None:
+                            ang_delta = np.degrees(
+                                2.0
+                                * np.arccos(
+                                    np.clip(np.dot(curr_q, last_dynamic_quat), -1.0, 1.0)
+                                )
+                            )
+                        if (
+                            trans_delta > MAX_TRANSLATION_DELTA
+                            or ang_delta > MAX_ROTATION_DELTA
+                        ):
+                            pose_ok = False
+
+                    if pose_ok:
+                        roll, pitch, yaw = rvec_to_euler(rvec)
+                        current_rt = (rvec, tvec)
+                        current_pose = (x, y, z, roll, pitch, yaw)
+                        current_quat = curr_q
+                        cv2.drawFrameAxes(
+                            frame,
+                            CAMERA_MATRIX,
+                            DIST_COEFFS,
+                            rvec,
+                            tvec,
+                            DYNAMIC_MARKER_LENGTH * 0.5,
+                            2,
+                        )
+                    else:
+                        current_rt = None
+                        current_pose = None
+                        current_quat = None
                 tracker_corners = new_corners
                 prev_gray = marker_gray
             else:
@@ -652,6 +690,23 @@ def process_video(
         frame_idx += 1
 
     cap.release()
+    if pending_times and last_dynamic_rt is not None:
+        rvec, tvec = last_dynamic_rt
+        roll, pitch, yaw = rvec_to_euler(rvec)
+        x, y, z = tvec.ravel()
+        for tm in pending_times:
+            sticker_coords.append(
+                {
+                    "time": round(tm, 3),
+                    "x": round(float(x), 2),
+                    "y": round(float(y), 2),
+                    "z": round(float(z), 2),
+                    "roll": round(float(roll), 2),
+                    "pitch": round(float(pitch), 2),
+                    "yaw": round(float(yaw), 2),
+                }
+            )
+        pending_times.clear()
     ball_coords.sort(key=lambda c: c["time"])
     sticker_coords.sort(key=lambda c: c["time"])
     if not sticker_coords:
