@@ -54,20 +54,55 @@ fi
 # media-ctl Setup (center crop)
 # -------------------------
 
+crop_x=$(((1456 - width) / 2))
+crop_y=$((((1088 - height) / 2) + 15))
+max_crop_y=$((1088 - height))
+
+if (( crop_y > max_crop_y )); then
+    crop_y=$max_crop_y
+fi
+
+echo "Cropping at: ($crop_x, $crop_y)"
+
 for ((m=0; m<=5; ++m)); do
-    media-ctl -d /dev/media$m --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:($(((1456 - width) / 2)),$(((1088 - height) / 2) + 10))/${width}x${height}]" -v
+    media-ctl -d /dev/media$m \
+        --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:(${crop_x},${crop_y})/${width}x${height}]" -v
     if [[ $? -eq 0 ]]; then
+        media-ctl -d /dev/media$m --get-v4l2  # <-- Confirm crop
         break
     fi
 done
+
+# for ((m=0; m<=5; ++m)); do
+#     media-ctl -d /dev/media$m --set-v4l2 "'imx296 $d-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:($(((1456 - width) / 2)),$(((1088 - height) / 2) + 100))/${width}x${height}]" -v
+#     if [[ $? -eq 0 ]]; then
+#         break
+#     fi
+# done
 
 # -------------------------
 # Prepare Output Directory
 # -------------------------
 
-output_dir=~/Documents/test
+output_dir=~/Documents/webcamGolf
 mkdir -p "$output_dir"
 rm -f "$output_dir/tst.pts"
+
+# Find next available output file name (tst.mp4, tst1.mp4, tst2.mp4, ...)
+find_next_output_file() {
+    base="$1"
+    ext="$2"
+    n=0
+    while :; do
+        if [[ $n -eq 0 ]]; then
+            f="$output_dir/${base}${cam1:+1}.$ext"
+        else
+            f="$output_dir/${base}${cam1:+1}_$n.$ext"
+        fi
+        [[ ! -e "$f" ]] && { echo "$f"; return; }
+        ((n++))
+    done
+}
 
 # -------------------------
 # Run Camera Capture (with live flip)
@@ -78,7 +113,7 @@ libcamera-hello --list-cameras
 echo
 if grep -q "Revision.*: ...17." /proc/cpuinfo; then
     # Raspberry Pi 5 with rpicam-vid
-    output_file="$output_dir/tst${cam1:+1}.mp4"
+    output_file=$(find_next_output_file "tst" "mp4")
     rpicam-vid "$workaround" ${cam1:+--camera 1} --width "$width" --height "$height" \
         --denoise cdn_off --framerate "$framerate" -t "$duration" "$SHTR" "$shutter" \
         --hflip --vflip \
@@ -89,7 +124,8 @@ if grep -q "Revision.*: ...17." /proc/cpuinfo; then
 
 else
     # Other Pi models using libcamera-vid
-    output_file="$output_dir/tst.h264"
+# Other Pi models using libcamera-vid
+    output_file=$(find_next_output_file "tst" "h264")
     pts_file="$output_dir/tst.pts"
     libcamera-vid "$workaround" --width "$width" --height "$height" \
         --denoise cdn_off --framerate "$framerate" --save-pts "$pts_file" \
