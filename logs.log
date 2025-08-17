@@ -971,3 +971,321 @@
 2025-08-09 10:21:57,431 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_4.mp4
 2025-08-09 10:22:37,540 - __main__ - DEBUG - Updated value after script
 2025-08-09 10:22:37,540 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 10:25:44,238 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 10:25:44,239 - __main__ - INFO - Registering GATT application...
+2025-08-09 10:25:44,249 - __main__ - INFO - GATT application registered
+2025-08-09 10:25:44,252 - __main__ - INFO - Advertisement registered
+2025-08-09 10:26:22,158 - __main__ - DEBUG - StartNotify called
+2025-08-09 10:26:30,495 - __main__ - DEBUG - Received write command
+2025-08-09 10:26:36,536 - __main__ - INFO - processing video now
+2025-08-09 10:26:36,536 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst.mp4
+2025-08-09 10:27:16,177 - __main__ - DEBUG - Updated value after script
+2025-08-09 10:27:16,177 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 10:27:48,399 - __main__ - DEBUG - sending feedback based on metrics: 'Straight: Now that is a strike!'
+2025-08-09 10:32:53,676 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 10:32:53,677 - __main__ - INFO - Registering GATT application...
+2025-08-09 10:32:53,688 - __main__ - INFO - GATT application registered
+2025-08-09 10:32:53,690 - __main__ - INFO - Advertisement registered
+2025-08-09 10:33:04,943 - __main__ - DEBUG - StartNotify called
+2025-08-09 10:33:17,911 - __main__ - DEBUG - Received write command
+2025-08-09 10:33:23,960 - __main__ - INFO - processing video now
+2025-08-09 10:33:23,961 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_1.mp4
+2025-08-09 10:34:09,999 - __main__ - DEBUG - Updated value after script
+2025-08-09 10:34:09,999 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 10:34:27,431 - __main__ - DEBUG - sending feedback based on metrics: 'Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion.'
+2025-08-09 10:35:47,040 - __main__ - DEBUG - Received write command
+2025-08-09 10:35:53,080 - __main__ - INFO - processing video now
+2025-08-09 10:35:53,080 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_2.mp4
+2025-08-09 10:36:41,758 - __main__ - DEBUG - Updated value after script
+2025-08-09 10:36:41,758 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 10:38:25,323 - __main__ - DEBUG - Received write command
+2025-08-09 10:38:31,352 - __main__ - INFO - processing video now
+2025-08-09 10:38:31,353 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_3.mp4
+2025-08-09 10:39:18,824 - __main__ - DEBUG - Updated value after script
+2025-08-09 10:39:18,824 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 10:39:38,835 - __main__ - DEBUG - sending feedback based on metrics: "Push fade: You're swinging slightly right with an open face, causing a fading shot that starts right. Square the face more at impact or realign the path to reduce curvature."
+2025-08-09 10:57:07,835 - __main__ - DEBUG - Received write command
+2025-08-09 10:57:13,880 - __main__ - INFO - processing video now
+2025-08-09 10:57:13,881 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_4.mp4
+2025-08-09 10:57:53,327 - __main__ - DEBUG - Updated value after script
+2025-08-09 10:57:53,327 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 10:58:05,605 - __main__ - DEBUG - Received write command
+2025-08-09 10:58:11,672 - __main__ - INFO - processing video now
+2025-08-09 10:58:11,672 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_5.mp4
+2025-08-09 10:58:59,972 - __main__ - DEBUG - Updated value after script
+2025-08-09 10:58:59,972 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 10:59:22,973 - __main__ - DEBUG - sending feedback based on metrics: "Push fade: You're swinging slightly right with an open face, causing a fading shot that starts right. Square the face more at impact or realign the path to reduce curvature."
+2025-08-09 11:00:05,494 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 11:00:05,495 - __main__ - INFO - Registering GATT application...
+2025-08-09 11:00:05,506 - __main__ - INFO - GATT application registered
+2025-08-09 11:00:05,509 - __main__ - INFO - Advertisement registered
+2025-08-09 11:00:29,566 - __main__ - DEBUG - StartNotify called
+2025-08-09 11:00:38,536 - __main__ - DEBUG - Received write command
+2025-08-09 11:00:44,567 - __main__ - INFO - processing video now
+2025-08-09 11:00:44,568 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_6.mp4
+2025-08-09 11:01:32,075 - __main__ - DEBUG - Updated value after script
+2025-08-09 11:01:32,075 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 11:01:42,156 - __main__ - DEBUG - Received write command
+2025-08-09 11:01:48,183 - __main__ - INFO - processing video now
+2025-08-09 11:01:48,184 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_7.mp4
+2025-08-09 11:02:36,951 - __main__ - DEBUG - Updated value after script
+2025-08-09 11:02:36,951 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 11:02:36,952 - __main__ - DEBUG - sending feedback based on metrics: 'Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion.'
+2025-08-09 11:02:36,952 - __main__ - DEBUG - sending feedback based on metrics: 'Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion.'
+2025-08-09 11:02:36,952 - __main__ - DEBUG - sending feedback based on metrics: 'Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion.'
+2025-08-09 11:06:52,012 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 11:06:52,013 - __main__ - INFO - Registering GATT application...
+2025-08-09 11:06:52,023 - __main__ - INFO - GATT application registered
+2025-08-09 11:06:52,025 - __main__ - INFO - Advertisement registered
+2025-08-09 11:07:44,079 - __main__ - DEBUG - StartNotify called
+2025-08-09 11:08:03,190 - __main__ - DEBUG - Received write command
+2025-08-09 11:08:09,239 - __main__ - INFO - processing video now
+2025-08-09 11:08:09,240 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_8.mp4
+2025-08-09 11:08:53,430 - __main__ - DEBUG - Updated value after script
+2025-08-09 11:08:53,431 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 11:09:07,931 - __main__ - DEBUG - sending feedback based on metrics: 'Pull draw: Your clubface is slightly closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right.'
+2025-08-09 11:16:22,253 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 11:16:22,254 - __main__ - INFO - Registering GATT application...
+2025-08-09 11:16:22,265 - __main__ - INFO - GATT application registered
+2025-08-09 11:16:22,267 - __main__ - INFO - Advertisement registered
+2025-08-09 11:17:37,463 - __main__ - DEBUG - StartNotify called
+2025-08-09 11:17:50,869 - __main__ - DEBUG - Received write command
+2025-08-09 11:17:56,889 - __main__ - INFO - processing video now
+2025-08-09 11:17:56,890 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_9.mp4
+2025-08-09 11:18:33,869 - __main__ - DEBUG - Updated value after script
+2025-08-09 11:18:33,869 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 11:19:00,874 - __main__ - DEBUG - sending feedback based on metrics: 'Pull draw: Your clubface is slightly closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right.'
+2025-08-09 11:46:44,117 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 11:46:44,118 - __main__ - INFO - Registering GATT application...
+2025-08-09 11:46:44,128 - __main__ - INFO - GATT application registered
+2025-08-09 11:46:44,130 - __main__ - INFO - Advertisement registered
+2025-08-09 11:47:03,627 - __main__ - DEBUG - StartNotify called
+2025-08-09 11:47:34,527 - __main__ - DEBUG - Received write command
+2025-08-09 11:47:40,567 - __main__ - INFO - processing video now
+2025-08-09 11:47:40,568 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_10.mp4
+2025-08-09 11:48:22,532 - __main__ - DEBUG - Updated value after script
+2025-08-09 11:48:22,532 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 11:48:22,532 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': np.float64(13.77), 'swing path': np.float64(10.5), 'attack angle': np.float64(5.73), 'side angle': np.float64(12.78)}
+2025-08-09 11:48:56,218 - __main__ - DEBUG - sending feedback based on metrics: 'Push: A rightward path and open face are sending shots directly right. Work on squaring the clubface and adjusting alignment toward the target.'
+2025-08-09 11:54:57,552 - __main__ - DEBUG - Already notifying
+2025-08-09 11:55:12,763 - __main__ - DEBUG - Received write command
+2025-08-09 11:55:18,774 - __main__ - INFO - processing video now
+2025-08-09 11:55:18,774 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_11.mp4
+2025-08-09 11:56:05,957 - __main__ - DEBUG - Updated value after script
+2025-08-09 11:56:05,958 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 11:56:14,139 - __main__ - DEBUG - sending feedback based on metrics: 'Straight slice: The face is square, but your path is far left, causing a slice. Try to shallow your path and swing more inside-to-out.'
+2025-08-09 11:59:00,622 - __main__ - DEBUG - Received write command
+2025-08-09 11:59:06,647 - __main__ - INFO - processing video now
+2025-08-09 11:59:06,647 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_12.mp4
+2025-08-09 11:59:57,640 - __main__ - DEBUG - Updated value after script
+2025-08-09 11:59:57,640 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:00:30,713 - __main__ - DEBUG - sending feedback based on metrics: 'Straight slice: The face is square, but your path is far left, causing a slice. Try to shallow your path and swing more inside-to-out.'
+2025-08-09 12:05:54,661 - __main__ - DEBUG - Received write command
+2025-08-09 12:06:00,696 - __main__ - INFO - processing video now
+2025-08-09 12:06:00,696 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_13.mp4
+2025-08-09 12:06:37,182 - __main__ - DEBUG - Updated value after script
+2025-08-09 12:06:37,182 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:07:20,219 - __main__ - DEBUG - sending feedback based on metrics: 'Pull draw: Your clubface is slightly closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right.'
+2025-08-09 12:11:02,765 - __main__ - DEBUG - Received write command
+2025-08-09 12:11:08,792 - __main__ - INFO - processing video now
+2025-08-09 12:11:08,793 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_14.mp4
+2025-08-09 12:11:36,583 - __main__ - DEBUG - Updated value after script
+2025-08-09 12:11:36,583 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:11:54,539 - __main__ - DEBUG - sending feedback based on metrics: 'Pull draw: Your clubface is slightly closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right.'
+2025-08-09 12:18:20,838 - __main__ - DEBUG - Received write command
+2025-08-09 12:18:26,871 - __main__ - INFO - processing video now
+2025-08-09 12:18:26,871 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_15.mp4
+2025-08-09 12:19:15,183 - __main__ - DEBUG - Updated value after script
+2025-08-09 12:19:15,183 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:19:26,114 - __main__ - DEBUG - sending feedback based on metrics: 'Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion.'
+2025-08-09 12:19:41,909 - __main__ - DEBUG - Received write command
+2025-08-09 12:19:47,927 - __main__ - INFO - processing video now
+2025-08-09 12:19:47,928 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_16.mp4
+2025-08-09 12:20:35,173 - __main__ - DEBUG - Updated value after script
+2025-08-09 12:20:35,173 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:21:39,055 - __main__ - DEBUG - sending feedback based on metrics: 'Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it.'
+2025-08-09 12:25:29,741 - __main__ - DEBUG - Received write command
+2025-08-09 12:25:35,767 - __main__ - INFO - processing video now
+2025-08-09 12:25:35,767 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_17.mp4
+2025-08-09 12:26:21,350 - __main__ - DEBUG - Updated value after script
+2025-08-09 12:26:21,350 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:26:48,034 - __main__ - DEBUG - sending feedback based on metrics: 'Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion.'
+2025-08-09 12:36:27,286 - __main__ - DEBUG - Received write command
+2025-08-09 12:36:33,303 - __main__ - INFO - processing video now
+2025-08-09 12:36:33,304 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_18.mp4
+2025-08-09 12:37:18,753 - __main__ - DEBUG - Updated value after script
+2025-08-09 12:37:18,753 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:37:59,424 - __main__ - DEBUG - Received write command
+2025-08-09 12:38:05,463 - __main__ - INFO - processing video now
+2025-08-09 12:38:05,464 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_19.mp4
+2025-08-09 12:38:48,969 - __main__ - DEBUG - Updated value after script
+2025-08-09 12:38:48,969 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:40:57,412 - __main__ - DEBUG - Received write command
+2025-08-09 12:41:03,448 - __main__ - INFO - processing video now
+2025-08-09 12:41:03,449 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_20.mp4
+2025-08-09 12:41:49,127 - __main__ - DEBUG - Updated value after script
+2025-08-09 12:41:49,127 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:41:59,033 - __main__ - DEBUG - sending feedback based on metrics: 'Straight slice: The face is square, but your path is far left, causing a slice. Try to shallow your path and swing more inside-to-out.'
+2025-08-09 12:46:23,212 - __main__ - DEBUG - Received write command
+2025-08-09 12:46:29,240 - __main__ - INFO - processing video now
+2025-08-09 12:46:29,240 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_21.mp4
+2025-08-09 12:47:14,197 - __main__ - DEBUG - Updated value after script
+2025-08-09 12:47:14,198 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:47:34,144 - __main__ - DEBUG - sending feedback based on metrics: 'Pull: Both your face and path are left, causing a pull. Try aligning your stance and path more rightward and ensure the face matches the path.'
+2025-08-09 12:47:51,402 - __main__ - DEBUG - Received write command
+2025-08-09 12:47:57,463 - __main__ - INFO - processing video now
+2025-08-09 12:47:57,464 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_22.mp4
+2025-08-09 12:48:21,739 - __main__ - DEBUG - Updated value after script
+2025-08-09 12:48:21,739 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:53:33,387 - __main__ - DEBUG - Received write command
+2025-08-09 12:53:39,415 - __main__ - INFO - processing video now
+2025-08-09 12:53:39,416 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_23.mp4
+2025-08-09 12:54:22,182 - __main__ - DEBUG - Updated value after script
+2025-08-09 12:54:22,183 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 12:55:12,448 - __main__ - DEBUG - sending feedback based on metrics: 'Push: A rightward path and open face are sending shots directly right. Work on squaring the clubface and adjusting alignment toward the target.'
+2025-08-09 13:03:53,350 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 13:03:53,351 - __main__ - INFO - Registering GATT application...
+2025-08-09 13:03:53,362 - __main__ - INFO - GATT application registered
+2025-08-09 13:03:53,362 - __main__ - INFO - Advertisement registered
+2025-08-09 13:04:39,709 - __main__ - DEBUG - StartNotify called
+2025-08-09 13:06:59,721 - __main__ - DEBUG - Received write command
+2025-08-09 13:07:05,751 - __main__ - INFO - processing video now
+2025-08-09 13:07:05,752 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_24.mp4
+2025-08-09 13:07:34,609 - __main__ - DEBUG - Updated value after script
+2025-08-09 13:07:34,609 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 13:08:33,907 - __main__ - DEBUG - sending feedback based on metrics: 'Pull draw: Your clubface is slightly closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right.'
+2025-08-09 13:17:08,472 - __main__ - DEBUG - Received write command
+2025-08-09 13:17:14,488 - __main__ - INFO - processing video now
+2025-08-09 13:17:14,488 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_25.mp4
+2025-08-09 13:17:45,729 - __main__ - DEBUG - Updated value after script
+2025-08-09 13:17:45,730 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 13:46:06,464 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 13:46:06,465 - __main__ - INFO - Registering GATT application...
+2025-08-09 13:46:06,474 - __main__ - INFO - GATT application registered
+2025-08-09 13:46:06,477 - __main__ - INFO - Advertisement registered
+2025-08-09 13:47:42,451 - __main__ - DEBUG - StartNotify called
+2025-08-09 13:47:54,122 - __main__ - DEBUG - Received write command
+2025-08-09 13:48:00,153 - __main__ - INFO - processing video now
+2025-08-09 13:48:00,154 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_26.mp4
+2025-08-09 13:48:49,587 - __main__ - DEBUG - Updated value after script
+2025-08-09 13:48:49,587 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 13:48:49,588 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 0.0, 'swing path': np.float64(-179.23), 'attack angle': np.float64(173.07), 'side angle': 0.0}
+2025-08-09 13:49:05,583 - __main__ - DEBUG - Received write command
+2025-08-09 13:49:11,608 - __main__ - INFO - processing video now
+2025-08-09 13:49:11,609 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_27.mp4
+2025-08-09 13:49:47,857 - __main__ - DEBUG - Updated value after script
+2025-08-09 13:49:47,857 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 13:49:47,857 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 2.12, 'swing path': np.float64(-2.77), 'attack angle': np.float64(0.92), 'side angle': np.float64(0.64)}
+2025-08-09 13:50:43,625 - __main__ - DEBUG - Received write command
+2025-08-09 13:50:49,686 - __main__ - INFO - processing video now
+2025-08-09 13:50:49,686 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_28.mp4
+2025-08-09 13:51:21,803 - __main__ - DEBUG - Updated value after script
+2025-08-09 13:51:21,803 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 13:51:21,804 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': -8.02, 'swing path': np.float64(-177.95), 'attack angle': np.float64(-177.95), 'side angle': np.float64(-59.01)}
+2025-08-09 13:51:41,286 - __main__ - DEBUG - Received write command
+2025-08-09 13:51:47,320 - __main__ - INFO - processing video now
+2025-08-09 13:51:47,320 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_29.mp4
+2025-08-09 13:52:28,988 - __main__ - DEBUG - Updated value after script
+2025-08-09 13:52:28,988 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 13:52:28,989 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': np.float64(-2.74), 'swing path': np.float64(0.26), 'attack angle': np.float64(-3.09), 'side angle': np.float64(-1.86)}
+2025-08-09 13:53:06,937 - __main__ - DEBUG - sending feedback based on metrics: 'Pull draw: Your clubface is slightly closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right.'
+2025-08-09 13:55:37,929 - __main__ - DEBUG - Received write command
+2025-08-09 13:55:43,959 - __main__ - INFO - processing video now
+2025-08-09 13:55:43,960 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_30.mp4
+2025-08-09 13:55:59,410 - __main__ - ERROR - Processing failed: No sticker detected in the video
+2025-08-09 13:55:59,410 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 13:55:59,410 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+2025-08-09 13:56:32,230 - __main__ - DEBUG - Received write command
+2025-08-09 13:56:38,263 - __main__ - INFO - processing video now
+2025-08-09 13:56:38,263 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_31.mp4
+2025-08-09 13:57:24,581 - __main__ - DEBUG - Updated value after script
+2025-08-09 13:57:24,581 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 13:57:24,582 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 6.24, 'swing path': np.float64(-0.4), 'attack angle': np.float64(-3.8), 'side angle': np.float64(4.23)}
+2025-08-09 14:02:33,252 - __main__ - DEBUG - Already notifying
+2025-08-09 14:03:44,818 - __main__ - DEBUG - Received write command
+2025-08-09 14:03:50,839 - __main__ - INFO - processing video now
+2025-08-09 14:03:50,840 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_32.mp4
+2025-08-09 14:04:06,729 - __main__ - ERROR - Processing failed: No sticker detected in the video
+2025-08-09 14:04:06,729 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 14:04:58,480 - __main__ - DEBUG - Received write command
+2025-08-09 14:05:04,503 - __main__ - INFO - processing video now
+2025-08-09 14:05:04,504 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_33.mp4
+2025-08-09 14:05:48,307 - __main__ - DEBUG - Updated value after script
+2025-08-09 14:05:48,307 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 14:06:21,454 - __main__ - DEBUG - sending feedback based on metrics: 'Push: A rightward path and open face are sending shots directly right. Work on squaring the clubface and adjusting alignment toward the target.'
+2025-08-09 14:13:48,850 - __main__ - DEBUG - Received write command
+2025-08-09 14:13:54,872 - __main__ - INFO - processing video now
+2025-08-09 14:13:54,872 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_34.mp4
+2025-08-09 14:14:42,320 - __main__ - DEBUG - Updated value after script
+2025-08-09 14:14:42,320 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 14:15:13,481 - __main__ - DEBUG - sending feedback based on metrics: 'Straight draw: A gentle rightward path with a square face is causing a draw. If your shot is landing too far left of the target, try slightly weakening your grip or evening out your path.'
+2025-08-09 14:15:14,651 - __main__ - DEBUG - sending feedback based on metrics: 'Straight draw: A gentle rightward path with a square face is causing a draw. If your shot is landing too far left of the target, try slightly weakening your grip or evening out your path.'
+2025-08-09 14:15:36,150 - __main__ - DEBUG - sending feedback based on metrics: 'Straight draw: A gentle rightward path with a square face is causing a draw. If your shot is landing too far left of the target, try slightly weakening your grip or evening out your path.'
+2025-08-09 14:17:01,269 - __main__ - DEBUG - Received write command
+2025-08-09 14:17:07,320 - __main__ - INFO - processing video now
+2025-08-09 14:17:07,321 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_35.mp4
+2025-08-09 14:17:53,045 - __main__ - DEBUG - Updated value after script
+2025-08-09 14:17:53,045 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 14:18:31,115 - __main__ - DEBUG - sending feedback based on metrics: 'Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion.'
+2025-08-09 14:24:15,795 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 14:24:15,795 - __main__ - INFO - Registering GATT application...
+2025-08-09 14:24:15,806 - __main__ - INFO - GATT application registered
+2025-08-09 14:24:15,808 - __main__ - INFO - Advertisement registered
+2025-08-09 14:24:22,100 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 14:24:22,101 - __main__ - INFO - Registering GATT application...
+2025-08-09 14:24:22,110 - __main__ - INFO - GATT application registered
+2025-08-09 14:24:22,113 - __main__ - INFO - Advertisement registered
+2025-08-09 14:24:34,056 - __main__ - DEBUG - StartNotify called
+2025-08-09 14:24:45,069 - __main__ - DEBUG - Received write command
+2025-08-09 14:24:51,095 - __main__ - INFO - processing video now
+2025-08-09 14:24:51,096 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_36.mp4
+2025-08-09 14:25:36,298 - __main__ - DEBUG - Updated value after script
+2025-08-09 14:25:36,298 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 14:26:01,315 - __main__ - DEBUG - sending feedback based on metrics: 'Pull slice: Your club face is aiming left and your out-to-in path are producing sidespin. Work on neutralizing your swing path and straightening the face angle to prevent excessive spin.'
+2025-08-09 14:33:34,360 - __main__ - DEBUG - Already notifying
+2025-08-09 14:34:24,761 - __main__ - DEBUG - Received write command
+2025-08-09 14:34:30,775 - __main__ - INFO - processing video now
+2025-08-09 14:34:30,776 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_37.mp4
+2025-08-09 14:35:16,486 - __main__ - DEBUG - Updated value after script
+2025-08-09 14:35:16,486 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 14:35:16,486 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 8.0, 'swing path': np.float64(-10.49), 'attack angle': np.float64(-10.49), 'side angle': np.float64(2.44)}
+2025-08-09 14:35:47,802 - __main__ - DEBUG - sending feedback based on metrics: 'Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion.'
+2025-08-09 14:41:19,607 - __main__ - DEBUG - Received write command
+2025-08-09 14:41:25,655 - __main__ - INFO - processing video now
+2025-08-09 14:41:25,656 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_38.mp4
+2025-08-09 14:42:07,408 - __main__ - DEBUG - Updated value after script
+2025-08-09 14:42:07,408 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 14:42:07,408 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 7.81, 'swing path': np.float64(-1.78), 'attack angle': np.float64(14.62), 'side angle': np.float64(4.92)}
+2025-08-09 14:43:45,199 - __main__ - DEBUG - Received write command
+2025-08-09 14:43:51,256 - __main__ - INFO - processing video now
+2025-08-09 14:43:51,256 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_39.mp4
+2025-08-09 14:44:37,228 - __main__ - DEBUG - Updated value after script
+2025-08-09 14:44:37,228 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 14:44:37,228 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': -2.82, 'swing path': np.float64(-1.11), 'attack angle': np.float64(8.47), 'side angle': np.float64(-2.32)}
+2025-08-09 15:18:01,553 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-08-09 15:18:01,555 - __main__ - INFO - Registering GATT application...
+2025-08-09 15:18:01,565 - __main__ - INFO - GATT application registered
+2025-08-09 15:18:01,567 - __main__ - INFO - Advertisement registered
+2025-08-09 15:20:25,398 - __main__ - DEBUG - StartNotify called
+2025-08-09 15:20:39,780 - __main__ - DEBUG - Received write command
+2025-08-09 15:20:45,816 - __main__ - INFO - processing video now
+2025-08-09 15:20:45,817 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_40.mp4
+2025-08-09 15:21:11,385 - __main__ - DEBUG - Updated value after script
+2025-08-09 15:21:11,385 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 15:21:42,181 - __main__ - DEBUG - Received write command
+2025-08-09 15:21:48,216 - __main__ - INFO - processing video now
+2025-08-09 15:21:48,217 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_41.mp4
+2025-08-09 15:22:17,762 - __main__ - DEBUG - Updated value after script
+2025-08-09 15:22:17,762 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 15:23:03,107 - __main__ - DEBUG - Received write command
+2025-08-09 15:23:09,144 - __main__ - INFO - processing video now
+2025-08-09 15:23:09,145 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_42.mp4
+2025-08-09 15:23:45,057 - __main__ - DEBUG - Updated value after script
+2025-08-09 15:23:45,057 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 15:24:14,527 - __main__ - DEBUG - sending feedback based on metrics: 'Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion.'
+2025-08-09 15:27:01,546 - __main__ - DEBUG - Received write command
+2025-08-09 15:27:07,575 - __main__ - INFO - processing video now
+2025-08-09 15:27:07,576 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_43.mp4
+2025-08-09 15:27:54,601 - __main__ - DEBUG - Updated value after script
+2025-08-09 15:27:54,601 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-08-09 15:28:40,803 - __main__ - DEBUG - sending feedback based on metrics: 'Straight: Now that is a strike!'
