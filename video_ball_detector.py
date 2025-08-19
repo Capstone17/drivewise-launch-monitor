@@ -17,12 +17,7 @@ import onnxruntime as ort
 import torch
 
 # Select GPU if available
-DEVICE = (
-    "cuda"
-    if "CUDAExecutionProvider" in ort.get_available_providers()
-    and torch.cuda.is_available()
-    else "cpu"
-)
+DEVICE = "cpu"  # Force CPU inference to avoid device mismatch errors
 
 ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
@@ -338,7 +333,7 @@ def process_video(
         in_window = start_frame <= frame_idx < end_frame
         if in_window:
             start = time.perf_counter()
-            results = model(frame, verbose=False, device=DEVICE)
+            results = model(frame, verbose=False, device="cpu")
             ball_time += time.perf_counter() - start
 
         detected = False
@@ -602,7 +597,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "demo_400_144_387_5000_700/tst_21.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "exposure_test/tst_good_120.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
