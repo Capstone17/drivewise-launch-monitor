@@ -125,7 +125,6 @@ class SwingAnalysisCharacteristic(Characteristic):
         
     def WriteValue(self, value, options):
         logger.debug("Received write command")
-
         try:
             # Run script
             subprocess.run(
@@ -135,7 +134,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "144",
                     "387",
                     "5000",
-                    "375",
+                    "700",
                 ],
                 check=True,
             )
@@ -148,6 +147,9 @@ class SwingAnalysisCharacteristic(Characteristic):
 
             latest_file = max(mp4_files, key=os.path.getmtime)
             logger.info(f"Latest video file: {latest_file}")
+
+            # For testing
+            # latest_file = "exposure_test/tst_skinny_240.mp4"
 
             # Process video
             result = process_video(
@@ -191,7 +193,7 @@ class SwingAnalysisCharacteristic(Characteristic):
             return
         logger.debug("StartNotify called")
         self.notifying = True
-        self.notify_client()
+        # self.notify_client()
 
     def StopNotify(self):
         if not self.notifying:

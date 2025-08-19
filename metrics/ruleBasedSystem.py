@@ -1,6 +1,6 @@
 
 # from metric_output import return_metrics
-from metric_output_3_metrics import return_metrics  # Use this until face angle can be accurately detected
+from .metric_output import return_metrics  # Use this until face angle can be accurately detected
 
 # -------------------------------
 # Output as a function (for bluetooth)
@@ -79,7 +79,7 @@ def rule_based_system(club_selection):
             "category": "all",
             "severity": 5,
             "condition": lambda f: (f["face_slight_left"] and f["path_extreme_right"])   or   (f["face_extreme_left"] and (f["path_slight_right"] or f["path_extreme_right"])),
-            "action": lambda: "Pull hook: You're closing the clubface too much and swinging aggressively in-to-out. Try keeping your clubface more neutral and reducing how far right you're swinging."
+            "action": lambda: "Pull hook: You're closing the clubface too much and swinging in-to-out. Try keeping your clubface more neutral and reducing how far right you're swinging."
         },
         {
             "name": "Pull Draw",
@@ -223,10 +223,10 @@ def rule_based_system(club_selection):
 
     return {
         "metrics": {
-            "face angle": raw_data["face_angle"],
-            "swing path": raw_data["swing_path"],
-            "attack angle": raw_data["attack_angle"],
-            "side angle": raw_data["side_angle"]
+            "face angle": round(raw_data["face_angle"], 2),
+            "swing path": round(raw_data["swing_path"], 2),
+            "attack angle": round(raw_data["attack_angle"], 2),
+            "side angle": round(raw_data["side_angle"], 2)
         },
         "feedback": feedback
     }
@@ -235,5 +235,5 @@ def rule_based_system(club_selection):
 # -------------------------------
 # Main function for testing
 # -------------------------------
-if __name__ == "__main__":
-    result = rule_based_system("mid-iron")
+# if __name__ == "__main__":
+#     result = rule_based_system("mid-iron")

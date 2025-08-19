@@ -55,6 +55,11 @@ MAX_MOTION_FRAMES = 40  # maximum allowed motion window length in frames
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
+# Pose quality thresholds
+MAX_REPROJECTION_ERROR = 2.0  # pixels
+MAX_TRANSLATION_DELTA = 30.0  # translation jump threshold
+MAX_ROTATION_DELTA = 45.0  # degrees
+
 
 def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
     """Convert a rotation vector to roll, pitch and yaw in degrees."""
@@ -314,10 +319,6 @@ def process_video(
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
     ball_velocity = np.zeros(2, dtype=float)
-    # Tracking of last detected ball position and velocity
-    last_ball_center: np.ndarray | None = None
-    last_ball_radius: float | None = None
-    ball_velocity = np.zeros(2, dtype=float)
 
     frame_idx = 0
     while True:
@@ -335,14 +336,14 @@ def process_video(
         t = frame_idx / video_fps
         results = None
         in_window = start_frame <= frame_idx < end_frame
-        if inference_start <= frame_idx < inference_end:
+        if in_window:
             start = time.perf_counter()
             results = model(frame, verbose=False, device=DEVICE)
             ball_time += time.perf_counter() - start
 
         detected = False
         detected_center: tuple[float, float, float] | None = None
-        if results and len(results[0].boxes) > 0:
+        if in_window and results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             best_idx = boxes.conf.argmax()
             cx, cy, rad, distance = measure_ball(boxes[best_idx])
@@ -375,125 +376,6 @@ def process_video(
                 last_ball_radius = rad
                 detected_center = (cx, cy, rad)
                 detected = True
-
-        if (
-            not detected
-            and in_window
-            and last_ball_center is not None
-            and last_ball_radius is not None
-        ):
-            expected_center = last_ball_center + ball_velocity
-            rate_motion = 0.1
-            min_r = int(max(last_ball_radius * (1-rate_motion), MIN_BALL_RADIUS_PX - 2))
-            max_r = int(last_ball_radius * (1+rate_motion))
-            circles = cv2.HoughCircles(
-                gray,
-                cv2.HOUGH_GRADIENT,
-                dp=1.2,
-                minDist=max(5, int(last_ball_radius * 2)),
-                param1=100,
-                param2=15,
-                minRadius=min_r,
-                maxRadius=max_r,
-            )
-            if circles is not None:
-                c = np.round(circles[0, :]).astype(int)
-                ex, ey = expected_center
-                # choose circle nearest expected center
-                cx, cy, rad = min(
-                    c,
-                    key=lambda cir: (cir[0] - ex) ** 2 + (cir[1] - ey) ** 2,
-                )
-                dist = np.hypot(cx - ex, cy - ey)
-                if dist <= 2.0 * last_ball_radius and min_r <= rad <= max_r:
-                    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
-                    bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-                    by = (cy - h / 2.0) * distance / FOCAL_LENGTH
-                    bz = distance - 30.0
-                    ball_coords.append(
-                        {
-                            "time": round(t, 3),
-                            "x": round(bx, 2),
-                            "y": round(by, 2),
-                            "z": round(bz, 2),
-                        }
-                    )
-                    cv2.circle(frame, (int(cx), int(cy)), int(rad), (255, 0, 0), 2)
-                    if last_ball_center is not None:
-                        ball_velocity = np.array([cx, cy]) - last_ball_center
-                    last_ball_center = np.array([cx, cy])
-                    last_ball_radius = rad
-                    detected_center = (cx, cy, rad)
-                    detected = True
-
-        if detected and detected_center is not None:
-            cx, cy, rad = detected_center
-            if (
-                cx - rad <= 0
-                or cy - rad <= 0
-                or cx + rad >= w
-                or cy + rad >= h
-            ):
-                print("Ball exited frame; stopping detection")
-                break
-
-
-                if last_ball_center is not None:
-                    ball_velocity = np.array([cx, cy]) - last_ball_center
-                last_ball_center = np.array([cx, cy])
-                last_ball_radius = rad
-                detected_center = (cx, cy, rad)
-                detected = True
-
-        if (
-            not detected
-            and in_window
-            and last_ball_center is not None
-            and last_ball_radius is not None
-        ):
-            expected_center = last_ball_center + ball_velocity
-            rate_motion = 0.1
-            min_r = int(max(last_ball_radius * (1-rate_motion), MIN_BALL_RADIUS_PX - 2))
-            max_r = int(last_ball_radius * (1+rate_motion))
-            circles = cv2.HoughCircles(
-                gray,
-                cv2.HOUGH_GRADIENT,
-                dp=1.2,
-                minDist=max(5, int(last_ball_radius * 2)),
-                param1=100,
-                param2=15,
-                minRadius=min_r,
-                maxRadius=max_r,
-            )
-            if circles is not None:
-                c = np.round(circles[0, :]).astype(int)
-                ex, ey = expected_center
-                # choose circle nearest expected center
-                cx, cy, rad = min(
-                    c,
-                    key=lambda cir: (cir[0] - ex) ** 2 + (cir[1] - ey) ** 2,
-                )
-                dist = np.hypot(cx - ex, cy - ey)
-                if dist <= 2.0 * last_ball_radius and min_r <= rad <= max_r:
-                    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / rad
-                    bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-                    by = (cy - h / 2.0) * distance / FOCAL_LENGTH
-                    bz = distance - 30.0
-                    ball_coords.append(
-                        {
-                            "time": round(t, 3),
-                            "x": round(bx, 2),
-                            "y": round(by, 2),
-                            "z": round(bz, 2),
-                        }
-                    )
-                    cv2.circle(frame, (int(cx), int(cy)), int(rad), (255, 0, 0), 2)
-                    if last_ball_center is not None:
-                        ball_velocity = np.array([cx, cy]) - last_ball_center
-                    last_ball_center = np.array([cx, cy])
-                    last_ball_radius = rad
-                    detected_center = (cx, cy, rad)
-                    detected = True
 
         if detected and detected_center is not None:
             cx, cy, rad = detected_center
@@ -582,19 +464,52 @@ def process_video(
                         if np.dot(curr_q, prev_q) < 0.0:
                             curr_q = -curr_q
                             rvec = quat_to_rvec(curr_q)
-                    roll, pitch, yaw = rvec_to_euler(rvec)
-                    current_rt = (rvec, tvec)
-                    current_pose = (x, y, z, roll, pitch, yaw)
-                    current_quat = curr_q
-                    cv2.drawFrameAxes(
-                        frame,
-                        CAMERA_MATRIX,
-                        DIST_COEFFS,
-                        rvec,
-                        tvec,
-                        DYNAMIC_MARKER_LENGTH * 0.5,
-                        2,
+
+                    # Reprojection error check
+                    reproj, _ = cv2.projectPoints(
+                        object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS
                     )
+                    reproj_err = np.linalg.norm(
+                        new_corners.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
+                    ).mean()
+
+                    pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
+
+                    # Motion delta check
+                    if pose_ok and last_dynamic_rt is not None:
+                        trans_delta = np.linalg.norm(tvec - last_dynamic_rt[1])
+                        ang_delta = 0.0
+                        if last_dynamic_quat is not None:
+                            ang_delta = np.degrees(
+                                2.0
+                                * np.arccos(
+                                    np.clip(np.dot(curr_q, last_dynamic_quat), -1.0, 1.0)
+                                )
+                            )
+                        if (
+                            trans_delta > MAX_TRANSLATION_DELTA
+                            or ang_delta > MAX_ROTATION_DELTA
+                        ):
+                            pose_ok = False
+
+                    if pose_ok:
+                        roll, pitch, yaw = rvec_to_euler(rvec)
+                        current_rt = (rvec, tvec)
+                        current_pose = (x, y, z, roll, pitch, yaw)
+                        current_quat = curr_q
+                        cv2.drawFrameAxes(
+                            frame,
+                            CAMERA_MATRIX,
+                            DIST_COEFFS,
+                            rvec,
+                            tvec,
+                            DYNAMIC_MARKER_LENGTH * 0.5,
+                            2,
+                        )
+                    else:
+                        current_rt = None
+                        current_pose = None
+                        current_quat = None
                 tracker_corners = new_corners
                 prev_gray = marker_gray
             else:
@@ -652,6 +567,23 @@ def process_video(
         frame_idx += 1
 
     cap.release()
+    if pending_times and last_dynamic_rt is not None:
+        rvec, tvec = last_dynamic_rt
+        roll, pitch, yaw = rvec_to_euler(rvec)
+        x, y, z = tvec.ravel()
+        for tm in pending_times:
+            sticker_coords.append(
+                {
+                    "time": round(tm, 3),
+                    "x": round(float(x), 2),
+                    "y": round(float(y), 2),
+                    "z": round(float(z), 2),
+                    "roll": round(float(roll), 2),
+                    "pitch": round(float(pitch), 2),
+                    "yaw": round(float(yaw), 2),
+                }
+            )
+        pending_times.clear()
     ball_coords.sort(key=lambda c: c["time"])
     sticker_coords.sort(key=lambda c: c["time"])
     if not sticker_coords:
@@ -670,7 +602,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "tst_2.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "demo_400_144_387_5000_700/tst_21.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
