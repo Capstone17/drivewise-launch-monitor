@@ -1335,3 +1335,66 @@
 2025-09-08 15:04:41,250 - __main__ - DEBUG - Updated value after script
 2025-09-08 15:04:41,250 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
 2025-09-08 15:05:00,974 - __main__ - DEBUG - sending feedback based on metrics: 'Straight: Now that is a strike!'
+2025-09-08 15:29:28,786 - __main__ - DEBUG - StopNotify called
+2025-09-08 15:33:10,306 - __main__ - DEBUG - StartNotify called
+2025-09-08 15:33:26,477 - __main__ - DEBUG - Received write command
+2025-09-08 15:33:32,488 - __main__ - INFO - processing video now
+2025-09-08 15:33:32,489 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst.mp4
+2025-09-08 15:34:33,762 - __main__ - ERROR - Processing failed: Need at least 2 frames for finite difference velocity.
+2025-09-08 15:34:33,762 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-08 15:38:04,906 - __main__ - DEBUG - Received write command
+2025-09-08 15:38:10,952 - __main__ - INFO - processing video now
+2025-09-08 15:38:10,953 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_1.mp4
+2025-09-08 15:39:11,628 - __main__ - DEBUG - Updated value after script
+2025-09-08 15:39:11,628 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-08 15:39:22,816 - __main__ - DEBUG - sending feedback based on metrics: "Push fade: You're swinging slightly right with an open face, causing a fading shot that starts right. Square the face more at impact or realign the path to reduce curvature."
+2025-09-08 15:46:04,456 - __main__ - DEBUG - Received write command
+2025-09-08 15:46:10,505 - __main__ - INFO - processing video now
+2025-09-08 15:46:10,505 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_1.mp4
+2025-09-08 15:46:33,460 - __main__ - ERROR - Processing failed: No sticker detected in the video
+2025-09-08 15:46:33,460 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-08 15:46:42,976 - __main__ - DEBUG - Received write command
+2025-09-08 15:46:49,001 - __main__ - INFO - processing video now
+2025-09-08 15:46:49,001 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_2.mp4
+2025-09-08 15:47:08,465 - __main__ - ERROR - Processing failed: No sticker detected in the video
+2025-09-08 15:47:08,465 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-08 15:47:15,676 - __main__ - DEBUG - Received write command
+2025-09-08 15:47:21,704 - __main__ - INFO - processing video now
+2025-09-08 15:47:21,705 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_3.mp4
+2025-09-08 15:47:43,753 - __main__ - ERROR - Processing failed: No sticker detected in the video
+2025-09-08 15:47:43,754 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-08 15:51:22,950 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-08 15:51:22,952 - __main__ - INFO - Registering GATT application...
+2025-09-08 15:51:22,963 - __main__ - INFO - GATT application registered
+2025-09-08 15:51:22,966 - __main__ - INFO - Advertisement registered
+2025-09-08 15:52:31,171 - __main__ - DEBUG - StartNotify called
+2025-09-08 15:54:10,685 - __main__ - DEBUG - Received write command
+2025-09-08 15:54:17,271 - __main__ - INFO - processing video now
+2025-09-08 15:54:17,272 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_4.mp4
+2025-09-08 15:54:23,606 - __main__ - ERROR - Processing failed: No sticker detected in the video
+2025-09-08 15:54:23,606 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-08 15:57:30,427 - __main__ - DEBUG - Received write command
+2025-09-08 15:57:36,462 - __main__ - INFO - processing video now
+2025-09-08 15:57:36,462 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_5.mp4
+2025-09-08 15:57:54,116 - __main__ - ERROR - Processing failed: No sticker detected in the video
+2025-09-08 15:57:54,116 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-08 16:02:24,903 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-08 16:02:24,907 - __main__ - INFO - Registering GATT application...
+2025-09-08 16:02:24,935 - __main__ - INFO - GATT application registered
+2025-09-08 16:02:24,938 - __main__ - INFO - Advertisement registered
+2025-09-08 16:03:45,221 - __main__ - DEBUG - StartNotify called
+2025-09-08 16:03:59,442 - __main__ - DEBUG - Received write command
+2025-09-08 16:04:06,017 - __main__ - INFO - processing video now
+2025-09-08 16:04:06,017 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_6.mp4
+2025-09-08 16:04:12,157 - __main__ - ERROR - Processing failed: No sticker detected in the video
+2025-09-08 16:04:12,157 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-08 16:07:03,701 - __main__ - DEBUG - Received write command
+2025-09-08 16:07:09,718 - __main__ - INFO - processing video now
+2025-09-08 16:07:09,718 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_7.mp4
+2025-09-08 16:07:44,810 - __main__ - DEBUG - Updated value after script
+2025-09-08 16:07:44,810 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-08 16:12:21,992 - __main__ - DEBUG - Received write command
+2025-09-08 16:12:28,023 - __main__ - INFO - processing video now
+2025-09-08 16:12:28,023 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_7.mp4
+2025-09-08 16:13:00,266 - __main__ - DEBUG - Updated value after script
+2025-09-08 16:13:00,267 - __main__ - DEBUG - Emitting PropertiesChanged with updated value

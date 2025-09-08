@@ -55,7 +55,7 @@ fi
 # -------------------------
 
 crop_x=$(((1456 - width) / 2))
-crop_y=$((((1088 - height) / 2) + 25))
+crop_y=$((((1088 - height) / 2) + 40))
 max_crop_y=$((1088 - height))
 
 if (( crop_y > max_crop_y )); then
