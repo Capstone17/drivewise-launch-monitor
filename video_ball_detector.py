@@ -216,40 +216,129 @@ def find_motion_window(
 ) -> tuple[int, int, bool]:
     """Return the frame range surrounding the dynamic sticker and whether it was found.
 
-    The video is scanned frame-by-frame for the ArUco marker with ID
-    ``DYNAMIC_ID``. The motion window spans from the first to the last frame
-    where this sticker is detected, expanded by ``pad_frames`` on each side.
-    The resulting range is capped to ``max_frames`` by trimming from the
-    beginning. If the sticker never appears, the entire clip is returned and the
-    flag is ``False``."""
+    Faster, equally reliable approach using a coarse-to-fine scan:
+    - Coarse passes sample frames with a stride (using ``grab`` to skip decoding)
+      to quickly approximate the first/last detection.
+    - Boundary refinement scans only a small neighborhood with step 1 to find the
+      exact first/last frames.
+    This reduces ArUco calls from O(N) to about O(N/stride) while preserving
+    accuracy.
+    """
 
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    if total <= 0:
+        cap.release()
+        return 0, 0, False
 
     detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
-    first, last = None, None
 
-    for idx in range(total):
+    def detect_has_dynamic(gray_img: np.ndarray) -> bool:
+        corners, ids, _ = detector.detectMarkers(gray_img)
+        return ids is not None and any(m_id[0] == DYNAMIC_ID for m_id in ids)
+
+    # Choose a conservative stride to retain reliability.
+    # At 120 FPS, stride=8 samples ~15 times per second.
+    stride = 8
+
+    # Helper: get grayscale (CLAHE + optional blur)
+    def to_gray(img: np.ndarray) -> np.ndarray:
+        g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        g = CLAHE.apply(g)
+        if USE_BLUR:
+            g = cv2.GaussianBlur(g, (3, 3), 0)
+        return g
+
+    # First coarse pass: offset 0
+    coarse_first, coarse_last = None, None
+    idx = 0
+    while idx < total:
         ret, frame = cap.read()
         if not ret:
             break
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = CLAHE.apply(gray)
-        if USE_BLUR:
-            gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        corners, ids, _ = detector.detectMarkers(gray)
-        if ids is not None and any(m_id[0] == DYNAMIC_ID for m_id in ids):
-            if first is None:
-                first = idx
-            last = idx
+        gray = to_gray(frame)
+        if detect_has_dynamic(gray):
+            if coarse_first is None:
+                coarse_first = idx
+            coarse_last = idx
+        # Skip next stride-1 frames cheaply
+        skipped = 0
+        while skipped < stride - 1 and (idx + 1) < total:
+            if not cap.grab():
+                break
+            skipped += 1
+            idx += 1
+        idx += 1
+
+    # Second coarse pass with half-stride offset to reduce aliasing risk
+    offset = stride // 2
+    if offset > 0 and total > offset:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        # Fast-forward to offset using grab
+        for _ in range(offset):
+            if not cap.grab():
+                break
+        idx = offset
+        while idx < total:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            gray = to_gray(frame)
+            if detect_has_dynamic(gray):
+                if coarse_first is None or idx < coarse_first:
+                    coarse_first = idx
+                if coarse_last is None or idx > coarse_last:
+                    coarse_last = idx
+            skipped = 0
+            while skipped < stride - 1 and (idx + 1) < total:
+                if not cap.grab():
+                    break
+                skipped += 1
+                idx += 1
+            idx += 1
+
+    # If still not found, give up early
+    if coarse_first is None or coarse_last is None:
+        cap.release()
+        return 0, total, False
+
+    # Refine start boundary (scan a small neighborhood with step 1)
+    refine_start = max(0, coarse_first - (stride - 1))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, refine_start)
+    refined_first = None
+    for idx in range(refine_start, min(coarse_first + 1, total)):
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if detect_has_dynamic(to_gray(frame)):
+            refined_first = idx
+            break
+    if refined_first is None:
+        refined_first = coarse_first
+
+    # Refine end boundary. Start at coarse_last and walk forward a limited range
+    # to catch detections between coarse samples. Stop if we see a gap larger
+    # than stride without detections.
+    refined_last = coarse_last
+    cap.set(cv2.CAP_PROP_POS_FRAMES, coarse_last)
+    consecutive_misses = 0
+    max_forward_scan = min(total - coarse_last, stride * 2)
+    for step in range(max_forward_scan):
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if detect_has_dynamic(to_gray(frame)):
+            refined_last = coarse_last + step
+            consecutive_misses = 0
+        else:
+            consecutive_misses += 1
+            if consecutive_misses >= stride:
+                break
 
     cap.release()
 
-    if first is None or last is None:
-        return 0, total, False
-
-    start_frame = max(0, first - pad_frames)
-    end_frame = min(total, last + pad_frames)
+    start_frame = max(0, refined_first - pad_frames)
+    end_frame = min(total, refined_last + pad_frames)
     if end_frame - start_frame > max_frames:
         start_frame = max(end_frame - max_frames, 0)
     return start_frame, end_frame, True
