@@ -525,124 +525,41 @@ def process_video(
                 break
 
 
-        sticker_step_start = time.perf_counter()
-        current_rt = None
-        current_pose = None
-        current_quat = None
-        dynamic_corner = None
+        if in_window:
+            sticker_step_start = time.perf_counter()
+            current_rt = None
+            current_pose = None
+            current_quat = None
+            dynamic_corner = None
 
-        # Prefer fast KLT tracking + PnP when we already have corners, and only
-        # re-run full ArUco detection periodically or when KLT is unreliable.
-        use_klt = (
-            tracker_corners is not None
-            and prev_gray is not None
-            and (last_dynamic_rt is not None)
-            and (frame_idx - (int(last_valid_time * video_fps) if last_valid_time is not None else 0) < REANCHOR_INTERVAL)
-        )
-
-        if use_klt:
-            new_corners, st, err = cv2.calcOpticalFlowPyrLK(
-                prev_gray, marker_gray, tracker_corners, None
+            # Prefer fast KLT tracking + PnP when we already have corners, and only
+            # re-run full ArUco detection periodically or when KLT is unreliable.
+            use_klt = (
+                tracker_corners is not None
+                and prev_gray is not None
+                and (last_dynamic_rt is not None)
+                and (frame_idx - (int(last_valid_time * video_fps) if last_valid_time is not None else 0) < REANCHOR_INTERVAL)
             )
-            if st.sum() == 4:
-                object_pts = np.array(
-                    [
-                        [0.0, 0.0, 0.0],
-                        [DYNAMIC_MARKER_LENGTH, 0.0, 0.0],
-                        [DYNAMIC_MARKER_LENGTH, DYNAMIC_MARKER_LENGTH, 0.0],
-                        [0.0, DYNAMIC_MARKER_LENGTH, 0.0],
-                    ],
-                    dtype=np.float32,
-                )
-                ok, rvec, tvec = cv2.solvePnP(
-                    object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
-                )
-                if ok:
-                    tvec = tvec.reshape(3)
-                    x, y, z = tvec
-                    curr_q = rvec_to_quat(rvec)
-                    if last_dynamic_rt is not None:
-                        prev_q = rvec_to_quat(last_dynamic_rt[0])
-                        if np.dot(curr_q, prev_q) < 0.0:
-                            curr_q = -curr_q
-                            rvec = quat_to_rvec(curr_q)
 
-                    # Reprojection error check
-                    reproj, _ = cv2.projectPoints(
-                        object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS
+            if use_klt:
+                new_corners, st, err = cv2.calcOpticalFlowPyrLK(
+                    prev_gray, marker_gray, tracker_corners, None
+                )
+                if st.sum() == 4:
+                    object_pts = np.array(
+                        [
+                            [0.0, 0.0, 0.0],
+                            [DYNAMIC_MARKER_LENGTH, 0.0, 0.0],
+                            [DYNAMIC_MARKER_LENGTH, DYNAMIC_MARKER_LENGTH, 0.0],
+                            [0.0, DYNAMIC_MARKER_LENGTH, 0.0],
+                        ],
+                        dtype=np.float32,
                     )
-                    reproj_err = np.linalg.norm(
-                        new_corners.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
-                    ).mean()
-
-                    pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
-
-                    # Motion delta check
-                    if pose_ok and last_dynamic_rt is not None:
-                        trans_delta = np.linalg.norm(tvec - last_dynamic_rt[1])
-                        ang_delta = 0.0
-                        if last_dynamic_quat is not None:
-                            ang_delta = np.degrees(
-                                2.0
-                                * np.arccos(
-                                    np.clip(np.dot(curr_q, last_dynamic_quat), -1.0, 1.0)
-                                )
-                            )
-                        if (
-                            trans_delta > MAX_TRANSLATION_DELTA
-                            or ang_delta > MAX_ROTATION_DELTA
-                        ):
-                            pose_ok = False
-
-                    if pose_ok:
-                        roll, pitch, yaw = rvec_to_euler(rvec)
-                        current_rt = (rvec, tvec)
-                        current_pose = (x, y, z, roll, pitch, yaw)
-                        current_quat = curr_q
-                        dynamic_corner = new_corners
-                        if VISUALIZE:
-                            cv2.drawFrameAxes(
-                                frame,
-                                CAMERA_MATRIX,
-                                DIST_COEFFS,
-                                rvec,
-                                tvec,
-                                DYNAMIC_MARKER_LENGTH * 0.5,
-                                2,
-                            )
-                    else:
-                        # Force re-detection this frame
-                        tracker_corners = None
-                        prev_gray = None
-                else:
-                    tracker_corners = None
-                    prev_gray = None
-            else:
-                tracker_corners = None
-                prev_gray = None
-
-        if current_rt is None:
-            # Full ArUco detection (slower) to (re)anchor tracking
-            corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
-            if ids is not None and len(ids) > 0:
-                valid = [
-                    corners[i]
-                    for i in range(len(ids))
-                    if ids[i][0] == DYNAMIC_ID
-                ]
-                if valid:
-                    if VISUALIZE:
-                        valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
-                        cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
-                    for corner in valid:
-                        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                            [corner],
-                            DYNAMIC_MARKER_LENGTH,
-                            CAMERA_MATRIX,
-                            DIST_COEFFS,
-                        )
-                        rvec = rvecs[0, 0]
-                        tvec = tvecs[0, 0].reshape(3)
+                    ok, rvec, tvec = cv2.solvePnP(
+                        object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
+                    )
+                    if ok:
+                        tvec = tvec.reshape(3)
                         x, y, z = tvec
                         curr_q = rvec_to_quat(rvec)
                         if last_dynamic_rt is not None:
@@ -650,72 +567,156 @@ def process_video(
                             if np.dot(curr_q, prev_q) < 0.0:
                                 curr_q = -curr_q
                                 rvec = quat_to_rvec(curr_q)
-                        roll, pitch, yaw = rvec_to_euler(rvec)
-                        current_rt = (rvec, tvec)
-                        current_pose = (x, y, z, roll, pitch, yaw)
-                        current_quat = curr_q
-                        dynamic_corner = corner.reshape(4, 1, 2).astype(np.float32)
+
+                        # Reprojection error check
+                        reproj, _ = cv2.projectPoints(
+                            object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS
+                        )
+                        reproj_err = np.linalg.norm(
+                            new_corners.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
+                        ).mean()
+
+                        pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
+
+                        # Motion delta check
+                        if pose_ok and last_dynamic_rt is not None:
+                            trans_delta = np.linalg.norm(tvec - last_dynamic_rt[1])
+                            ang_delta = 0.0
+                            if last_dynamic_quat is not None:
+                                ang_delta = np.degrees(
+                                    2.0
+                                    * np.arccos(
+                                        np.clip(np.dot(curr_q, last_dynamic_quat), -1.0, 1.0)
+                                    )
+                                )
+                            if (
+                                trans_delta > MAX_TRANSLATION_DELTA
+                                or ang_delta > MAX_ROTATION_DELTA
+                            ):
+                                pose_ok = False
+
+                        if pose_ok:
+                            roll, pitch, yaw = rvec_to_euler(rvec)
+                            current_rt = (rvec, tvec)
+                            current_pose = (x, y, z, roll, pitch, yaw)
+                            current_quat = curr_q
+                            dynamic_corner = new_corners
+                            if VISUALIZE:
+                                cv2.drawFrameAxes(
+                                    frame,
+                                    CAMERA_MATRIX,
+                                    DIST_COEFFS,
+                                    rvec,
+                                    tvec,
+                                    DYNAMIC_MARKER_LENGTH * 0.5,
+                                    2,
+                                )
+                        else:
+                            # Force re-detection this frame
+                            tracker_corners = None
+                            prev_gray = None
+                    else:
+                        tracker_corners = None
+                        prev_gray = None
+                else:
+                    tracker_corners = None
+                    prev_gray = None
+
+            if current_rt is None:
+                # Full ArUco detection (slower) to (re)anchor tracking
+                corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
+                if ids is not None and len(ids) > 0:
+                    valid = [
+                        corners[i]
+                        for i in range(len(ids))
+                        if ids[i][0] == DYNAMIC_ID
+                    ]
+                    if valid:
                         if VISUALIZE:
-                            cv2.drawFrameAxes(
-                                frame,
+                            valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
+                            cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
+                        for corner in valid:
+                            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+                                [corner],
+                                DYNAMIC_MARKER_LENGTH,
                                 CAMERA_MATRIX,
                                 DIST_COEFFS,
-                                rvec,
-                                tvec,
-                                DYNAMIC_MARKER_LENGTH * 0.5,
-                                2,
                             )
-                        break
+                            rvec = rvecs[0, 0]
+                            tvec = tvecs[0, 0].reshape(3)
+                            x, y, z = tvec
+                            curr_q = rvec_to_quat(rvec)
+                            if last_dynamic_rt is not None:
+                                prev_q = rvec_to_quat(last_dynamic_rt[0])
+                                if np.dot(curr_q, prev_q) < 0.0:
+                                    curr_q = -curr_q
+                                    rvec = quat_to_rvec(curr_q)
+                            roll, pitch, yaw = rvec_to_euler(rvec)
+                            current_rt = (rvec, tvec)
+                            current_pose = (x, y, z, roll, pitch, yaw)
+                            current_quat = curr_q
+                            dynamic_corner = corner.reshape(4, 1, 2).astype(np.float32)
+                            if VISUALIZE:
+                                cv2.drawFrameAxes(
+                                    frame,
+                                    CAMERA_MATRIX,
+                                    DIST_COEFFS,
+                                    rvec,
+                                    tvec,
+                                    DYNAMIC_MARKER_LENGTH * 0.5,
+                                    2,
+                                )
+                            break
 
-        sticker_time += time.perf_counter() - sticker_step_start
-        if current_rt is None:
-            pending_times.append(t)
-            if len(pending_times) > MAX_MISSING_FRAMES:
-                tracker_corners = None
-                prev_gray = None
-                last_dynamic_pose = None
-                last_dynamic_rt = None
-                last_dynamic_quat = None
-                last_valid_time = None
-                pending_times.clear()
-        else:
-            if pending_times:
-                if last_dynamic_rt is not None:
-                    interpolate_poses(
-                        pending_times,
-                        last_dynamic_rt,
-                        current_rt,
-                        last_valid_time,
-                        t,
-                        sticker_coords,
-                    )
-                pending_times.clear()
-            x, y, z, roll, pitch, yaw = current_pose
-            sticker_coords.append(
-                {
-                    "time": round(t, 3),
-                    "x": round(float(x), 2),
-                    "y": round(float(y), 2),
-                    "z": round(float(z), 2),
-                    "roll": round(float(roll), 2),
-                    "pitch": round(float(pitch), 2),
-                    "yaw": round(float(yaw), 2),
-                }
-            )
-            last_dynamic_pose = current_pose
-            last_dynamic_rt = current_rt
-            last_dynamic_quat = current_quat
-            last_valid_time = t
-            missing_frames = 0
-            if dynamic_corner is not None:
-                # Ensure shape (4,1,2) for LK
-                if dynamic_corner.shape == (4, 2):
-                    tracker_corners = dynamic_corner.reshape(4, 1, 2).astype(np.float32)
-                else:
-                    tracker_corners = dynamic_corner.astype(np.float32)
-            prev_gray = marker_gray
-        if current_rt is None:
-            missing_frames = len(pending_times)
+            sticker_time += time.perf_counter() - sticker_step_start
+            if current_rt is None:
+                pending_times.append(t)
+                if len(pending_times) > MAX_MISSING_FRAMES:
+                    tracker_corners = None
+                    prev_gray = None
+                    last_dynamic_pose = None
+                    last_dynamic_rt = None
+                    last_dynamic_quat = None
+                    last_valid_time = None
+                    pending_times.clear()
+            else:
+                if pending_times:
+                    if last_dynamic_rt is not None:
+                        interpolate_poses(
+                            pending_times,
+                            last_dynamic_rt,
+                            current_rt,
+                            last_valid_time,
+                            t,
+                            sticker_coords,
+                        )
+                    pending_times.clear()
+                x, y, z, roll, pitch, yaw = current_pose
+                sticker_coords.append(
+                    {
+                        "time": round(t, 3),
+                        "x": round(float(x), 2),
+                        "y": round(float(y), 2),
+                        "z": round(float(z), 2),
+                        "roll": round(float(roll), 2),
+                        "pitch": round(float(pitch), 2),
+                        "yaw": round(float(yaw), 2),
+                    }
+                )
+                last_dynamic_pose = current_pose
+                last_dynamic_rt = current_rt
+                last_dynamic_quat = current_quat
+                last_valid_time = t
+                missing_frames = 0
+                if dynamic_corner is not None:
+                    # Ensure shape (4,1,2) for LK
+                    if dynamic_corner.shape == (4, 2):
+                        tracker_corners = dynamic_corner.reshape(4, 1, 2).astype(np.float32)
+                    else:
+                        tracker_corners = dynamic_corner.astype(np.float32)
+                prev_gray = marker_gray
+            if current_rt is None:
+                missing_frames = len(pending_times)
 
         if frames_dir and inference_start <= frame_idx < inference_end:
             cv2.imwrite(
