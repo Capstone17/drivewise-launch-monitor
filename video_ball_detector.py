@@ -363,7 +363,7 @@ def process_video(
     video_path: str,
     ball_path: str,
     sticker_path: str,
-    frames_dir: str | None = None,
+    frames_dir: str | None = "ball_frames",
 ) -> str:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
@@ -402,6 +402,7 @@ def process_video(
                 os.remove(os.path.join(frames_dir, name))
             except OSError:
                 pass
+        print(f"Saving annotated frames to {frames_dir} from {inference_start} to {inference_end - 1}")
     ball_time = 0.0
     sticker_time = 0.0
     ball_coords = []
@@ -435,6 +436,8 @@ def process_video(
         if h is None:
             h, w = frame.shape[:2]
         t = frame_idx / video_fps
+        # Draw overlays if visualization is enabled or if we're saving frames
+        should_draw = bool(VISUALIZE or (frames_dir and (inference_start <= frame_idx < inference_end)))
         results = None
         in_window = start_frame <= frame_idx < end_frame
         if in_window:
@@ -484,7 +487,7 @@ def process_video(
                         "z": round(bz, 2),
                     }
                 )
-                if VISUALIZE:
+                if should_draw:
                     cv2.circle(frame, (int(cx), int(cy)), int(rad), (0, 255, 0), 2)
                     cv2.putText(
                         frame,
@@ -521,6 +524,11 @@ def process_video(
                 or cx + rad >= w
                 or cy + rad >= h
             ):
+                # Save the current frame before exiting, if requested
+                if frames_dir and inference_start <= frame_idx < inference_end:
+                    cv2.imwrite(
+                        os.path.join(frames_dir, f"frame_{frame_idx:04d}.png"), frame
+                    )
                 print("Ball exited frame; stopping detection")
                 break
 
@@ -601,7 +609,7 @@ def process_video(
                             current_pose = (x, y, z, roll, pitch, yaw)
                             current_quat = curr_q
                             dynamic_corner = new_corners
-                            if VISUALIZE:
+                            if should_draw:
                                 cv2.drawFrameAxes(
                                     frame,
                                     CAMERA_MATRIX,
@@ -632,7 +640,7 @@ def process_video(
                         if ids[i][0] == DYNAMIC_ID
                     ]
                     if valid:
-                        if VISUALIZE:
+                        if should_draw:
                             valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
                             cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
                         for corner in valid:
@@ -656,7 +664,7 @@ def process_video(
                             current_pose = (x, y, z, roll, pitch, yaw)
                             current_quat = curr_q
                             dynamic_corner = corner.reshape(4, 1, 2).astype(np.float32)
-                            if VISUALIZE:
+                            if should_draw:
                                 cv2.drawFrameAxes(
                                     frame,
                                     CAMERA_MATRIX,
@@ -760,10 +768,10 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "exposure_test/tst_good_120.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "440_model8_36s_170cm.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
-    frames_dir = sys.argv[4] if len(sys.argv) > 4 else None
+    frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
     process_video(
         video_path,
         ball_path,
