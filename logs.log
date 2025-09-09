@@ -1398,3 +1398,26 @@
 2025-09-08 16:12:28,023 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst_7.mp4
 2025-09-08 16:13:00,266 - __main__ - DEBUG - Updated value after script
 2025-09-08 16:13:00,267 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-08 16:38:28,052 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-08 16:38:28,053 - __main__ - INFO - Registering GATT application...
+2025-09-08 16:38:28,065 - __main__ - INFO - GATT application registered
+2025-09-08 16:38:28,068 - __main__ - INFO - Advertisement registered
+2025-09-09 15:46:12,250 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-09 15:46:12,254 - __main__ - INFO - Registering GATT application...
+2025-09-09 15:46:12,281 - __main__ - INFO - GATT application registered
+2025-09-09 15:46:12,284 - __main__ - INFO - Advertisement registered
+2025-09-09 15:47:06,204 - __main__ - DEBUG - StartNotify called
+2025-09-09 15:47:11,547 - __main__ - DEBUG - Received write command
+2025-09-09 15:47:16,121 - __main__ - INFO - processing video now
+2025-09-09 15:47:16,121 - __main__ - INFO - Latest video file: /home/hugok/Documents/webcamGolf/tst.mp4
+2025-09-09 15:47:18,473 - __main__ - ERROR - Processing failed: No sticker detected in the video
+2025-09-09 15:47:18,474 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-09 15:54:17,555 - __main__ - DEBUG - StopNotify called
+2025-09-09 15:59:55,290 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-09 15:59:55,296 - __main__ - INFO - Registering GATT application...
+2025-09-09 15:59:55,326 - __main__ - INFO - GATT application registered
+2025-09-09 15:59:55,330 - __main__ - INFO - Advertisement registered
+2025-09-09 16:01:19,174 - __main__ - DEBUG - StartNotify called
+2025-09-09 16:01:29,285 - __main__ - DEBUG - Received write command
+2025-09-09 16:01:29,287 - __main__ - ERROR - Shell script failed: Command '['./embedded/GScrop_improved_flip.sh']' returned non-zero exit status 1.
+2025-09-09 16:01:29,287 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
