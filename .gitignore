@@ -2,9 +2,13 @@
 venv/
 .venv/
 
-# Ignore video.mp4 file produced by tutorial.cpp
-video.mp4
+#Ignore test videos
 embedded/video.mp4
+demo_400_144_387_5000_700
+exposure_test/
+full_integration_vids/
+Indoor_Sim_0807/
+oldTestVids/
 
 # Ignore JSON files genereated by image detection
 stationary_sticker.json
