@@ -1421,3 +1421,23 @@
 2025-09-09 16:01:29,285 - __main__ - DEBUG - Received write command
 2025-09-09 16:01:29,287 - __main__ - ERROR - Shell script failed: Command '['./embedded/GScrop_improved_flip.sh']' returned non-zero exit status 1.
 2025-09-09 16:01:29,287 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-09-09 16:31:17,887 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-09 16:31:17,892 - __main__ - INFO - Registering GATT application...
+2025-09-09 16:31:17,949 - __main__ - INFO - GATT application registered
+2025-09-09 16:31:17,952 - __main__ - INFO - Advertisement registered
+2025-09-09 18:55:49,937 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-09 18:55:49,940 - __main__ - INFO - Registering GATT application...
+2025-09-09 18:55:49,967 - __main__ - INFO - GATT application registered
+2025-09-09 18:55:49,970 - __main__ - INFO - Advertisement registered
+2025-09-09 18:57:50,126 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-09 18:57:50,128 - __main__ - INFO - Registering GATT application...
+2025-09-09 18:57:50,141 - __main__ - INFO - GATT application registered
+2025-09-09 18:57:50,144 - __main__ - INFO - Advertisement registered
+2025-09-12 12:40:58,056 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-12 12:40:58,058 - __main__ - INFO - Registering GATT application...
+2025-09-12 12:40:58,165 - __main__ - INFO - GATT application registered
+2025-09-12 12:40:58,168 - __main__ - INFO - Advertisement registered
+2025-09-12 12:49:31,141 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-12 12:49:31,143 - __main__ - INFO - Registering GATT application...
+2025-09-12 12:49:31,154 - __main__ - INFO - GATT application registered
+2025-09-12 12:49:31,157 - __main__ - INFO - Advertisement registered
