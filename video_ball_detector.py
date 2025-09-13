@@ -13,11 +13,17 @@ os.makedirs(os.environ["YOLO_CONFIG_DIR"], exist_ok=True)
 import cv2
 import numpy as np
 from ultralytics import YOLO
-import onnxruntime as ort
-import torch
 
 # Select GPU if available
 DEVICE = "cpu"  # Force CPU inference to avoid device mismatch errors
+
+# Light Pi-friendly OpenCV tweaks
+try:
+    cv2.setNumThreads(2)
+    if hasattr(cv2, "ocl"):
+        cv2.ocl.setUseOpenCL(False)
+except Exception:
+    pass
 
 ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
@@ -277,7 +283,8 @@ def process_video(
     print(f"Motion window frames: {start_frame}-{end_frame}")
 
     ball_compile_start = time.perf_counter()
-    model = YOLO("golf_ball_detector.onnx", task="detect")
+    # Use TFLite model for lightweight CPU inference on Raspberry Pi
+    model = YOLO("golf_ball_detector.tflite", task="detect")
     ball_compile_time = time.perf_counter() - ball_compile_start
 
     sticker_compile_start = time.perf_counter()
