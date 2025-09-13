@@ -4,16 +4,16 @@ import subprocess
 # For example, ['ls', '-l'] represents the command 'ls -l'.
 commands = [
     ['echo', 'Starting command series...'],
-    ['rpicam-still', '-o', '100_exposure.jpg', '--shutter', '500' '--gain', '1', '--awbgains', '1,1', '--immediate'],
-    ['rpicam-still', '-o', '200_exposure.jpg', '--shutter', '500' '--gain', '1', '--awbgains', '1,1', '--immediate'],
-    ['rpicam-still', '-o', '300_exposure.jpg', '--shutter', '500' '--gain', '1', '--awbgains', '1,1', '--immediate'],
-    ['rpicam-still', '-o', '400_exposure.jpg', '--shutter', '500' '--gain', '1', '--awbgains', '1,1', '--immediate'],
+    ['rpicam-still', '-o', '100_exposure.jpg', '--shutter', '100' '--gain', '1', '--immediate'],
+    ['rpicam-still', '-o', '200_exposure.jpg', '--shutter', '200' '--gain', '1', '--immediate'],
+    ['rpicam-still', '-o', '300_exposure.jpg', '--shutter', '300' '--gain', '1', '--immediate'],
+    ['rpicam-still', '-o', '400_exposure.jpg', '--shutter', '400' '--gain', '1', '--awbgains', '1,1', '--immediate'],
     ['rpicam-still', '-o', '500_exposure.jpg', '--shutter', '500' '--gain', '1', '--awbgains', '1,1', '--immediate'],
-    ['rpicam-still', '-o', '600_exposure.jpg', '--shutter', '500' '--gain', '1', '--awbgains', '1,1', '--immediate'],
-    ['rpicam-still', '-o', '700_exposure.jpg', '--shutter', '500' '--gain', '1', '--awbgains', '1,1', '--immediate'],
-    ['rpicam-still', '-o', '800_exposure.jpg', '--shutter', '500' '--gain', '1', '--awbgains', '1,1', '--immediate'],
-    ['rpicam-still', '-o', '900_exposure.jpg', '--shutter', '500' '--gain', '1', '--awbgains', '1,1', '--immediate'],
-    ['rpicam-still', '-o', '1000_exposure.jpg', '--shutter', '500' '--gain', '1', '--awbgains', '1,1', '--immediate']
+    ['rpicam-still', '-o', '600_exposure.jpg', '--shutter', '600' '--gain', '1', '--awbgains', '1,1', '--immediate'],
+    ['rpicam-still', '-o', '700_exposure.jpg', '--shutter', '700' '--gain', '1', '--awbgains', '1,1', '--immediate'],
+    ['rpicam-still', '-o', '800_exposure.jpg', '--shutter', '800' '--gain', '1', '--awbgains', '1,1', '--immediate'],
+    ['rpicam-still', '-o', '900_exposure.jpg', '--shutter', '900' '--gain', '1', '--awbgains', '1,1', '--immediate'],
+    ['rpicam-still', '-o', '1000_exposure.jpg', '--shutter', '1000' '--gain', '1', '--awbgains', '1,1', '--immediate']
     ] 
 
 for cmd in commands:
