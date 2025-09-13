@@ -10,7 +10,7 @@ interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
-cap = cv2.VideoCapture("res_tst_400.mp4")
+cap = cv2.VideoCapture("input.mp4")
 
 frame_count = 0
 total_time = 0

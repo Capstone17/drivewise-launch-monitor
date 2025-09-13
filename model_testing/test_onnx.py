@@ -4,10 +4,10 @@ import numpy as np
 import time
 
 # Load ONNX model
-session = ort.InferenceSession("model.onnx", providers=["CPUExecutionProvider"])
+session = ort.InferenceSession("../golf_ball_detector.onnx", providers=["CPUExecutionProvider"])
 
 # Open video
-cap = cv2.VideoCapture("input.mp4")
+cap = cv2.VideoCapture("res_tst_400.mp4")
 
 frame_count = 0
 total_time = 0
@@ -29,6 +29,8 @@ while True:
 
     total_time += (end - start)
     frame_count += 1
+    print(f"Frames processed: {frame_count}")
 
 cap.release()
 print(f"ONNX Avg FPS: {frame_count / total_time:.2f}")
+[1, 3, 640, 640]
