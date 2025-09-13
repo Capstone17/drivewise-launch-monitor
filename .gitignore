@@ -9,6 +9,7 @@ exposure_test/
 full_integration_vids/
 Indoor_Sim_0807/
 oldTestVids/
+ball_frames/
 
 # Ignore JSON files genereated by image detection
 stationary_sticker.json
