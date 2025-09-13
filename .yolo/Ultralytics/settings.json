@@ -1,0 +1,21 @@
+{
+  "settings_version": "0.0.6",
+  "datasets_dir": "/home/noahkrem/Documents/ensc-440/datasets",
+  "weights_dir": "/home/noahkrem/Documents/ensc-440/webcamGolf/weights",
+  "runs_dir": "/home/noahkrem/Documents/ensc-440/webcamGolf/runs",
+  "uuid": "fea924b12f9b729fe565aeb1a49d31c74e10616b40ea8bd6301faee9e50a3a52",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "hub": true,
+  "mlflow": true,
+  "neptune": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}
