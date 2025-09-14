@@ -19,6 +19,10 @@ import torch
 # Select GPU if available
 DEVICE = "cpu"  # Force CPU inference to avoid device mismatch errors
 
+# Inference input size for the ONNX model (HxW)
+MODEL_IMG_H = 128
+MODEL_IMG_W = 192
+
 ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
 
@@ -333,7 +337,13 @@ def process_video(
         in_window = start_frame <= frame_idx < end_frame
         if in_window:
             start = time.perf_counter()
-            results = model(frame, verbose=False, device="cpu")
+            # Run detection using the ONNX model's input resolution 192x128
+            results = model(
+                frame,
+                verbose=False,
+                device=DEVICE,
+                imgsz=(MODEL_IMG_H, MODEL_IMG_W),
+            )
             ball_time += time.perf_counter() - start
 
         detected = False
