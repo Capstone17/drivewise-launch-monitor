@@ -25,6 +25,9 @@ try:
 except Exception:
     pass
 
+MODEL_IMG_H = 128
+MODEL_IMG_W = 192
+
 ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
 
@@ -340,7 +343,12 @@ def process_video(
         in_window = start_frame <= frame_idx < end_frame
         if in_window:
             start = time.perf_counter()
-            results = model(frame, verbose=False, device="cpu")
+            results = model(
+                frame,
+                imgsz=(MODEL_IMG_W, MODEL_IMG_H),
+                device=DEVICE,
+                verbose=False,
+            )
             ball_time += time.perf_counter() - start
 
         detected = False
