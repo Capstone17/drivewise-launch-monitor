@@ -1,5 +1,5 @@
 import tflite_runtime.interpreter as tflite
-interpreter = tflite.Interpreter(model_path="model.tflite")
+interpreter = tflite.Interpreter(model_path="../golf_ball_detector.tflite")
 input_details = interpreter.get_input_details()
 
 # If output is fixed: [1, 640, 640, 3], resize needed
