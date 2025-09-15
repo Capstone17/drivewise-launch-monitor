@@ -3,8 +3,11 @@ import numpy as np
 import time
 import tflite_runtime.interpreter as tflite
 
-# Load TFLite model
-interpreter = tflite.Interpreter(model_path="../golf_ball_detector.tflite")
+# Load TFLite model with multithreading
+interpreter = tflite.Interpreter(
+    model_path="../golf_ball_detector.tflite",
+    num_threads=4  # Use 4 cores on Raspberry Pi 5
+)
 interpreter.allocate_tensors()
 
 input_details = interpreter.get_input_details()
@@ -21,7 +24,7 @@ while True:
         break
 
     # Preprocess
-    img = cv2.resize(frame, (640, 640))
+    img = cv2.resize(frame, (192, 128))
     img = img.astype(np.float32) / 255.0
     img = np.expand_dims(img, axis=0)
 
@@ -36,4 +39,8 @@ while True:
     print(f"Frames processed: {frame_count}")
 
 cap.release()
-print(f"TFLite CPU Avg FPS: {frame_count / total_time:.2f}")
+
+if frame_count > 0:
+    print(f"TFLite CPU Avg FPS: {frame_count / total_time:.2f}")
+else:
+    print("No frames processed.")
