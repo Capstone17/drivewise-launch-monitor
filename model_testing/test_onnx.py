@@ -18,7 +18,7 @@ while True:
         break
 
     # Preprocess (adjust if your model needs resize/normalize)
-    img = cv2.resize(frame, (640, 640))  
+    img = cv2.resize(frame, (192, 128))  
     img = img.astype(np.float32) / 255.0
     img = np.transpose(img, (2, 0, 1))  # HWC → CHW
     img = np.expand_dims(img, axis=0)   # Add batch dim
@@ -33,4 +33,3 @@ while True:
 
 cap.release()
 print(f"ONNX Avg FPS: {frame_count / total_time:.2f}")
-[1, 3, 640, 640]
