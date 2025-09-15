@@ -87,11 +87,14 @@ def measure_ball(box):
     x1, y1, x2, y2 = box.xyxy[0]
     w = float(x2 - x1)
     h = float(y2 - y1)
-    radius_px = (w + h) / 4.0
+    raw_radius = (w + h) / 4.0
+    # Guard against zero or negative radius to avoid division by zero
+    radius_for_distance = max(raw_radius, 1e-6)
     cx = float(x1 + x2) / 2.0
     cy = float(y1 + y2) / 2.0
-    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / radius_px
-    return cx, cy, radius_px, distance
+    distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / radius_for_distance
+    # Return raw radius for downstream thresholding logic
+    return cx, cy, raw_radius, distance
 
 
 def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -345,7 +348,7 @@ def process_video(
             start = time.perf_counter()
             results = model(
                 frame,
-                imgsz=(MODEL_IMG_W, MODEL_IMG_H),
+                imgsz=(MODEL_IMG_H, MODEL_IMG_W),
                 device=DEVICE,
                 verbose=False,
             )
