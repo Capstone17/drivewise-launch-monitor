@@ -13,11 +13,11 @@
 # -------------------------
 # Default Parameters
 # -------------------------
-DEFAULT_WIDTH=192
+DEFAULT_WIDTH=672
 DEFAULT_HEIGHT=128
-DEFAULT_FRAMERATE=420
+DEFAULT_FRAMERATE=430
 DEFAULT_DURATION=4000
-DEFAULT_SHUTTER=300  # optional
+DEFAULT_SHUTTER=700  # optional
 
 # -------------------------
 # Handle Help Flag
