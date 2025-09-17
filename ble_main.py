@@ -101,6 +101,8 @@ class rpiService(Service):
         }
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
         self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
+        self.add_characteristic(FindIPCharacteristic(bus, 2, self))
+        # self.add_characteristic(PowerOffCharacteristic(bus, 3, self))
 
 
 class SwingAnalysisCharacteristic(Characteristic):
@@ -234,6 +236,38 @@ class GenerateFeedbackCharacteristic(Characteristic):
         logger.debug("sending feedback based on metrics: " + repr(self.value))
         result_bytes = json.dumps(self.value).encode('utf-8')
         return [dbus.Byte(b) for b in result_bytes]
+    
+class FindIPCharacteristic(Characteristic):
+    uuid = "2c75511d-11b8-407d-b275-a295ef2c199f"
+    description = b"Read to get IP!"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["read"], service,
+        )
+        self.value = "IP Failed"
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 2, self))
+
+    def ReadValue(self, options):
+        # 
+        self.value = subprocess.check_output(["hostname", "-I"], text=True, )
+        logger.debug("Hostname found: " + repr(self.value))
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        return [dbus.Byte(b) for b in result_bytes]
+    
+# class PowerOffCharacteristic(Characteristic):
+#     uuid = ""
+#     description = b"Write to power off BLE!"
+
+#     def __init__(self, bus, index, service):
+#         Characteristic.__init__(
+#             self, bus, index, self.uuid, ["write"], service,
+#         )
+#         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
+
+#     def WriteValue(self, options):
+#         # CHANGE IN FUTURE TO POWER DOWN DEVICE
+        
 
 
 class CharacteristicUserDescriptionDescriptor(Descriptor):
