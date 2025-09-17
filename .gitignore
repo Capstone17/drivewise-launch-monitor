@@ -22,3 +22,6 @@ ball_coords.json
 stationary_sticker.json
 sticker_coords.json
 # ball_frames/
+
+# Ignore BLE logs
+*.log
