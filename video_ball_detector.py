@@ -35,6 +35,8 @@ FOCAL_LENGTH = 1755.0  # pixels
 DYNAMIC_MARKER_LENGTH = 2.38
 MIN_BALL_RADIUS_PX = 9  # pixels
 EDGE_MARGIN_PX = 1
+BALL_SCORE_THRESHOLD = 0.4
+MAX_CENTER_JUMP_PX = 120.0
 
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
@@ -528,38 +530,43 @@ def process_video(
             ]
             candidates = edge_safe if edge_safe else detections
             best_det = max(candidates, key=lambda d: d["score"])
-            x1, y1, x2, y2 = best_det["bbox"]
-            cx, cy, rad, distance = bbox_to_ball_metrics(x1, y1, x2, y2)
-            if rad >= MIN_BALL_RADIUS_PX:
-                bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-                by = (cy - h / 2.0) * distance / FOCAL_LENGTH
-                bz = distance - 30.0
-                ball_coords.append(
-                    {
-                        "time": round(t, 3),
-                        "x": round(bx, 2),
-                        "y": round(by, 2),
-                        "z": round(bz, 2),
-                    }
-                )
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-                cv2.circle(frame, (int(cx), int(cy)), int(rad), (0, 255, 0), 2)
-                cv2.putText(
-                    frame,
-                    f"x:{bx:.2f} y:{by:.2f} z:{bz:.2f}",
-                    (int(cx) + 10, int(cy)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0, 255, 0),
-                    1,
-                    cv2.LINE_AA,
-                )
-                if last_ball_center is not None:
-                    ball_velocity = np.array([cx, cy]) - last_ball_center
-                last_ball_center = np.array([cx, cy])
-                last_ball_radius = rad
-                detected_center = (cx, cy, rad)
-                detected = True
+            if best_det["score"] >= BALL_SCORE_THRESHOLD:
+                x1, y1, x2, y2 = best_det["bbox"]
+                cx, cy, rad, distance = bbox_to_ball_metrics(x1, y1, x2, y2)
+                if rad >= MIN_BALL_RADIUS_PX:
+                    center = np.array([cx, cy], dtype=float)
+                    if last_ball_center is not None and np.linalg.norm(center - last_ball_center) > MAX_CENTER_JUMP_PX:
+                        pass
+                    else:
+                        bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
+                        by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+                        bz = distance - 30.0
+                        ball_coords.append(
+                            {
+                                "time": round(t, 3),
+                                "x": round(bx, 2),
+                                "y": round(by, 2),
+                                "z": round(bz, 2),
+                            }
+                        )
+                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                        cv2.circle(frame, (int(cx), int(cy)), int(rad), (0, 255, 0), 2)
+                        cv2.putText(
+                            frame,
+                            f"x:{bx:.2f} y:{by:.2f} z:{bz:.2f}",
+                            (int(cx) + 10, int(cy)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            (0, 255, 0),
+                            1,
+                            cv2.LINE_AA,
+                        )
+                        if last_ball_center is not None:
+                            ball_velocity = center - last_ball_center
+                        last_ball_center = center
+                        last_ball_radius = rad
+                        detected_center = (cx, cy, rad)
+                        detected = True
 
         if detected and detected_center is not None:
             cx, cy, rad = detected_center
