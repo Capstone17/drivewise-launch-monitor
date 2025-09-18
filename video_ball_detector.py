@@ -12,10 +12,11 @@ os.makedirs(os.environ["YOLO_CONFIG_DIR"], exist_ok=True)
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
 
-# Select GPU if available
-DEVICE = "cpu"  # Force CPU inference to avoid device mismatch errors
+try:
+    from tflite_runtime.interpreter import Interpreter
+except ImportError:  # pragma: no cover - fallback when tflite-runtime is unavailable
+    from tensorflow.lite.python.interpreter import Interpreter
 
 # Light Pi-friendly OpenCV tweaks
 try:
@@ -83,17 +84,16 @@ def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
     return tuple(np.degrees([roll, pitch, yaw]))
 
 
-def measure_ball(box):
-    x1, y1, x2, y2 = box.xyxy[0]
+def bbox_to_ball_metrics(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
+    """Return center, radius and distance estimates for a bounding box."""
+
     w = float(x2 - x1)
     h = float(y2 - y1)
     raw_radius = (w + h) / 4.0
-    # Guard against zero or negative radius to avoid division by zero
     radius_for_distance = max(raw_radius, 1e-6)
     cx = float(x1 + x2) / 2.0
     cy = float(y1 + y2) / 2.0
     distance = FOCAL_LENGTH * ACTUAL_BALL_RADIUS / radius_for_distance
-    # Return raw radius for downstream thresholding logic
     return cx, cy, raw_radius, distance
 
 
@@ -110,6 +110,122 @@ def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
     return enhanced, gray
 
+
+class TFLiteBallDetector:
+    """Thin wrapper around the exported YOLOv8 TFLite model with custom post-processing."""
+
+    def __init__(
+        self,
+        model_path: str,
+        *,
+        conf_threshold: float = 0.01,
+        iou_threshold: float = 0.4,
+        max_detections: int = 10,
+    ) -> None:
+        self.interpreter = Interpreter(model_path=model_path)
+        self.interpreter.allocate_tensors()
+        self.input_details = self.interpreter.get_input_details()[0]
+        self.output_details = self.interpreter.get_output_details()[0]
+        _, self.input_height, self.input_width, _ = self.input_details["shape"]
+        self.input_dtype = self.input_details["dtype"]
+        q_scale, q_zero_point = self.input_details.get("quantization", (0.0, 0))
+        self.input_scale = float(q_scale) if isinstance(q_scale, (np.ndarray, list)) else float(q_scale)
+        self.input_zero_point = (
+            int(q_zero_point[0])
+            if isinstance(q_zero_point, (np.ndarray, list))
+            else int(q_zero_point)
+        )
+        self.conf_threshold = conf_threshold
+        self.iou_threshold = iou_threshold
+        self.max_detections = max_detections
+
+    def detect(self, frame: np.ndarray) -> list[dict]:
+        """Run inference on ``frame`` and return a list of detections sorted by confidence."""
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, (self.input_width, self.input_height), interpolation=cv2.INTER_LINEAR)
+        input_tensor = resized.astype(np.float32) / 255.0
+        if self.input_dtype != np.float32:
+            if self.input_scale == 0.0:
+                raise RuntimeError("Quantized model lacks scale factor")
+            input_tensor = np.round(input_tensor / self.input_scale + self.input_zero_point).astype(
+                self.input_dtype
+            )
+        else:
+            input_tensor = input_tensor.astype(np.float32)
+        input_tensor = np.expand_dims(input_tensor, axis=0)
+        self.interpreter.set_tensor(self.input_details["index"], input_tensor)
+        self.interpreter.invoke()
+        raw_output = self.interpreter.get_tensor(self.output_details["index"])
+        preds = np.squeeze(raw_output, axis=0).transpose(1, 0)  # (anchors, 5)
+        if preds.size == 0:
+            return []
+        boxes_xywh = preds[:, :4]
+        scores = preds[:, 4]
+        mask = scores >= self.conf_threshold
+        if not np.any(mask):
+            return []
+        boxes_xywh = boxes_xywh[mask]
+        scores = scores[mask]
+        boxes_xyxy = self._xywh_to_xyxy(boxes_xywh)
+        h, w = frame.shape[:2]
+        scale_x = w / float(self.input_width)
+        scale_y = h / float(self.input_height)
+        boxes_xyxy[:, [0, 2]] *= scale_x
+        boxes_xyxy[:, [1, 3]] *= scale_y
+        boxes_xyxy[:, [0, 2]] = np.clip(boxes_xyxy[:, [0, 2]], 0.0, w - 1)
+        boxes_xyxy[:, [1, 3]] = np.clip(boxes_xyxy[:, [1, 3]], 0.0, h - 1)
+        keep = self._nms(boxes_xyxy, scores)
+        detections = []
+        for idx in keep[: self.max_detections]:
+            x1, y1, x2, y2 = boxes_xyxy[idx]
+            detections.append(
+                {
+                    "bbox": (float(x1), float(y1), float(x2), float(y2)),
+                    "score": float(scores[idx]),
+                }
+            )
+        return detections
+
+    @staticmethod
+    def _xywh_to_xyxy(boxes: np.ndarray) -> np.ndarray:
+        x, y, w, h = boxes.T
+        half_w = w / 2.0
+        half_h = h / 2.0
+        x1 = x - half_w
+        y1 = y - half_h
+        x2 = x + half_w
+        y2 = y + half_h
+        return np.stack((x1, y1, x2, y2), axis=1)
+
+    def _nms(self, boxes: np.ndarray, scores: np.ndarray) -> list[int]:
+        order = scores.argsort()[::-1]
+        keep: list[int] = []
+        while order.size > 0:
+            i = int(order[0])
+            keep.append(i)
+            if order.size == 1:
+                break
+            rest = order[1:]
+            ious = self._iou(boxes[i], boxes[rest])
+            order = rest[ious <= self.iou_threshold]
+        return keep
+
+    @staticmethod
+    def _iou(box: np.ndarray, boxes: np.ndarray) -> np.ndarray:
+        if boxes.size == 0:
+            return np.empty(0)
+        x1 = np.maximum(box[0], boxes[:, 0])
+        y1 = np.maximum(box[1], boxes[:, 1])
+        x2 = np.minimum(box[2], boxes[:, 2])
+        y2 = np.minimum(box[3], boxes[:, 3])
+        inter_w = np.maximum(0.0, x2 - x1)
+        inter_h = np.maximum(0.0, y2 - y1)
+        inter = inter_w * inter_h
+        area_box = (box[2] - box[0]) * (box[3] - box[1])
+        area_boxes = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        union = area_box + area_boxes - inter + 1e-6
+        return inter / union
 
 def rotmat_to_quat(R: np.ndarray) -> np.ndarray:
     """Convert a rotation matrix to a quaternion (w, x, y, z)."""
@@ -289,8 +405,7 @@ def process_video(
     print(f"Motion window frames: {start_frame}-{end_frame}")
 
     ball_compile_start = time.perf_counter()
-    # Use TFLite model for lightweight CPU inference on Raspberry Pi
-    model = YOLO("golf_ball_detector.tflite", task="detect")
+    detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
     ball_compile_time = time.perf_counter() - ball_compile_start
 
     sticker_compile_start = time.perf_counter()
@@ -342,24 +457,19 @@ def process_video(
         if h is None:
             h, w = frame.shape[:2]
         t = frame_idx / video_fps
-        results = None
+        detections: list[dict] = []
         in_window = start_frame <= frame_idx < end_frame
         if in_window:
             start = time.perf_counter()
-            results = model(
-                frame,
-                imgsz=(MODEL_IMG_H, MODEL_IMG_W),
-                device=DEVICE,
-                verbose=False,
-            )
+            detections = detector.detect(frame)
             ball_time += time.perf_counter() - start
 
         detected = False
         detected_center: tuple[float, float, float] | None = None
-        if in_window and results and len(results[0].boxes) > 0:
-            boxes = results[0].boxes
-            best_idx = boxes.conf.argmax()
-            cx, cy, rad, distance = measure_ball(boxes[best_idx])
+        if in_window and detections:
+            best_det = max(detections, key=lambda d: d["score"])
+            x1, y1, x2, y2 = best_det["bbox"]
+            cx, cy, rad, distance = bbox_to_ball_metrics(x1, y1, x2, y2)
             if rad >= MIN_BALL_RADIUS_PX:
                 bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
                 by = (cy - h / 2.0) * distance / FOCAL_LENGTH
@@ -372,6 +482,7 @@ def process_video(
                         "z": round(bz, 2),
                     }
                 )
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
                 cv2.circle(frame, (int(cx), int(cy)), int(rad), (0, 255, 0), 2)
                 cv2.putText(
                     frame,
