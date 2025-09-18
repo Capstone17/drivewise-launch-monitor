@@ -12,7 +12,7 @@
 # Input Validation
 # -------------------------
 
-if [[ $# -lt 4 ]]; then
+if [[ $# -lt 2 ]]; then
     echo "Usage: $0 <width> <height>"
     echo "Example: $0 196 128"
     exit 1
@@ -20,9 +20,6 @@ fi
 
 width=$1
 height=$2
-framerate=$3
-duration=$4
-shutter=$5
 
 if (( width % 2 != 0 )); then
     echo "Error: width must be an even number (got $width)"
@@ -52,4 +49,4 @@ echo "Cropping at: ($crop_x, $crop_y)"
 media-ctl -d /dev/media0 --set-v4l2 "'imx296 11-001a':0 [fmt:SBGGR10_1X10/${width}x${height} crop:(${crop_x},${crop_y})/${width}x${height}]" -v
 
 # Confirm config
-media-ctl -d /dev/media$m --get-v4l2
+media-ctl -d /dev/media0 --get-v4l2

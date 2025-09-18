@@ -1322,3 +1322,16 @@
 2025-09-18 20:25:39,796 - __main__ - INFO - Registering GATT application...
 2025-09-18 20:25:39,806 - __main__ - INFO - GATT application registered
 2025-09-18 20:25:39,809 - __main__ - INFO - Advertisement registered
+2025-09-18 20:30:34,813 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-18 20:30:34,814 - __main__ - INFO - Registering GATT application...
+2025-09-18 20:30:34,826 - __main__ - INFO - GATT application registered
+2025-09-18 20:30:34,828 - __main__ - INFO - Advertisement registered
+2025-09-18 20:31:53,705 - __main__ - DEBUG - Hostname found: '207.23.222.48 \n'
+2025-09-18 20:40:32,198 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-18 20:40:32,199 - __main__ - INFO - Registering GATT application...
+2025-09-18 20:40:32,211 - __main__ - INFO - GATT application registered
+2025-09-18 20:40:32,213 - __main__ - INFO - Advertisement registered
+2025-09-18 20:45:38,788 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-18 20:45:38,789 - __main__ - INFO - Registering GATT application...
+2025-09-18 20:45:38,799 - __main__ - INFO - GATT application registered
+2025-09-18 20:45:38,800 - __main__ - INFO - Advertisement registered
