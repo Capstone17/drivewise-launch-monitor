@@ -34,6 +34,7 @@ FOCAL_LENGTH = 1755.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 2.38
 MIN_BALL_RADIUS_PX = 9  # pixels
+EDGE_MARGIN_PX = 1
 
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
@@ -97,6 +98,24 @@ def bbox_to_ball_metrics(x1: float, y1: float, x2: float, y2: float) -> tuple[fl
     return cx, cy, raw_radius, distance
 
 
+def bbox_within_image(
+    bbox: tuple[float, float, float, float],
+    width: float,
+    height: float,
+    *,
+    margin: float = EDGE_MARGIN_PX,
+) -> bool:
+    """Return ``True`` when ``bbox`` stays inside the image bounds with ``margin`` padding."""
+
+    x1, y1, x2, y2 = bbox
+    return (
+        x1 > margin
+        and y1 > margin
+        and x2 < width - margin
+        and y2 < height - margin
+    )
+
+
 def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Enhance ``frame`` for low light and return both color and gray images."""
     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
@@ -142,9 +161,9 @@ class TFLiteBallDetector:
     def detect(self, frame: np.ndarray) -> list[dict]:
         """Run inference on ``frame`` and return a list of detections sorted by confidence."""
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        resized = cv2.resize(rgb, (self.input_width, self.input_height), interpolation=cv2.INTER_LINEAR)
-        input_tensor = resized.astype(np.float32) / 255.0
+        letterboxed, ratio, pad = self._letterbox(frame, (self.input_height, self.input_width))
+        rgb = cv2.cvtColor(letterboxed, cv2.COLOR_BGR2RGB)
+        input_tensor = rgb.astype(np.float32) / 255.0
         if self.input_dtype != np.float32:
             if self.input_scale == 0.0:
                 raise RuntimeError("Quantized model lacks scale factor")
@@ -168,11 +187,15 @@ class TFLiteBallDetector:
         boxes_xywh = boxes_xywh[mask]
         scores = scores[mask]
         boxes_xyxy = self._xywh_to_xyxy(boxes_xywh)
+        left, top = pad
+        boxes_xyxy[:, [0, 2]] -= left
+        boxes_xyxy[:, [1, 3]] -= top
+        if ratio == 0:
+            raise RuntimeError("Letterbox ratio is zero")
+        inv_ratio = 1.0 / ratio
+        boxes_xyxy[:, [0, 2]] *= inv_ratio
+        boxes_xyxy[:, [1, 3]] *= inv_ratio
         h, w = frame.shape[:2]
-        scale_x = w / float(self.input_width)
-        scale_y = h / float(self.input_height)
-        boxes_xyxy[:, [0, 2]] *= scale_x
-        boxes_xyxy[:, [1, 3]] *= scale_y
         boxes_xyxy[:, [0, 2]] = np.clip(boxes_xyxy[:, [0, 2]], 0.0, w - 1)
         boxes_xyxy[:, [1, 3]] = np.clip(boxes_xyxy[:, [1, 3]], 0.0, h - 1)
         keep = self._nms(boxes_xyxy, scores)
@@ -226,6 +249,37 @@ class TFLiteBallDetector:
         area_boxes = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
         union = area_box + area_boxes - inter + 1e-6
         return inter / union
+
+    @staticmethod
+    def _letterbox(
+        image: np.ndarray,
+        new_shape: tuple[int, int],
+        color: tuple[int, int, int] = (0, 0, 0),
+    ) -> tuple[np.ndarray, float, tuple[float, float]]:
+        """Resize ``image`` with unchanged aspect ratio using padding."""
+
+        shape = image.shape[:2]  # h, w
+        target_h, target_w = new_shape
+        if shape[0] == 0 or shape[1] == 0:
+            raise ValueError("Invalid frame shape for letterbox")
+        ratio = min(target_h / shape[0], target_w / shape[1])
+        new_unpad = (int(round(shape[1] * ratio)), int(round(shape[0] * ratio)))
+        if new_unpad[0] != shape[1] or new_unpad[1] != shape[0]:
+            resized = cv2.resize(image, new_unpad, interpolation=cv2.INTER_LINEAR)
+        else:
+            resized = image
+        dw = target_w - new_unpad[0]
+        dh = target_h - new_unpad[1]
+        dw /= 2
+        dh /= 2
+        top = int(round(dh - 0.1))
+        bottom = int(round(dh + 0.1))
+        left = int(round(dw - 0.1))
+        right = int(round(dw + 0.1))
+        padded = cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
+        if padded.shape[0] != target_h or padded.shape[1] != target_w:
+            padded = cv2.resize(padded, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+        return padded, ratio, (left, top)
 
 def rotmat_to_quat(R: np.ndarray) -> np.ndarray:
     """Convert a rotation matrix to a quaternion (w, x, y, z)."""
@@ -467,7 +521,13 @@ def process_video(
         detected = False
         detected_center: tuple[float, float, float] | None = None
         if in_window and detections:
-            best_det = max(detections, key=lambda d: d["score"])
+            edge_safe = [
+                det
+                for det in detections
+                if bbox_within_image(det["bbox"], w, h)
+            ]
+            candidates = edge_safe if edge_safe else detections
+            best_det = max(candidates, key=lambda d: d["score"])
             x1, y1, x2, y2 = best_det["bbox"]
             cx, cy, rad, distance = bbox_to_ball_metrics(x1, y1, x2, y2)
             if rad >= MIN_BALL_RADIUS_PX:
@@ -504,10 +564,10 @@ def process_video(
         if detected and detected_center is not None:
             cx, cy, rad = detected_center
             if (
-                cx - rad <= 0
-                or cy - rad <= 0
-                or cx + rad >= w
-                or cy + rad >= h
+                cx <= EDGE_MARGIN_PX
+                or cy <= EDGE_MARGIN_PX
+                or cx >= w - EDGE_MARGIN_PX
+                or cy >= h - EDGE_MARGIN_PX
             ):
                 print("Ball exited frame; stopping detection")
                 break
