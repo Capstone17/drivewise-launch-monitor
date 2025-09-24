@@ -36,6 +36,8 @@ DYNAMIC_MARKER_LENGTH = 2.38
 MIN_BALL_RADIUS_PX = 9  # pixels
 EDGE_MARGIN_PX = 1
 BALL_SCORE_THRESHOLD = 0.4
+MOTION_WINDOW_SCORE_THRESHOLD = 0.1
+MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
 
 # Load camera calibration parameters
@@ -394,48 +396,93 @@ def interpolate_poses(
 
 def find_motion_window(
     video_path: str,
+    detector: TFLiteBallDetector,
     *,
-    pad_frames: int = 20,
+    pad_frames: int = MAX_MOTION_FRAMES,
     max_frames: int = MAX_MOTION_FRAMES,
+    confirm_radius: int = 3,
+    score_threshold: float = MOTION_WINDOW_SCORE_THRESHOLD,
 ) -> tuple[int, int, bool]:
-    """Return the frame range surrounding the dynamic sticker and whether it was found.
+    """Return a tight motion window around the ball's last appearance.
 
-    The video is scanned frame-by-frame for the ArUco marker with ID
-    ``DYNAMIC_ID``. The motion window spans from the first to the last frame
-    where this sticker is detected, expanded by ``pad_frames`` on each side.
-    The resulting range is capped to ``max_frames`` by trimming from the
-    beginning. If the sticker never appears, the entire clip is returned and the
-    flag is ``False``."""
+    Frames are processed sequentially so each needs at most one detector pass.
+    Candidate detections must look like a ball (nearly square box, reasonable
+    radius) and stay close to the previous accepted position. Once the detector
+    misses ``confirm_radius`` frames in a row the search stops and the window is
+    anchored around the last confirmed sighting."""
 
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    if total == 0:
+        cap.release()
+        return 0, 0, False
 
-    detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
-    first, last = None, None
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
+
+    last_detection_idx: int | None = None
+    last_center: np.ndarray | None = None
+    consecutive_misses = 0
+    reset_after_misses = max(confirm_radius * 3, 12)
 
     for idx in range(total):
         ret, frame = cap.read()
         if not ret:
             break
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = CLAHE.apply(gray)
-        if USE_BLUR:
-            gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        corners, ids, _ = detector.detectMarkers(gray)
-        if ids is not None and any(m_id[0] == DYNAMIC_ID for m_id in ids):
-            if first is None:
-                first = idx
-            last = idx
+
+        enhanced, _ = preprocess_frame(frame)
+        detections = detector.detect(enhanced)
+        accepted = False
+        if detections:
+            filtered: list[tuple[float, dict]] = []
+            for det in detections:
+                score = det["score"]
+                if score < score_threshold:
+                    continue
+                x1, y1, x2, y2 = det["bbox"]
+                width = float(x2 - x1)
+                height = float(y2 - y1)
+                if width <= 0.0 or height <= 0.0:
+                    continue
+                aspect = min(width, height) / max(width, height)
+                if aspect < MOTION_WINDOW_MIN_ASPECT_RATIO:
+                    continue
+                if frame_width and frame_height:
+                    if not bbox_within_image(det["bbox"], float(frame_width), float(frame_height)):
+                        continue
+                _, _, radius, _ = bbox_to_ball_metrics(x1, y1, x2, y2)
+                if radius < MIN_BALL_RADIUS_PX:
+                    continue
+                filtered.append((score, det))
+            if filtered:
+                _, best_det = max(filtered, key=lambda item: item[0])
+                x1, y1, x2, y2 = best_det["bbox"]
+                cx, cy, _, _ = bbox_to_ball_metrics(x1, y1, x2, y2)
+                center = np.array([cx, cy], dtype=float)
+                if last_center is not None:
+                    if np.linalg.norm(center - last_center) <= MAX_CENTER_JUMP_PX:
+                        accepted = True
+                else:
+                    accepted = True
+                if accepted:
+                    last_center = center
+                    last_detection_idx = idx
+                    consecutive_misses = 0
+        if not accepted:
+            consecutive_misses += 1
+            if consecutive_misses > reset_after_misses:
+                last_center = None
+                consecutive_misses = reset_after_misses
 
     cap.release()
 
-    if first is None or last is None:
+    if last_detection_idx is None:
         return 0, total, False
 
-    start_frame = max(0, first - pad_frames)
-    end_frame = min(total, last + pad_frames)
+    start_frame = max(0, last_detection_idx - pad_frames)
+    end_frame = min(total, last_detection_idx + confirm_radius + 1)
     if end_frame - start_frame > max_frames:
-        start_frame = max(end_frame - max_frames, 0)
+        start_frame = max(0, end_frame - max_frames)
     return start_frame, end_frame, True
 
 
@@ -454,15 +501,15 @@ def process_video(
     """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
-    # Scan for the sticker before expensive model compilation
-    start_frame, end_frame, sticker_found = find_motion_window(video_path)
-    if not sticker_found:
-        raise RuntimeError("No sticker detected in the video")
-    print(f"Motion window frames: {start_frame}-{end_frame}")
 
     ball_compile_start = time.perf_counter()
     detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
     ball_compile_time = time.perf_counter() - ball_compile_start
+
+    start_frame, end_frame, ball_found = find_motion_window(video_path, detector)
+    if not ball_found:
+        raise RuntimeError("No ball detected in the video")
+    print(f"Motion window frames: {start_frame}-{end_frame}")
 
     sticker_compile_start = time.perf_counter()
     aruco_detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
@@ -471,8 +518,8 @@ def process_video(
     cap = cv2.VideoCapture(video_path)
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    inference_start = max(0, start_frame - 5)
-    inference_end = min(total_frames, end_frame + 5)
+    inference_start = max(0, start_frame)
+    inference_end = min(total_frames, end_frame)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     if frames_dir:
@@ -504,6 +551,12 @@ def process_video(
         ret, frame = cap.read()
         if not ret:
             break
+        should_infer = inference_start <= frame_idx < inference_end
+        if not should_infer:
+            if frame_idx >= inference_end:
+                break
+            frame_idx += 1
+            continue
         orig = frame
         frame, gray = preprocess_frame(frame)
         marker_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
