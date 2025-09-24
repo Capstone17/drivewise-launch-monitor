@@ -40,6 +40,18 @@ MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
 
+MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+try:
+    _early_exit_env = int(os.environ.get("MOTION_WINDOW_EARLY_EXIT_MISSES", "0"))
+except ValueError:
+    _early_exit_env = 0
+MOTION_WINDOW_EARLY_EXIT_MISSES = _early_exit_env if _early_exit_env > 0 else None
+
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
 _calib_data = np.load(_calib_path)
@@ -402,35 +414,66 @@ def find_motion_window(
     max_frames: int = MAX_MOTION_FRAMES,
     confirm_radius: int = 3,
     score_threshold: float = MOTION_WINDOW_SCORE_THRESHOLD,
-) -> tuple[int, int, bool]:
+    debug: bool = False,
+) -> tuple[int, int, bool, dict[str, int | bool | None]]:
     """Return a tight motion window around the ball's last appearance.
 
-    Frames are processed sequentially so each needs at most one detector pass.
-    Candidate detections must look like a ball (nearly square box, reasonable
-    radius) and stay close to the previous accepted position. Once the detector
-    misses ``confirm_radius`` frames in a row the search stops and the window is
-    anchored around the last confirmed sighting."""
+    The helper keeps lightweight stats so we can inspect how much work the
+    search performs. When ``debug`` is ``True`` the helper will drop into a
+    ``pdb`` breakpoint the first time it accepts a detection and when it bails
+    out after prolonged misses, which makes it easier to inspect the detector's
+    inputs without littering the hot path with print statements."""
 
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    if total == 0:
-        cap.release()
-        return 0, 0, False
 
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
-
+    frames_processed = 0
+    detector_calls = 0
+    accepted_detections = 0
+    resets = 0
+    first_detection_idx: int | None = None
     last_detection_idx: int | None = None
     last_center: np.ndarray | None = None
     consecutive_misses = 0
+    early_exit = False
     reset_after_misses = max(confirm_radius * 3, 12)
+    early_exit_limit = MOTION_WINDOW_EARLY_EXIT_MISSES
+
+    def trigger_breakpoint(frame_idx: int, reason: str) -> None:
+        if not debug:
+            return
+        print(
+            f"[motion_debug] frame={frame_idx} reason={reason} "
+            f"last_detection={last_detection_idx} misses={consecutive_misses}"
+        )
+        breakpoint()
+
+    if total == 0:
+        cap.release()
+        stats = {
+            "frames_processed": frames_processed,
+            "detector_calls": detector_calls,
+            "accepted_detections": accepted_detections,
+            "first_detection_frame": first_detection_idx,
+            "last_detection_frame": last_detection_idx,
+            "early_exit": early_exit,
+            "early_exit_limit": early_exit_limit,
+            "resets": resets,
+        }
+        return 0, 0, False, stats
+
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
 
     for idx in range(total):
         ret, frame = cap.read()
         if not ret:
             break
 
+        frames_processed += 1
+
         enhanced, _ = preprocess_frame(frame)
+        detector_calls += 1
         detections = detector.detect(enhanced)
         accepted = False
         if detections:
@@ -465,25 +508,50 @@ def find_motion_window(
                 else:
                     accepted = True
                 if accepted:
+                    if first_detection_idx is None:
+                        first_detection_idx = idx
+                        trigger_breakpoint(idx, "first-detection")
                     last_center = center
                     last_detection_idx = idx
                     consecutive_misses = 0
+                    accepted_detections += 1
         if not accepted:
             consecutive_misses += 1
+            if (
+                last_detection_idx is not None
+                and early_exit_limit is not None
+                and consecutive_misses > early_exit_limit
+            ):
+                early_exit = True
+                trigger_breakpoint(idx, "early-exit-after-misses")
+                break
             if consecutive_misses > reset_after_misses:
                 last_center = None
                 consecutive_misses = reset_after_misses
+                resets += 1
+                trigger_breakpoint(idx, "reset-tracker")
 
     cap.release()
 
+    stats = {
+        "frames_processed": frames_processed,
+        "detector_calls": detector_calls,
+        "accepted_detections": accepted_detections,
+        "first_detection_frame": first_detection_idx,
+        "last_detection_frame": last_detection_idx,
+        "early_exit": early_exit,
+        "early_exit_limit": early_exit_limit,
+        "resets": resets,
+    }
+
     if last_detection_idx is None:
-        return 0, total, False
+        return 0, total, False, stats
 
     start_frame = max(0, last_detection_idx - pad_frames)
     end_frame = min(total, last_detection_idx + confirm_radius + 1)
     if end_frame - start_frame > max_frames:
         start_frame = max(0, end_frame - max_frames)
-    return start_frame, end_frame, True
+    return start_frame, end_frame, True, stats
 
 
 def process_video(
@@ -506,10 +574,20 @@ def process_video(
     detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
     ball_compile_time = time.perf_counter() - ball_compile_start
 
-    start_frame, end_frame, ball_found = find_motion_window(video_path, detector)
+    start_frame, end_frame, ball_found, motion_stats = find_motion_window(
+        video_path,
+        detector,
+        debug=MOTION_WINDOW_DEBUG,
+    )
     if not ball_found:
         raise RuntimeError("No ball detected in the video")
-    print(f"Motion window frames: {start_frame}-{end_frame}")
+    processed = motion_stats.get("frames_processed", 0)
+    detector_calls = motion_stats.get("detector_calls", 0)
+    print(
+        "Motion window frames: "
+        f"{start_frame}-{end_frame} (processed {processed} frames, "
+        f"detector runs {detector_calls})"
+    )
 
     sticker_compile_start = time.perf_counter()
     aruco_detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
