@@ -416,142 +416,217 @@ def find_motion_window(
     score_threshold: float = MOTION_WINDOW_SCORE_THRESHOLD,
     debug: bool = False,
 ) -> tuple[int, int, bool, dict[str, int | bool | None]]:
-    """Return a tight motion window around the ball's last appearance.
+    """Return a motion window around the last confident ball sighting.
 
-    The helper keeps lightweight stats so we can inspect how much work the
-    search performs. When ``debug`` is ``True`` the helper will drop into a
-    ``pdb`` breakpoint the first time it accepts a detection and when it bails
-    out after prolonged misses, which makes it easier to inspect the detector's
-    inputs without littering the hot path with print statements."""
+    The search prioritises late frames by sampling the video with progressively
+    finer strides until the first positive detection is found, then refines the
+    exact exit frame with a short forward scan. The helper records lightweight
+    stats describing how many frames were actually decoded so we can validate
+    efficiency claims."""
 
     cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Unable to open video: {video_path}")
+
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    miss_limit = (
+        MOTION_WINDOW_EARLY_EXIT_MISSES
+        if MOTION_WINDOW_EARLY_EXIT_MISSES is not None
+        else max(confirm_radius * 3, 9)
+    )
 
-    frames_processed = 0
-    detector_calls = 0
-    accepted_detections = 0
-    resets = 0
-    first_detection_idx: int | None = None
-    last_detection_idx: int | None = None
-    last_center: np.ndarray | None = None
-    consecutive_misses = 0
-    early_exit = False
-    reset_after_misses = max(confirm_radius * 3, 12)
-    early_exit_limit = MOTION_WINDOW_EARLY_EXIT_MISSES
-
-    def trigger_breakpoint(frame_idx: int, reason: str) -> None:
-        if not debug:
-            return
-        print(
-            f"[motion_debug] frame={frame_idx} reason={reason} "
-            f"last_detection={last_detection_idx} misses={consecutive_misses}"
-        )
-        breakpoint()
-
-    if total == 0:
-        cap.release()
-        stats = {
-            "frames_processed": frames_processed,
-            "detector_calls": detector_calls,
-            "accepted_detections": accepted_detections,
-            "first_detection_frame": first_detection_idx,
-            "last_detection_frame": last_detection_idx,
-            "early_exit": early_exit,
-            "early_exit_limit": early_exit_limit,
-            "resets": resets,
-        }
-        return 0, 0, False, stats
-
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
-
-    for idx in range(total):
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        frames_processed += 1
-
-        enhanced, _ = preprocess_frame(frame)
-        detector_calls += 1
-        detections = detector.detect(enhanced)
-        accepted = False
-        if detections:
-            filtered: list[tuple[float, dict]] = []
-            for det in detections:
-                score = det["score"]
-                if score < score_threshold:
-                    continue
-                x1, y1, x2, y2 = det["bbox"]
-                width = float(x2 - x1)
-                height = float(y2 - y1)
-                if width <= 0.0 or height <= 0.0:
-                    continue
-                aspect = min(width, height) / max(width, height)
-                if aspect < MOTION_WINDOW_MIN_ASPECT_RATIO:
-                    continue
-                if frame_width and frame_height:
-                    if not bbox_within_image(det["bbox"], float(frame_width), float(frame_height)):
-                        continue
-                _, _, radius, _ = bbox_to_ball_metrics(x1, y1, x2, y2)
-                if radius < MIN_BALL_RADIUS_PX:
-                    continue
-                filtered.append((score, det))
-            if filtered:
-                _, best_det = max(filtered, key=lambda item: item[0])
-                x1, y1, x2, y2 = best_det["bbox"]
-                cx, cy, _, _ = bbox_to_ball_metrics(x1, y1, x2, y2)
-                center = np.array([cx, cy], dtype=float)
-                if last_center is not None:
-                    if np.linalg.norm(center - last_center) <= MAX_CENTER_JUMP_PX:
-                        accepted = True
-                else:
-                    accepted = True
-                if accepted:
-                    if first_detection_idx is None:
-                        first_detection_idx = idx
-                        trigger_breakpoint(idx, "first-detection")
-                    last_center = center
-                    last_detection_idx = idx
-                    consecutive_misses = 0
-                    accepted_detections += 1
-        if not accepted:
-            consecutive_misses += 1
-            if (
-                last_detection_idx is not None
-                and early_exit_limit is not None
-                and consecutive_misses > early_exit_limit
-            ):
-                early_exit = True
-                trigger_breakpoint(idx, "early-exit-after-misses")
-                break
-            if consecutive_misses > reset_after_misses:
-                last_center = None
-                consecutive_misses = reset_after_misses
-                resets += 1
-                trigger_breakpoint(idx, "reset-tracker")
-
-    cap.release()
-
-    stats = {
-        "frames_processed": frames_processed,
-        "detector_calls": detector_calls,
-        "accepted_detections": accepted_detections,
-        "first_detection_frame": first_detection_idx,
-        "last_detection_frame": last_detection_idx,
-        "early_exit": early_exit,
-        "early_exit_limit": early_exit_limit,
-        "resets": resets,
+    stats: dict[str, int | bool | None] = {
+        "total_frames": total,
+        "frames_evaluated": 0,
+        "frames_decoded": 0,
+        "frames_with_ball": 0,
+        "detector_runs": 0,
+        "seeks": 0,
+        "coarse_step": None,
+        "coarse_frames_scanned": 0,
+        "coarse_found_frame": None,
+        "coarse_false_frame": None,
+        "fallback_full_scan": False,
+        "refine_frames": 0,
+        "refine_last_frame": None,
+        "miss_limit": miss_limit,
     }
 
-    if last_detection_idx is None:
-        return 0, total, False, stats
+    detection_cache: dict[int, dict | None] = {}
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
+    current_pos: int | None = None
 
-    start_frame = max(0, last_detection_idx - pad_frames)
-    end_frame = min(total, last_detection_idx + confirm_radius + 1)
-    if end_frame - start_frame > max_frames:
-        start_frame = max(0, end_frame - max_frames)
-    return start_frame, end_frame, True, stats
+    def debug_break(reason: str, frame_idx: int | None = None) -> None:
+        if not debug:
+            return
+        print(f"[motion_debug] {reason} frame={frame_idx}")
+        breakpoint()
+
+    def decode_frame(idx: int) -> tuple[bool, np.ndarray | None]:
+        nonlocal current_pos, frame_width, frame_height
+        if idx < 0 or idx >= total:
+            return False, None
+        if current_pos is None or idx != current_pos:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            stats["seeks"] += 1
+        ret, frame = cap.read()
+        if not ret:
+            current_pos = None
+            return False, None
+        current_pos = idx + 1
+        stats["frames_decoded"] += 1
+        if frame_width == 0 or frame_height == 0:
+            frame_height, frame_width = frame.shape[:2]
+        return True, frame
+
+    def detect_frame(idx: int) -> dict | None:
+        stats["frames_evaluated"] += 1
+        cached = detection_cache.get(idx, ...)
+        if cached is not ...:
+            return cached  # type: ignore[return-value]
+        ok, frame = decode_frame(idx)
+        if not ok or frame is None:
+            detection_cache[idx] = None
+            return None
+        enhanced, _ = preprocess_frame(frame)
+        stats["detector_runs"] += 1
+        detections = detector.detect(enhanced)
+        best: dict | None = None
+        best_score = float("-inf")
+        for det in detections:
+            score = det["score"]
+            if score < score_threshold:
+                continue
+            x1, y1, x2, y2 = det["bbox"]
+            width = float(x2 - x1)
+            height = float(y2 - y1)
+            if width <= 0.0 or height <= 0.0:
+                continue
+            aspect = min(width, height) / max(width, height)
+            if aspect < MOTION_WINDOW_MIN_ASPECT_RATIO:
+                continue
+            if frame_width and frame_height:
+                if not bbox_within_image(det["bbox"], float(frame_width), float(frame_height)):
+                    continue
+            cx, cy, radius, _ = bbox_to_ball_metrics(x1, y1, x2, y2)
+            if radius < MIN_BALL_RADIUS_PX:
+                continue
+            if score > best_score:
+                center = np.array([cx, cy], dtype=float)
+                best = {
+                    "frame": idx,
+                    "center": center,
+                    "radius": float(radius),
+                    "bbox": (float(x1), float(y1), float(x2), float(y2)),
+                    "score": float(score),
+                }
+                best_score = score
+        detection_cache[idx] = best
+        if best is not None:
+            stats["frames_with_ball"] += 1
+        return best
+
+    try:
+        if total == 0:
+            stats["frames_processed"] = 0
+            stats["detector_calls"] = 0
+            return 0, 0, False, stats
+
+        coarse_true: int | None = None
+        coarse_false: int | None = None
+        coarse_frames_total = 0
+        coarse_steps = (64, 32, 16, 8, 4)
+        for step in coarse_steps:
+            idx = total - 1
+            last_false = total
+            frames_this_step = 0
+            while idx >= 0:
+                frames_this_step += 1
+                det = detect_frame(idx)
+                if det is not None:
+                    coarse_true = idx
+                    coarse_false = last_false if last_false < total else None
+                    stats["coarse_step"] = step
+                    stats["coarse_found_frame"] = idx
+                    stats["coarse_false_frame"] = coarse_false
+                    debug_break("coarse-hit", idx)
+                    break
+                last_false = idx
+                idx -= step
+            coarse_frames_total += frames_this_step
+            if coarse_true is not None:
+                break
+
+        if coarse_true is None:
+            stats["fallback_full_scan"] = True
+            idx = total - 1
+            frames_this_step = 0
+            while idx >= 0:
+                frames_this_step += 1
+                det = detect_frame(idx)
+                if det is not None:
+                    coarse_true = idx
+                    coarse_false = idx + 1 if idx + 1 < total else None
+                    stats["coarse_step"] = 1
+                    stats["coarse_found_frame"] = idx
+                    stats["coarse_false_frame"] = coarse_false
+                    debug_break("fallback-hit", idx)
+                    break
+                idx -= 1
+            coarse_frames_total += frames_this_step
+
+        stats["coarse_frames_scanned"] = coarse_frames_total
+
+        if coarse_true is None:
+            stats["frames_processed"] = len(detection_cache)
+            stats["detector_calls"] = stats["detector_runs"]
+            return 0, total, False, stats
+
+        initial_det = detect_frame(coarse_true)
+        if initial_det is None:
+            stats["frames_processed"] = len(detection_cache)
+            stats["detector_calls"] = stats["detector_runs"]
+            return 0, total, False, stats
+
+        last_detection_idx = coarse_true
+        last_center = initial_det["center"]
+        refine_idx = coarse_true + 1
+        misses = 0
+        refine_frames = 0
+        center_jump_limit = MAX_CENTER_JUMP_PX * 1.25
+
+        while refine_idx < total and misses < miss_limit:
+            det = detect_frame(refine_idx)
+            refine_frames += 1
+            if det is not None:
+                center = det["center"]
+                if last_center is None or np.linalg.norm(center - last_center) <= center_jump_limit:
+                    last_detection_idx = refine_idx
+                    last_center = center
+                    misses = 0
+                else:
+                    misses += 1
+            else:
+                misses += 1
+            refine_idx += 1
+
+        stats["refine_frames"] = refine_frames
+        stats["refine_last_frame"] = last_detection_idx
+
+        start_frame = max(0, last_detection_idx - pad_frames)
+        end_frame = min(total, last_detection_idx + confirm_radius + 1)
+        if end_frame - start_frame > max_frames:
+            start_frame = max(0, end_frame - max_frames)
+
+        stats["frames_processed"] = len(detection_cache)
+        stats["detector_calls"] = stats["detector_runs"]
+        stats["coarse_false_frame"] = coarse_false
+        stats["last_detection_frame"] = last_detection_idx
+
+        return start_frame, end_frame, True, stats
+    finally:
+        cap.release()
 
 
 def process_video(
@@ -583,10 +658,19 @@ def process_video(
         raise RuntimeError("No ball detected in the video")
     processed = motion_stats.get("frames_processed", 0)
     detector_calls = motion_stats.get("detector_calls", 0)
+    coarse_step = motion_stats.get("coarse_step")
+    refine_frames = motion_stats.get("refine_frames")
+    parts = [
+        f"decoded {processed} frames",
+        f"detector runs {detector_calls}",
+    ]
+    if isinstance(coarse_step, int) and coarse_step > 0:
+        parts.append(f"coarse step {coarse_step}")
+    if isinstance(refine_frames, int) and refine_frames > 0:
+        parts.append(f"refine frames {refine_frames}")
     print(
         "Motion window frames: "
-        f"{start_frame}-{end_frame} (processed {processed} frames, "
-        f"detector runs {detector_calls})"
+        f"{start_frame}-{end_frame} (" + ", ".join(parts) + ")"
     )
 
     sticker_compile_start = time.perf_counter()
