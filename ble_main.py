@@ -128,18 +128,25 @@ class SwingAnalysisCharacteristic(Characteristic):
     def WriteValue(self, value, options):
         logger.debug("Received write command")
         try:
-            # Run script
+            # Run config script
             subprocess.run(
                 [
-                    "./embedded/GScrop_improved_flip.sh",
-                    "400",
-                    "144",
-                    "387",
-                    "5000",
-                    "700",
+                    "./embedded/GS_config.sh"
+                    # , If we want to specify width or height we should do so here
                 ],
                 check=True,
             )
+
+            # Run video script
+            subprocess.run(
+                [
+                    "./embedded/rpicam_run.sh",
+                    5s,  # Time in seconds
+                    200
+                ],
+                check=True,
+            )
+
             logger.info("processing video now")
              # Find most recent tst*.mp4 file in output directory
             output_dir = os.path.expanduser("~/Documents/webcamGolf")
