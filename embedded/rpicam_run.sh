@@ -16,6 +16,7 @@ echo "Video directory:  $VIDEO_DIR"
 # -------------------------
 DEFAULT_TIME="1s"
 DEFAULT_SHUTTER=10
+DEFAULT_FILENAME="/../vid00.mp4"
 
 # -------------------------
 # Argument Handling
@@ -24,31 +25,14 @@ if [[ $# -eq 0 ]]; then
     echo "No arguments provided. Using defaults: time=$DEFAULT_TIME, shutter=$DEFAULT_SHUTTER"
     capture_time=$DEFAULT_TIME
     shutter_speed=$DEFAULT_SHUTTER
-elif [[ $# -eq 2 ]]; then
+    filename=$DEFAULT_FILENAME
+elif [[ $# -eq 3 ]]; then
     capture_time=$1
     shutter_speed=$2
+    filepath=$3
 else
-    echo "Usage: $0 [<time> <shutter_speed>]"
-    echo "Example: $0 2s 15"
-    exit 1
-fi
-
-# -------------------------
-# Find Next Video File Name
-# -------------------------
-counter=0
-while [[ $counter -lt 100 ]]; do
-    filename=$(printf "vid%02d.mp4" "$counter")
-    filepath="$VIDEO_DIR/$filename"
-
-    if [[ ! -f "$filepath" ]]; then
-        break
-    fi
-    ((counter++))
-done
-
-if [[ $counter -ge 100 ]]; then
-    echo "Error: Too many videos, cleanup required." >&2
+    echo "Usage: $0 [<time> <shutter_speed> <filepath>]"
+    echo "Example: $0 2s 15 /../vid00.mp4"
     exit 1
 fi
 
