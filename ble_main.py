@@ -141,7 +141,7 @@ class SwingAnalysisCharacteristic(Characteristic):
             subprocess.run(
                 [
                     "./embedded/rpicam_run.sh",
-                    5s,  # Time in seconds
+                    "5s",  # Time in seconds
                     200
                 ],
                 check=True,

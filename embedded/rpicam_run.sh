@@ -1,13 +1,21 @@
 #!/bin/bash
 set -e  # Exit on error
-set -x  # Uncomment to print each command before execution
+set -x  # Debug: print each command
+
+# -------------------------
+# Directories
+# -------------------------
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VIDEO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+echo "Script directory: $SCRIPT_DIR"
+echo "Video directory:  $VIDEO_DIR"
 
 # -------------------------
 # Default Values
 # -------------------------
 DEFAULT_TIME="1s"
 DEFAULT_SHUTTER=10
-VIDEO_DIR="$(dirname "$0")/.."  # Save one directory up from the script location
 
 # -------------------------
 # Argument Handling
@@ -29,7 +37,7 @@ fi
 # Find Next Video File Name
 # -------------------------
 counter=0
-while true; do
+while [[ $counter -lt 100 ]]; do
     filename=$(printf "vid%02d.mp4" "$counter")
     filepath="$VIDEO_DIR/$filename"
 
@@ -39,10 +47,15 @@ while true; do
     ((counter++))
 done
 
+if [[ $counter -ge 100 ]]; then
+    echo "Error: Too many videos, cleanup required." >&2
+    exit 1
+fi
+
 echo "Saving video as: $filepath"
 
 # -------------------------
-# Run rpicam-vid (outputs will display in terminal)
+# Run rpicam-vid
 # -------------------------
 rpicam-vid --level 4.2 \
     -t "$capture_time" \
@@ -56,7 +69,4 @@ rpicam-vid --level 4.2 \
     --framerate 550 \
     --shutter "$shutter_speed"
 
-# -------------------------
-# Completion Message
-# -------------------------
 echo "Video capture complete: $filepath"

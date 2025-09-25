@@ -1360,3 +1360,7 @@
 2025-09-24 01:58:08,059 - __main__ - INFO - Registering GATT application...
 2025-09-24 01:58:08,074 - __main__ - INFO - GATT application registered
 2025-09-24 01:58:08,077 - __main__ - INFO - Advertisement registered
+2025-09-25 23:17:41,528 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-25 23:17:41,529 - __main__ - INFO - Registering GATT application...
+2025-09-25 23:17:41,542 - __main__ - INFO - GATT application registered
+2025-09-25 23:17:41,545 - __main__ - INFO - Advertisement registered
