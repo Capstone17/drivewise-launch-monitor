@@ -36,7 +36,21 @@ DYNAMIC_MARKER_LENGTH = 2.38
 MIN_BALL_RADIUS_PX = 9  # pixels
 EDGE_MARGIN_PX = 1
 BALL_SCORE_THRESHOLD = 0.4
+MOTION_WINDOW_SCORE_THRESHOLD = 0.1
+MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
+
+MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+try:
+    _early_exit_env = int(os.environ.get("MOTION_WINDOW_EARLY_EXIT_MISSES", "0"))
+except ValueError:
+    _early_exit_env = 0
+MOTION_WINDOW_EARLY_EXIT_MISSES = _early_exit_env if _early_exit_env > 0 else None
 
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
@@ -394,49 +408,225 @@ def interpolate_poses(
 
 def find_motion_window(
     video_path: str,
+    detector: TFLiteBallDetector,
     *,
-    pad_frames: int = 20,
+    pad_frames: int = MAX_MOTION_FRAMES,
     max_frames: int = MAX_MOTION_FRAMES,
-) -> tuple[int, int, bool]:
-    """Return the frame range surrounding the dynamic sticker and whether it was found.
+    confirm_radius: int = 3,
+    score_threshold: float = MOTION_WINDOW_SCORE_THRESHOLD,
+    debug: bool = False,
+) -> tuple[int, int, bool, dict[str, int | bool | None]]:
+    """Return a motion window around the last confident ball sighting.
 
-    The video is scanned frame-by-frame for the ArUco marker with ID
-    ``DYNAMIC_ID``. The motion window spans from the first to the last frame
-    where this sticker is detected, expanded by ``pad_frames`` on each side.
-    The resulting range is capped to ``max_frames`` by trimming from the
-    beginning. If the sticker never appears, the entire clip is returned and the
-    flag is ``False``."""
+    The search prioritises late frames by sampling the video with progressively
+    finer strides until the first positive detection is found, then refines the
+    exact exit frame with a short forward scan. The helper records lightweight
+    stats describing how many frames were actually decoded so we can validate
+    efficiency claims."""
 
     cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Unable to open video: {video_path}")
+
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    miss_limit = (
+        MOTION_WINDOW_EARLY_EXIT_MISSES
+        if MOTION_WINDOW_EARLY_EXIT_MISSES is not None
+        else max(confirm_radius * 3, 9)
+    )
 
-    detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
-    first, last = None, None
+    stats: dict[str, int | bool | None] = {
+        "total_frames": total,
+        "frames_evaluated": 0,
+        "frames_decoded": 0,
+        "frames_with_ball": 0,
+        "detector_runs": 0,
+        "seeks": 0,
+        "coarse_step": None,
+        "coarse_frames_scanned": 0,
+        "coarse_found_frame": None,
+        "coarse_false_frame": None,
+        "fallback_full_scan": False,
+        "refine_frames": 0,
+        "refine_last_frame": None,
+        "miss_limit": miss_limit,
+    }
 
-    for idx in range(total):
+    detection_cache: dict[int, dict | None] = {}
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
+    current_pos: int | None = None
+
+    def debug_break(reason: str, frame_idx: int | None = None) -> None:
+        if not debug:
+            return
+        print(f"[motion_debug] {reason} frame={frame_idx}")
+        breakpoint()
+
+    def decode_frame(idx: int) -> tuple[bool, np.ndarray | None]:
+        nonlocal current_pos, frame_width, frame_height
+        if idx < 0 or idx >= total:
+            return False, None
+        if current_pos is None or idx != current_pos:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            stats["seeks"] += 1
         ret, frame = cap.read()
         if not ret:
-            break
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = CLAHE.apply(gray)
-        if USE_BLUR:
-            gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        corners, ids, _ = detector.detectMarkers(gray)
-        if ids is not None and any(m_id[0] == DYNAMIC_ID for m_id in ids):
-            if first is None:
-                first = idx
-            last = idx
+            current_pos = None
+            return False, None
+        current_pos = idx + 1
+        stats["frames_decoded"] += 1
+        if frame_width == 0 or frame_height == 0:
+            frame_height, frame_width = frame.shape[:2]
+        return True, frame
 
-    cap.release()
+    def detect_frame(idx: int) -> dict | None:
+        stats["frames_evaluated"] += 1
+        cached = detection_cache.get(idx, ...)
+        if cached is not ...:
+            return cached  # type: ignore[return-value]
+        ok, frame = decode_frame(idx)
+        if not ok or frame is None:
+            detection_cache[idx] = None
+            return None
+        enhanced, _ = preprocess_frame(frame)
+        stats["detector_runs"] += 1
+        detections = detector.detect(enhanced)
+        best: dict | None = None
+        best_score = float("-inf")
+        for det in detections:
+            score = det["score"]
+            if score < score_threshold:
+                continue
+            x1, y1, x2, y2 = det["bbox"]
+            width = float(x2 - x1)
+            height = float(y2 - y1)
+            if width <= 0.0 or height <= 0.0:
+                continue
+            aspect = min(width, height) / max(width, height)
+            if aspect < MOTION_WINDOW_MIN_ASPECT_RATIO:
+                continue
+            if frame_width and frame_height:
+                if not bbox_within_image(det["bbox"], float(frame_width), float(frame_height)):
+                    continue
+            cx, cy, radius, _ = bbox_to_ball_metrics(x1, y1, x2, y2)
+            if radius < MIN_BALL_RADIUS_PX:
+                continue
+            if score > best_score:
+                center = np.array([cx, cy], dtype=float)
+                best = {
+                    "frame": idx,
+                    "center": center,
+                    "radius": float(radius),
+                    "bbox": (float(x1), float(y1), float(x2), float(y2)),
+                    "score": float(score),
+                }
+                best_score = score
+        detection_cache[idx] = best
+        if best is not None:
+            stats["frames_with_ball"] += 1
+        return best
 
-    if first is None or last is None:
-        return 0, total, False
+    try:
+        if total == 0:
+            stats["frames_processed"] = 0
+            stats["detector_calls"] = 0
+            return 0, 0, False, stats
 
-    start_frame = max(0, first - pad_frames)
-    end_frame = min(total, last + pad_frames)
-    if end_frame - start_frame > max_frames:
-        start_frame = max(end_frame - max_frames, 0)
-    return start_frame, end_frame, True
+        coarse_true: int | None = None
+        coarse_false: int | None = None
+        coarse_frames_total = 0
+        coarse_steps = (64, 32, 16, 8, 4)
+        for step in coarse_steps:
+            idx = total - 1
+            last_false = total
+            frames_this_step = 0
+            while idx >= 0:
+                frames_this_step += 1
+                det = detect_frame(idx)
+                if det is not None:
+                    coarse_true = idx
+                    coarse_false = last_false if last_false < total else None
+                    stats["coarse_step"] = step
+                    stats["coarse_found_frame"] = idx
+                    stats["coarse_false_frame"] = coarse_false
+                    debug_break("coarse-hit", idx)
+                    break
+                last_false = idx
+                idx -= step
+            coarse_frames_total += frames_this_step
+            if coarse_true is not None:
+                break
+
+        if coarse_true is None:
+            stats["fallback_full_scan"] = True
+            idx = total - 1
+            frames_this_step = 0
+            while idx >= 0:
+                frames_this_step += 1
+                det = detect_frame(idx)
+                if det is not None:
+                    coarse_true = idx
+                    coarse_false = idx + 1 if idx + 1 < total else None
+                    stats["coarse_step"] = 1
+                    stats["coarse_found_frame"] = idx
+                    stats["coarse_false_frame"] = coarse_false
+                    debug_break("fallback-hit", idx)
+                    break
+                idx -= 1
+            coarse_frames_total += frames_this_step
+
+        stats["coarse_frames_scanned"] = coarse_frames_total
+
+        if coarse_true is None:
+            stats["frames_processed"] = len(detection_cache)
+            stats["detector_calls"] = stats["detector_runs"]
+            return 0, total, False, stats
+
+        initial_det = detect_frame(coarse_true)
+        if initial_det is None:
+            stats["frames_processed"] = len(detection_cache)
+            stats["detector_calls"] = stats["detector_runs"]
+            return 0, total, False, stats
+
+        last_detection_idx = coarse_true
+        last_center = initial_det["center"]
+        refine_idx = coarse_true + 1
+        misses = 0
+        refine_frames = 0
+        center_jump_limit = MAX_CENTER_JUMP_PX * 1.25
+
+        while refine_idx < total and misses < miss_limit:
+            det = detect_frame(refine_idx)
+            refine_frames += 1
+            if det is not None:
+                center = det["center"]
+                if last_center is None or np.linalg.norm(center - last_center) <= center_jump_limit:
+                    last_detection_idx = refine_idx
+                    last_center = center
+                    misses = 0
+                else:
+                    misses += 1
+            else:
+                misses += 1
+            refine_idx += 1
+
+        stats["refine_frames"] = refine_frames
+        stats["refine_last_frame"] = last_detection_idx
+
+        start_frame = max(0, last_detection_idx - pad_frames)
+        end_frame = min(total, last_detection_idx + confirm_radius + 1)
+        if end_frame - start_frame > max_frames:
+            start_frame = max(0, end_frame - max_frames)
+
+        stats["frames_processed"] = len(detection_cache)
+        stats["detector_calls"] = stats["detector_runs"]
+        stats["coarse_false_frame"] = coarse_false
+        stats["last_detection_frame"] = last_detection_idx
+
+        return start_frame, end_frame, True, stats
+    finally:
+        cap.release()
 
 
 def process_video(
@@ -454,15 +644,34 @@ def process_video(
     """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
-    # Scan for the sticker before expensive model compilation
-    start_frame, end_frame, sticker_found = find_motion_window(video_path)
-    if not sticker_found:
-        raise RuntimeError("No sticker detected in the video")
-    print(f"Motion window frames: {start_frame}-{end_frame}")
 
     ball_compile_start = time.perf_counter()
     detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
     ball_compile_time = time.perf_counter() - ball_compile_start
+
+    start_frame, end_frame, ball_found, motion_stats = find_motion_window(
+        video_path,
+        detector,
+        debug=MOTION_WINDOW_DEBUG,
+    )
+    if not ball_found:
+        raise RuntimeError("No ball detected in the video")
+    processed = motion_stats.get("frames_processed", 0)
+    detector_calls = motion_stats.get("detector_calls", 0)
+    coarse_step = motion_stats.get("coarse_step")
+    refine_frames = motion_stats.get("refine_frames")
+    parts = [
+        f"decoded {processed} frames",
+        f"detector runs {detector_calls}",
+    ]
+    if isinstance(coarse_step, int) and coarse_step > 0:
+        parts.append(f"coarse step {coarse_step}")
+    if isinstance(refine_frames, int) and refine_frames > 0:
+        parts.append(f"refine frames {refine_frames}")
+    print(
+        "Motion window frames: "
+        f"{start_frame}-{end_frame} (" + ", ".join(parts) + ")"
+    )
 
     sticker_compile_start = time.perf_counter()
     aruco_detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
@@ -471,8 +680,8 @@ def process_video(
     cap = cv2.VideoCapture(video_path)
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    inference_start = max(0, start_frame - 5)
-    inference_end = min(total_frames, end_frame + 5)
+    inference_start = max(0, start_frame)
+    inference_end = min(total_frames, end_frame)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     if frames_dir:
@@ -504,6 +713,12 @@ def process_video(
         ret, frame = cap.read()
         if not ret:
             break
+        should_infer = inference_start <= frame_idx < inference_end
+        if not should_infer:
+            if frame_idx >= inference_end:
+                break
+            frame_idx += 1
+            continue
         orig = frame
         frame, gray = preprocess_frame(frame)
         marker_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
