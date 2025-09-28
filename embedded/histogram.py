@@ -17,9 +17,10 @@ def extract_exposure_from_filename(filename: str) -> Optional[float]:
     return float(match.group(1)) if match else None
 
 
+# Can play with the target brightness if the results are not good
 def analyze_exposure_in_folder(folder_path: str,
                                visualize: bool = True,
-                               target_brightness: float = 128.0) -> Tuple[List[float], List[float], float]:
+                               target_brightness: float = 98.0) -> Tuple[List[float], List[float], float]:
     """
     Analyze all images in a folder to determine the ideal exposure.
 
@@ -89,22 +90,20 @@ def analyze_exposure_in_folder(folder_path: str,
     estimated_exposure = np.interp(target_brightness, brightness_values, exposures)
 
     # Plot brightness vs exposure
-    if visualize:
-        plt.figure(figsize=(8, 5))
-        plt.title("Exposure vs. Brightness")
-        plt.xlabel("Exposure Value")
-        plt.ylabel("Mean Brightness")
-        plt.plot(exposures, brightness_values, 'o-', label="Measured Data")
-        plt.axhline(y=target_brightness, color='r', linestyle='--', label=f"Target Brightness ({target_brightness})")
-        plt.axvline(x=estimated_exposure, color='g', linestyle='--', label=f"Estimated Ideal Exposure ({estimated_exposure:.2f})")
-        plt.legend()
-        plt.grid(True, linestyle="--", alpha=0.5)
-        plt.show()
+    # if visualize:
+    #     plt.figure(figsize=(8, 5))
+    #     plt.title("Exposure vs. Brightness")
+    #     plt.xlabel("Exposure Value")
+    #     plt.ylabel("Mean Brightness")
+    #     plt.plot(exposures, brightness_values, 'o-', label="Measured Data")
+    #     plt.axhline(y=target_brightness, color='r', linestyle='--', label=f"Target Brightness ({target_brightness})")
+    #     plt.axvline(x=estimated_exposure, color='g', linestyle='--', label=f"Estimated Ideal Exposure ({estimated_exposure:.2f})")
+    #     plt.legend()
+    #     plt.grid(True, linestyle="--", alpha=0.5)
+    #     plt.show()
 
     return exposures.tolist(), brightness_values.tolist(), float(estimated_exposure)
 
-
-# Example usage
 folder_path=Path("~/Documents/webcamGolf/embedded/exposure_samples/").expanduser()
 exposures, brightness, best_exposure = analyze_exposure_in_folder(folder_path, visualize=True)
 
