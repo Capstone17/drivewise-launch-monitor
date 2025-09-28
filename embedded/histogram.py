@@ -103,10 +103,3 @@ def analyze_exposure_in_folder(folder_path: str,
     #     plt.show()
 
     return exposures.tolist(), brightness_values.tolist(), float(estimated_exposure)
-
-folder_path=Path("~/Documents/webcamGolf/embedded/exposure_samples/").expanduser()
-exposures, brightness, best_exposure = analyze_exposure_in_folder(folder_path, visualize=True)
-
-print("Exposures:", exposures)
-print("Brightness per image:", brightness)
-print(f"Estimated Ideal Exposure: {best_exposure:.2f}")

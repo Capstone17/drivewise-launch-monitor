@@ -1,6 +1,6 @@
 import subprocess
 from pathlib import Path
-from histogram.py import analyze_exposure_in_folder
+from histogram import analyze_exposure_in_folder
 
 # Define the commands as a list of lists, where each inner list represents a command and its arguments.
 # For example, ['ls', '-l'] represents the command 'ls -l'.
