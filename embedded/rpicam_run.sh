@@ -26,15 +26,39 @@ if [[ $# -eq 0 ]]; then
     capture_time=$DEFAULT_TIME
     shutter_speed=$DEFAULT_SHUTTER
     filename=$DEFAULT_FILENAME
-elif [[ $# -eq 3 ]]; then
+elif [[ $# -eq 2 ]]; then
     capture_time=$1
     shutter_speed=$2
-    filepath=$3
 else
-    echo "Usage: $0 [<time> <shutter_speed> <filepath>]"
-    echo "Example: $0 2s 15 /../vid00.mp4"
+    echo "Usage: $0 [<time> <shutter_speed>]"
+    echo "Example: $0 2s 15"
     exit 1
 fi
+
+
+# -------------------------
+# Prepare Output Directory
+# -------------------------
+
+output_dir=~/Documents/webcamGolf
+
+# Find next available output file name (tst.mp4, tst1.mp4, tst2.mp4, ...)
+find_next_output_file() {
+    base="$1"
+    ext="$2"
+    n=0
+    while :; do
+        if [[ $n -eq 0 ]]; then
+            f="$output_dir/${base}${cam1:+1}.$ext"
+        else
+            f="$output_dir/${base}${cam1:+1}_$n.$ext"
+        fi
+        [[ ! -e "$f" ]] && { echo "$f"; return; }
+        ((n++))
+    done
+}
+
+filepath=$(find_next_output_file "vid" "mp4")
 
 echo "Saving video as: $filepath"
 
@@ -48,6 +72,7 @@ rpicam-vid --level 4.2 \
     --height 128 \
     --no-raw \
     --denoise cdn_off \
+    --hflip --vflip \
     -o "$filepath" \
     -n \
     --framerate 550 \

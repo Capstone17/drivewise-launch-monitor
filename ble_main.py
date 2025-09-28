@@ -1,3 +1,10 @@
+# ---------------------------------------
+#
+# To shut off script temporarily: sudo systemctl stop webcamgolf.service
+#
+# ---------------------------------------
+
+
 import logging
 
 import dbus
