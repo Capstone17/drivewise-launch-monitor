@@ -42,10 +42,19 @@ for cmd in commands:
 
 print("Command series finished.")
 
-folder_path=Path("~/Documents/webcamGolf/embedded/exposure_samples/").expanduser()
+folder_path = Path("~/Documents/webcamGolf/embedded/exposure_samples/").expanduser()
 exposures, brightness, best_exposure = analyze_exposure_in_folder(folder_path, visualize=True)
+rounded_best_exposure = round(best_exposure)
 
 print("Exposures:", exposures)
 print("Brightness per image:", brightness)
 print(f"Estimated Ideal Exposure: {best_exposure:.2f}")
 
+
+# Generate a .txt file where the ideal exposure can be stored
+#   This eliminates the need for a global variable inside the BLE script
+output_file_name = "ideal_exposure.txt"
+with open(output_file_name, 'w') as file:
+    file.write(str(rounded_best_exposure))
+
+print(f"File '{output_file_name}' created and written successfully.")
