@@ -1393,3 +1393,8 @@
 2025-09-28 20:09:04,458 - __main__ - INFO - Registering GATT application...
 2025-09-28 20:09:04,469 - __main__ - INFO - GATT application registered
 2025-09-28 20:09:04,471 - __main__ - INFO - Advertisement registered
+2025-09-29 01:18:43,601 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-29 01:18:43,602 - __main__ - INFO - Registering GATT application...
+2025-09-29 01:18:43,810 - __main__ - INFO - GATT application registered
+2025-09-29 01:18:43,813 - __main__ - INFO - Advertisement registered
+2025-09-29 23:19:46,180 - __main__ - DEBUG - Hostname found: '192.75.242.124 \n'
