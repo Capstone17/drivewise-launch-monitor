@@ -61,6 +61,11 @@ _calib_data = np.load(_calib_path)
 CAMERA_MATRIX = _calib_data["camera_matrix"]
 DIST_COEFFS = _calib_data["dist_coeffs"]
 
+FX = float(CAMERA_MATRIX[0, 0])
+FY = float(CAMERA_MATRIX[1, 1])
+CX = float(CAMERA_MATRIX[0, 2])
+CY = float(CAMERA_MATRIX[1, 2])
+
 MAX_MISSING_FRAMES = 12
 MAX_MOTION_FRAMES = 40  # maximum allowed motion window length in frames
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -70,10 +75,12 @@ USE_BLUR = False
 DOT_MIN_AREA_PX = 6
 DOT_MAX_AREA_PX = 1600
 DOT_MIN_BRIGHTNESS = 120.0
+DOT_MIN_DIFF_MEAN = 10.0
 DOT_MIN_CIRCULARITY = 0.45
 DOT_KERNEL_SIZE = 3
 DOT_OPEN_ITER = 1
 DOT_CLOSE_ITER = 1
+
 CLUBFACE_MAX_SPREAD_PX = 140.0
 CLUBFACE_MAX_JUMP_PX = 80.0
 CLUBFACE_EMA_ALPHA = 0.4
@@ -81,6 +88,18 @@ CLUBFACE_MIN_DOTS = 1
 CLUBFACE_MAX_MISSES = 8
 CLUBFACE_MAX_CANDIDATES = 6
 CLUBFACE_MIN_CONFIDENCE = 0.35
+
+# Pattern geometry: three markers stacked vertically on the heel side
+# (2 cm separation) and a single marker 6.5 cm toward the toe, roughly
+# aligned with the middle dot. We treat the clubface center as midway
+# between the heel column and the toe marker.
+CLUBFACE_VERTICAL_SPACING_CM = 2.0
+CLUBFACE_HORIZONTAL_SPACING_CM = 6.5
+CLUBFACE_COLUMN_SPLIT_PX = 10.0
+CLUBFACE_DEPTH_MIN_CM = 10.0
+CLUBFACE_DEPTH_MAX_CM = 400.0
+CLUBFACE_CENTER_OFFSET_CM = CLUBFACE_HORIZONTAL_SPACING_CM / 2.0
+CLUBFACE_Z_OFFSET_CM = 30.0
 
 
 @dataclass
@@ -115,11 +134,13 @@ class ClubfaceCentroidTracker:
         self.prev_center: np.ndarray | None = None
         self.filtered_center: np.ndarray | None = None
         self.miss_streak = 0
+        self.last_depth_cm: float | None = None
 
     def reset(self) -> None:
         self.prev_center = None
         self.filtered_center = None
         self.miss_streak = 0
+        self.last_depth_cm = None
 
     def _register_miss(self) -> None:
         self.miss_streak += 1
@@ -127,6 +148,7 @@ class ClubfaceCentroidTracker:
             self.prev_center = None
             self.filtered_center = None
             self.miss_streak = self.max_misses
+            self.last_depth_cm = None
 
     @staticmethod
     def _weighted_center(points: np.ndarray, weights: np.ndarray, mask: np.ndarray) -> np.ndarray | None:
@@ -160,7 +182,12 @@ class ClubfaceCentroidTracker:
             jump_factor = float(np.clip(jump_factor, 0.0, 1.0))
         return float(np.clip(0.55 * count_factor + 0.3 * spread_factor + 0.15 * jump_factor, 0.0, 1.0))
 
-    def update(self, detections: Sequence[DotDetection]) -> tuple[np.ndarray | None, dict[str, object]]:
+    def update(
+        self,
+        detections: Sequence[DotDetection],
+        *,
+        approx_depth_cm: float | None = None,
+    ) -> tuple[dict[str, object] | None, dict[str, object]]:
         metrics: dict[str, object] = {
             'dots': len(detections),
             'used_dots': 0,
@@ -168,6 +195,8 @@ class ClubfaceCentroidTracker:
             'spread_px': None,
             'jump_px': None,
             'confidence': 0.0,
+            'depth_cm': None,
+            'depth_source': None,
         }
         if not detections:
             self._register_miss()
@@ -237,7 +266,6 @@ class ClubfaceCentroidTracker:
         confidence = self._confidence(used, spread_val, jump_val)
 
         metrics.update({
-            'status': 'ok' if confidence >= self.min_confidence else 'low_confidence',
             'used_dots': used,
             'spread_px': float(spread_val),
             'jump_px': jump_val,
@@ -246,13 +274,200 @@ class ClubfaceCentroidTracker:
         })
 
         if confidence < self.min_confidence:
+            metrics['status'] = 'low_confidence'
             self._register_miss()
             return None, metrics
 
         self.filtered_center = filtered
         self.prev_center = raw_center.copy()
         self.miss_streak = 0
-        return filtered.copy(), metrics
+
+        geometry = self._geometry_from_points(points[mask], filtered, approx_depth_cm)
+        metrics['depth_cm'] = geometry['depth_cm']
+        metrics['depth_source'] = geometry['depth_source']
+        metrics['status'] = 'ok' if geometry['depth_cm'] is not None else 'ok_no_depth'
+
+        observation = {
+            'center_px': geometry['center_px'],
+            'raw_center': raw_center.copy(),
+            'depth_cm': geometry['depth_cm'],
+            'depth_source': geometry['depth_source'],
+            'confidence': confidence,
+            'used_dots': used,
+            'dots': len(detections),
+            'spread_px': float(spread_val),
+            'jump_px': jump_val,
+            'pairs': geometry['pairs'],
+            'best_pair': geometry['best_pair'],
+        }
+
+        if geometry['depth_cm'] is not None:
+            self.last_depth_cm = geometry['depth_cm']
+
+        return observation, metrics
+
+    def _geometry_from_points(
+        self,
+        points: np.ndarray,
+        filtered_center: np.ndarray,
+        approx_depth_cm: float | None,
+    ) -> dict[str, object]:
+        if points.size == 0:
+            return {
+                'center_px': filtered_center.copy(),
+                'depth_cm': None,
+                'depth_source': None,
+                'pairs': [],
+                'best_pair': None,
+            }
+
+        left_idx, right_idx = self._split_columns(points)
+        left_points = points[left_idx] if left_idx.size else np.empty((0, 2), dtype=np.float32)
+        right_points = points[right_idx] if right_idx.size else np.empty((0, 2), dtype=np.float32)
+
+        candidates = self._build_depth_candidates(left_points, right_points)
+        best_pair: dict[str, object] | None = None
+        depth_cm: float | None = None
+        depth_source: str | None = None
+
+        if candidates:
+            best_pair = self._select_depth_candidate(candidates, approx_depth_cm)
+            if best_pair is not None:
+                depth_cm = float(best_pair['depth_cm'])
+                depth_source = str(best_pair['type'])
+
+        if depth_cm is None:
+            if approx_depth_cm is not None:
+                depth_cm = float(approx_depth_cm)
+                depth_source = 'approx'
+            elif self.last_depth_cm is not None:
+                depth_cm = float(self.last_depth_cm)
+                depth_source = 'history'
+
+        center_px = filtered_center.copy()
+
+        if left_points.size:
+            center_px[1] = float(left_points[:, 1].mean())
+        elif right_points.size:
+            center_px[1] = float(right_points[:, 1].mean())
+
+        if depth_cm is not None:
+            if left_points.size:
+                left_x = float(left_points[:, 0].mean())
+                if right_points.size:
+                    right_x = float(right_points[:, 0].mean())
+                    center_px[0] = left_x + (right_x - left_x) * 0.5
+                else:
+                    offset_px = (FOCAL_LENGTH * CLUBFACE_CENTER_OFFSET_CM) / depth_cm
+                    center_px[0] = left_x + offset_px
+            elif right_points.size:
+                right_x = float(right_points[:, 0].mean())
+                offset_px = (FOCAL_LENGTH * CLUBFACE_CENTER_OFFSET_CM) / depth_cm
+                center_px[0] = right_x - offset_px
+        else:
+            if left_points.size:
+                center_px[0] = float(left_points[:, 0].mean())
+            elif right_points.size:
+                center_px[0] = float(right_points[:, 0].mean())
+
+        return {
+            'center_px': center_px.astype(np.float32),
+            'depth_cm': depth_cm,
+            'depth_source': depth_source,
+            'pairs': candidates,
+            'best_pair': best_pair,
+        }
+
+    @staticmethod
+    def _split_columns(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if points.shape[0] <= 1:
+            idx = np.arange(points.shape[0])
+            return idx, np.empty(0, dtype=int)
+        sorted_idx = np.argsort(points[:, 0])
+        x_sorted = points[sorted_idx, 0]
+        gaps = np.diff(x_sorted)
+        if gaps.size == 0:
+            return sorted_idx, np.empty(0, dtype=int)
+        max_gap_idx = int(np.argmax(gaps))
+        if gaps[max_gap_idx] >= CLUBFACE_COLUMN_SPLIT_PX:
+            split = max_gap_idx + 1
+            left = sorted_idx[:split]
+            right = sorted_idx[split:]
+        else:
+            left = sorted_idx
+            right = np.empty(0, dtype=int)
+        return left, right
+
+    def _build_depth_candidates(
+        self,
+        left_points: np.ndarray,
+        right_points: np.ndarray,
+    ) -> list[dict[str, object]]:
+        candidates: list[dict[str, object]] = []
+        if left_points.shape[0] >= 2:
+            order = np.argsort(left_points[:, 1])
+            ordered = left_points[order]
+            for i in range(ordered.shape[0]):
+                for j in range(i + 1, ordered.shape[0]):
+                    steps = j - i
+                    real_cm = steps * CLUBFACE_VERTICAL_SPACING_CM
+                    if real_cm <= 0.0:
+                        continue
+                    dist_px = float(np.linalg.norm(ordered[i] - ordered[j]))
+                    if dist_px < 1.0:
+                        continue
+                    depth_cm = (FOCAL_LENGTH * real_cm) / dist_px
+                    candidates.append(
+                        {
+                            'depth_cm': depth_cm,
+                            'pixels': dist_px,
+                            'type': f'vertical_{steps}',
+                            'points': (ordered[i], ordered[j]),
+                            'steps': steps,
+                        }
+                    )
+        if left_points.shape[0] >= 1 and right_points.shape[0] >= 1:
+            right_point = right_points.mean(axis=0)
+            for lp in left_points:
+                dist_px = float(np.linalg.norm(lp - right_point))
+                if dist_px < 1.0:
+                    continue
+                depth_cm = (FOCAL_LENGTH * CLUBFACE_HORIZONTAL_SPACING_CM) / dist_px
+                candidates.append(
+                    {
+                        'depth_cm': depth_cm,
+                        'pixels': dist_px,
+                        'type': 'horizontal',
+                        'points': (lp, right_point.copy()),
+                        'steps': 0,
+                    }
+                )
+        return candidates
+
+    def _select_depth_candidate(
+        self,
+        candidates: list[dict[str, object]],
+        approx_depth_cm: float | None,
+    ) -> dict[str, object] | None:
+        if not candidates:
+            return None
+
+        def priority(candidate: dict[str, object]) -> int:
+            ctype = str(candidate['type'])
+            if ctype == 'horizontal':
+                return 0
+            if ctype == 'vertical_1':
+                return 1
+            return 2
+
+        ref = approx_depth_cm if approx_depth_cm is not None else self.last_depth_cm
+        filtered = [c for c in candidates if CLUBFACE_DEPTH_MIN_CM <= c['depth_cm'] <= CLUBFACE_DEPTH_MAX_CM]
+        pool = filtered if filtered else candidates
+        if ref is not None:
+            pool.sort(key=lambda c: (priority(c), abs(float(c['depth_cm']) - ref)))
+        else:
+            pool.sort(key=lambda c: (priority(c), -float(c['pixels'])))
+        return pool[0] if pool else None
 def _weighted_centroid(intensity_roi: np.ndarray, mask: np.ndarray, offset: tuple[int, int]) -> np.ndarray:
     y_idx, x_idx = np.nonzero(mask)
     if x_idx.size == 0:
@@ -268,48 +483,71 @@ def _weighted_centroid(intensity_roi: np.ndarray, mask: np.ndarray, offset: tupl
 
 def detect_reflective_dots(ir_off_gray: np.ndarray, ir_on_gray: np.ndarray) -> list[DotDetection]:
     diff = cv2.absdiff(ir_on_gray, ir_off_gray)
+    diff = cv2.convertScaleAbs(diff)
     blurred = cv2.GaussianBlur(diff, (5, 5), 0)
     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (DOT_KERNEL_SIZE, DOT_KERNEL_SIZE))
     opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=DOT_OPEN_ITER)
     cleaned = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=DOT_CLOSE_ITER)
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned, connectivity=8)
-    detections: list[DotDetection] = []
-    for label in range(1, num_labels):
-        x = stats[label, cv2.CC_STAT_LEFT]
-        y = stats[label, cv2.CC_STAT_TOP]
-        w = stats[label, cv2.CC_STAT_WIDTH]
-        h = stats[label, cv2.CC_STAT_HEIGHT]
-        area = stats[label, cv2.CC_STAT_AREA]
-        if area < DOT_MIN_AREA_PX or area > DOT_MAX_AREA_PX:
-            continue
-        roi_mask = labels[y : y + h, x : x + w] == label
-        roi_intensity = ir_on_gray[y : y + h, x : x + w]
-        masked_pixels = roi_intensity[roi_mask]
-        if masked_pixels.size == 0:
-            continue
-        brightness = float(masked_pixels.mean())
-        if brightness < DOT_MIN_BRIGHTNESS:
-            continue
-        contour_img = (roi_mask.astype(np.uint8) * 255)
-        contours, _ = cv2.findContours(contour_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            continue
-        perimeter = float(cv2.arcLength(contours[0], True))
-        if perimeter <= 1e-6:
-            continue
-        circularity = float((4.0 * math.pi * area) / (perimeter * perimeter))
-        if circularity < DOT_MIN_CIRCULARITY:
-            continue
-        centroid = _weighted_centroid(roi_intensity, roi_mask, (x, y))
-        detections.append(
-            DotDetection(
-                centroid=centroid,
-                area=float(area),
-                brightness=brightness,
-                circularity=circularity,
+
+    def _extract(mask: np.ndarray) -> list[DotDetection]:
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        found: list[DotDetection] = []
+        for label in range(1, num_labels):
+            x = stats[label, cv2.CC_STAT_LEFT]
+            y = stats[label, cv2.CC_STAT_TOP]
+            w = stats[label, cv2.CC_STAT_WIDTH]
+            h = stats[label, cv2.CC_STAT_HEIGHT]
+            area = stats[label, cv2.CC_STAT_AREA]
+            if area < DOT_MIN_AREA_PX or area > DOT_MAX_AREA_PX:
+                continue
+            roi_mask = labels[y : y + h, x : x + w] == label
+            roi_on = ir_on_gray[y : y + h, x : x + w]
+            roi_diff = diff[y : y + h, x : x + w]
+            masked_pixels = roi_on[roi_mask]
+            if masked_pixels.size == 0:
+                continue
+            brightness = float(masked_pixels.mean())
+            if brightness < DOT_MIN_BRIGHTNESS:
+                continue
+            diff_pixels = roi_diff[roi_mask]
+            if diff_pixels.size == 0:
+                continue
+            mean_diff = float(diff_pixels.mean())
+            if mean_diff < DOT_MIN_DIFF_MEAN:
+                continue
+            contour_img = (roi_mask.astype(np.uint8) * 255)
+            contours, _ = cv2.findContours(contour_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not contours:
+                continue
+            perimeter = float(cv2.arcLength(contours[0], True))
+            if perimeter <= 1e-6:
+                continue
+            circularity = float((4.0 * math.pi * area) / (perimeter * perimeter))
+            if circularity < DOT_MIN_CIRCULARITY:
+                continue
+            centroid = _weighted_centroid(roi_on, roi_mask, (x, y))
+            found.append(
+                DotDetection(
+                    centroid=centroid,
+                    area=float(area),
+                    brightness=brightness,
+                    circularity=circularity,
+                )
             )
-        )
+        return found
+
+    detections = _extract(cleaned)
+
+    if not detections:
+        high = float(np.percentile(blurred, 99.0))
+        if high > 0.0:
+            thr = max(5.0, high * 0.6)
+            _, fallback = cv2.threshold(blurred, thr, 255, cv2.THRESH_BINARY)
+            fallback = cv2.morphologyEx(fallback, cv2.MORPH_CLOSE, kernel, iterations=1)
+            fallback = cv2.dilate(fallback, kernel, iterations=1)
+            detections = _extract(fallback)
+
     return detections
 
 
@@ -797,7 +1035,8 @@ def process_video(
     ball_time = 0.0
     clubface_time = 0.0
     ball_coords: list[dict] = []
-    clubface_records: list[dict] = []
+    clubface_coords: list[dict] = []
+    clubface_debug: list[dict] = []
     processed_dot_frames: set[int] = set()
     prev_ir_gray: np.ndarray | None = None
     prev_ir_idx: int | None = None
@@ -806,6 +1045,7 @@ def process_video(
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
     ball_velocity = np.zeros(2, dtype=float)
+    last_ball_distance: float | None = None
 
     frame_idx = 0
     while True:
@@ -857,6 +1097,7 @@ def process_video(
                                 "z": round(bz, 2),
                             }
                         )
+                        last_ball_distance = distance
                         cv2.rectangle(
                             enhanced, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2
                         )
@@ -904,48 +1145,54 @@ def process_video(
             ):
                 start_clubface = time.perf_counter()
                 dot_detections = detect_reflective_dots(off_gray, on_gray)
-                filtered_center, metrics = clubface_tracker.update(dot_detections)
+                observation, metrics = clubface_tracker.update(
+                    dot_detections,
+                    approx_depth_cm=last_ball_distance,
+                )
                 clubface_time += time.perf_counter() - start_clubface
-                if filtered_center is not None:
-                    quality = {
-                        "status": metrics.get("status"),
-                        "dots": int(metrics.get("dots", 0)),
-                        "used_dots": int(metrics.get("used_dots", 0)),
-                        "spread_px": (
-                            round(float(metrics["spread_px"]), 2)
-                            if metrics.get("spread_px") is not None
-                            else None
-                        ),
-                        "jump_px": (
-                            round(float(metrics["jump_px"]), 2)
-                            if metrics.get("jump_px") is not None
-                            else None
-                        ),
-                        "confidence": round(float(metrics.get("confidence", 0.0)), 3),
-                    }
-                    record: dict[str, object] = {
-                        "time": round(on_time, 3),
-                        "frame": int(on_idx),
-                        "clubface_center": {
-                            "u": round(float(filtered_center[0]), 2),
-                            "v": round(float(filtered_center[1]), 2),
-                        },
-                        "quality": quality,
-                    }
-                    raw_center = metrics.get("raw_center")
-                    if isinstance(raw_center, np.ndarray):
-                        record["raw_center"] = {
-                            "u": round(float(raw_center[0]), 2),
-                            "v": round(float(raw_center[1]), 2),
-                        }
-                    clubface_records.append(record)
+                raw_center_metric = metrics.get("raw_center")
+                if isinstance(raw_center_metric, np.ndarray):
+                    metrics["raw_center"] = [
+                        float(raw_center_metric[0]),
+                        float(raw_center_metric[1]),
+                    ]
+                metrics["frame"] = int(on_idx)
+                metrics["time"] = round(on_time, 3)
+                metrics["distance_ref"] = last_ball_distance
+                clubface_debug.append(metrics)
+                if observation is not None:
                     processed_dot_frames.add(on_idx)
-                    if on_idx == frame_idx:
-                        filtered_pt = (
-                            int(round(float(filtered_center[0]))),
-                            int(round(float(filtered_center[1]))),
+                    center_px = observation.get("center_px")
+                    depth_cm = observation.get("depth_cm")
+                    if depth_cm is not None and center_px is not None:
+                        u = float(center_px[0])
+                        v = float(center_px[1])
+                        x_cm = (u - CX) * depth_cm / FX
+                        y_cm = (v - CY) * depth_cm / FY
+                        z_cm = depth_cm - CLUBFACE_Z_OFFSET_CM
+                        clubface_coords.append(
+                            {
+                                "time": round(on_time, 3),
+                                "x": round(float(x_cm), 2),
+                                "y": round(float(y_cm), 2),
+                                "z": round(float(z_cm), 2),
+                            }
                         )
-                        cv2.circle(enhanced, filtered_pt, 6, (255, 0, 0), 2)
+                        if on_idx == frame_idx:
+                            center_pt = (int(round(u)), int(round(v)))
+                            cv2.circle(enhanced, center_pt, 6, (255, 0, 0), 2)
+                            cv2.putText(
+                                enhanced,
+                                f"X:{x_cm:.2f} Y:{y_cm:.2f} Z:{z_cm:.2f}",
+                                (center_pt[0] + 8, center_pt[1] - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.45,
+                                (255, 0, 0),
+                                1,
+                                cv2.LINE_AA,
+                            )
+                    if on_idx == frame_idx:
+                        raw_center = observation.get("raw_center")
                         if isinstance(raw_center, np.ndarray):
                             raw_pt = (
                                 int(round(float(raw_center[0]))),
@@ -967,18 +1214,23 @@ def process_video(
     cap.release()
 
     ball_coords.sort(key=lambda c: c["time"])
-    clubface_records.sort(key=lambda c: c["time"])
+    clubface_coords.sort(key=lambda c: c["time"])
 
     with open(ball_path, "w", encoding="utf-8") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w", encoding="utf-8") as f:
-        json.dump(clubface_records, f, indent=2)
+        json.dump(clubface_coords, f, indent=2)
 
     print(f"Saved {len(ball_coords)} ball points to {ball_path}")
-    if clubface_records:
-        print(f"Saved {len(clubface_records)} clubface points to {sticker_path}")
+    if clubface_coords:
+        print(f"Saved {len(clubface_coords)} clubface points to {sticker_path}")
     else:
         print("Warning: No reflective dots detected; sticker file left empty")
+    if clubface_debug:
+        depth_ready = len(clubface_coords)
+        print(
+            f"Clubface frames processed: {len(clubface_debug)} | frames with depth: {depth_ready}"
+        )
     print(f"Ball detection compile time: {ball_compile_time:.2f}s")
     print(f"Ball detection time: {ball_time:.2f}s")
     print(f"Clubface tracking time: {clubface_time:.2f}s")
