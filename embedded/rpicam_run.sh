@@ -25,7 +25,6 @@ if [[ $# -eq 0 ]]; then
     echo "No arguments provided. Using defaults: time=$DEFAULT_TIME, shutter=$DEFAULT_SHUTTER"
     capture_time=$DEFAULT_TIME
     shutter_speed=$DEFAULT_SHUTTER
-    filename=$DEFAULT_FILENAME
 elif [[ $# -eq 2 ]]; then
     capture_time=$1
     shutter_speed=$2

@@ -47,7 +47,7 @@ fi
 # Compute Center Crop
 # -------------------------
 crop_x=$(((1456 - width) / 2))
-crop_y=$((((1088 - height) / 2) + 5))
+crop_y=$((((1088 - height) / 2) + 15))
 max_crop_y=$((1088 - height))
 
 if (( crop_y > max_crop_y )); then
@@ -62,7 +62,7 @@ echo "Cropping at: ($crop_x, $crop_y)"
 CAMERA_NAME=""
 MEDIA_DEV=""
 
-for dev in /dev/media0 /dev/media1; do
+for dev in /dev/media0 /dev/media1 /dev/media2 /dev/media3; do
     CAMERA_NAME=$(media-ctl -d "$dev" -p 2>/dev/null | grep -oP "imx296 \d+-[0-9a-f]+" | head -n1)
     if [[ -n "$CAMERA_NAME" ]]; then
         MEDIA_DEV="$dev"
@@ -71,7 +71,7 @@ for dev in /dev/media0 /dev/media1; do
 done
 
 if [[ -z "$CAMERA_NAME" ]]; then
-    echo "ERROR: IMX296 camera not found on /dev/media0 or /dev/media1!"
+    echo "ERROR: IMX296 camera not found on /dev/media0, /dev/media1, /dev/media2, or /dev/media3!"
     exit 1
 fi
 
