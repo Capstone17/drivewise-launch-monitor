@@ -1,0 +1,55 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Start video_ball_detector in WSL (debugpy)",
+            "type": "shell",
+            "command": "wsl",
+            "args": [
+                "-d",
+                "Ubuntu",
+                "-e",
+                "bash",
+                "-lc",
+                "cd ~/webcamGolf && /home/danik/webcamGolf/venv/bin/python -m debugpy --listen 5678 --wait-for-client video_ball_detector.py"
+            ],
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": [
+                    {
+                        "regexp": "^(.*)$",
+                        "file": 1,
+                        "message": 1
+                    }
+                ],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^\\d+\\.\\d+s - ",
+                    "endsPattern": "^Debugger attached"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": false,
+                "clear": false
+            }
+        },
+        {
+            "label": "Terminate video_ball_detector in WSL",
+            "type": "shell",
+            "command": "wsl",
+            "args": [
+                "-d",
+                "Ubuntu",
+                "-e",
+                "bash",
+                "-lc",
+                "pkill -f video_ball_detector.py || true"
+            ],
+            "presentation": {
+                "reveal": "never"
+            }
+        }
+    ]
+}

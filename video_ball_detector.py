@@ -73,18 +73,39 @@ MAX_MOTION_FRAMES = 40  # maximum allowed motion window length in frames
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 # Reflective dot tracking parameters
-DOT_MIN_AREA_PX = 10
-DOT_MAX_AREA_PX = 1600
-DOT_MIN_BRIGHTNESS = 140.0
-DOT_MIN_CIRCULARITY = 0.55
-DOT_KERNEL_SIZE = 3
-DOT_OPEN_ITER = 1
-DOT_CLOSE_ITER = 1
-DOT_ASSIGNMENT_MAX_DISTANCE = 32.0  # pixels
-DOT_INLIER_THRESHOLD = 16.0  # pixels
-DOT_RANSAC_REPROJECTION_ERROR = 6.0  # pixels
-DOT_INITIAL_POSE_TRIALS = 300
+DOT_MIN_AREA_PX = _env_int("DOT_MIN_AREA_PX", 6)
+DOT_MAX_AREA_PX = _env_int("DOT_MAX_AREA_PX", 1600)
+DOT_MIN_BRIGHTNESS = _env_float("DOT_MIN_BRIGHTNESS", 110.0)
+DOT_MIN_DIFF_MEAN = _env_float("DOT_MIN_DIFF_MEAN", 12.0)
+DOT_MIN_CIRCULARITY = _env_float("DOT_MIN_CIRCULARITY", 0.45)
+DOT_KERNEL_SIZE = _env_int("DOT_KERNEL_SIZE", 3)
+DOT_OPEN_ITER = _env_int("DOT_OPEN_ITER", 1)
+DOT_CLOSE_ITER = _env_int("DOT_CLOSE_ITER", 1)
+DOT_ASSIGNMENT_MAX_DISTANCE = _env_float("DOT_ASSIGNMENT_MAX_DISTANCE", 32.0)  # pixels
+DOT_INLIER_THRESHOLD = _env_float("DOT_INLIER_THRESHOLD", 20.0)  # pixels
+DOT_RANSAC_REPROJECTION_ERROR = _env_float("DOT_RANSAC_REPROJECTION_ERROR", 6.0)  # pixels
+DOT_INITIAL_POSE_TRIALS = _env_int("DOT_INITIAL_POSE_TRIALS", 300)
 CLUBFACE_AXIS_LENGTH = 40.0  # mm for debug axes
 
 
@@ -170,7 +191,10 @@ def detect_reflective_dots(ir_off_gray: np.ndarray, ir_on_gray: np.ndarray) -> l
         if masked_pixels.size == 0:
             continue
         brightness = float(masked_pixels.mean())
-        if brightness < DOT_MIN_BRIGHTNESS:
+        diff_roi = diff[y : y + h, x : x + w]
+        diff_pixels = diff_roi[roi_mask]
+        mean_diff = float(diff_pixels.mean()) if diff_pixels.size else 0.0
+        if brightness < DOT_MIN_BRIGHTNESS and mean_diff < DOT_MIN_DIFF_MEAN:
             continue
         contour_img = (roi_mask.astype(np.uint8) * 255)
         contours, _ = cv2.findContours(contour_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1106,7 +1130,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "tst_good_120.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "newSticker_1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"

@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Attach: video_ball_detector (WSL venv)",
+            "type": "python",
+            "request": "attach",
+            "justMyCode": false,
+            "connect": {
+                "host": "127.0.0.1",
+                "port": 5678
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "\\\\wsl.localhost\\Ubuntu\\home\\danik\\webcamGolf",
+                    "remoteRoot": "/home/danik/webcamGolf"
+                }
+            ],
+            "preLaunchTask": "Start video_ball_detector in WSL (debugpy)",
+            "postDebugTask": "Terminate video_ball_detector in WSL"
+        }
+    ]
+}
