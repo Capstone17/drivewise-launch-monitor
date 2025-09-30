@@ -1,12 +1,10 @@
 import json
-import itertools
 import math
 import os
-import random
 import sys
 import time
 from dataclasses import dataclass
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Sequence
 
 # Ensure Ultralytics can write its settings locally and skip auto-installation
 os.environ.setdefault(
@@ -17,11 +15,6 @@ os.makedirs(os.environ["YOLO_CONFIG_DIR"], exist_ok=True)
 
 import cv2
 import numpy as np
-
-try:
-    from scipy.optimize import linear_sum_assignment  # type: ignore
-except Exception:  # pragma: no cover - SciPy is optional
-    linear_sum_assignment = None
 
 try:
     from tflite_runtime.interpreter import Interpreter
@@ -45,7 +38,7 @@ FOCAL_LENGTH = 1755.0  # pixels
 DYNAMIC_MARKER_LENGTH = 2.38
 MIN_BALL_RADIUS_PX = 9  # pixels
 EDGE_MARGIN_PX = 1
-BALL_SCORE_THRESHOLD = 0.4
+BALL_SCORE_THRESHOLD = 0.25
 MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
@@ -74,56 +67,20 @@ CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
 # Reflective dot tracking parameters
-DOT_MIN_AREA_PX = 10
+DOT_MIN_AREA_PX = 6
 DOT_MAX_AREA_PX = 1600
-DOT_MIN_BRIGHTNESS = 140.0
-DOT_MIN_CIRCULARITY = 0.55
+DOT_MIN_BRIGHTNESS = 120.0
+DOT_MIN_CIRCULARITY = 0.45
 DOT_KERNEL_SIZE = 3
 DOT_OPEN_ITER = 1
 DOT_CLOSE_ITER = 1
-DOT_ASSIGNMENT_MAX_DISTANCE = 32.0  # pixels
-DOT_INLIER_THRESHOLD = 16.0  # pixels
-DOT_RANSAC_REPROJECTION_ERROR = 6.0  # pixels
-DOT_INITIAL_POSE_TRIALS = 300
-CLUBFACE_AXIS_LENGTH = 40.0  # mm for debug axes
-
-
-def _load_club_model(model_path: str) -> tuple[np.ndarray, np.ndarray]:
-    default_points = np.array(
-        [
-            [-28.0, -18.5, 0.0],
-            [30.0, -17.2, 0.0],
-            [-25.4, 14.1, 0.0],
-            [24.6, 15.3, 0.0],
-            [-6.5, 28.8, 1.5],
-            [8.4, 27.9, 1.3],
-        ],
-        dtype=np.float32,
-    )
-    default_center = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-    if not os.path.exists(model_path):
-        return default_points, default_center
-    try:
-        with open(model_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return default_points, default_center
-    dots = data.get("dots")
-    center = data.get("clubface_center", [0.0, 0.0, 0.0])
-    if not isinstance(dots, list) or len(dots) < 4:
-        return default_points, default_center
-    points = np.asarray(dots, dtype=np.float32)
-    center_arr = np.asarray(center, dtype=np.float32)
-    if points.ndim != 2 or points.shape[1] != 3:
-        return default_points, default_center
-    if center_arr.shape != (3,):
-        center_arr = default_center
-    return points, center_arr
-
-
-MODEL_POINTS, CLUBFACE_CENTER = _load_club_model(
-    os.path.join(os.path.dirname(__file__), "club_model.json")
-)
+CLUBFACE_MAX_SPREAD_PX = 140.0
+CLUBFACE_MAX_JUMP_PX = 80.0
+CLUBFACE_EMA_ALPHA = 0.4
+CLUBFACE_MIN_DOTS = 1
+CLUBFACE_MAX_MISSES = 8
+CLUBFACE_MAX_CANDIDATES = 6
+CLUBFACE_MIN_CONFIDENCE = 0.35
 
 
 @dataclass
@@ -134,6 +91,168 @@ class DotDetection:
     circularity: float
 
 
+
+
+class ClubfaceCentroidTracker:
+    def __init__(
+        self,
+        *,
+        max_jump_px: float = CLUBFACE_MAX_JUMP_PX,
+        max_spread_px: float = CLUBFACE_MAX_SPREAD_PX,
+        ema_alpha: float = CLUBFACE_EMA_ALPHA,
+        min_dots: int = CLUBFACE_MIN_DOTS,
+        min_confidence: float = CLUBFACE_MIN_CONFIDENCE,
+        max_misses: int = CLUBFACE_MAX_MISSES,
+        max_candidates: int = CLUBFACE_MAX_CANDIDATES,
+    ) -> None:
+        self.max_jump_px = float(max_jump_px)
+        self.max_spread_px = float(max_spread_px)
+        self.ema_alpha = float(ema_alpha)
+        self.min_dots = max(1, int(min_dots))
+        self.min_confidence = float(max(0.0, min(1.0, min_confidence)))
+        self.max_misses = max(1, int(max_misses))
+        self.max_candidates = max(1, int(max_candidates))
+        self.prev_center: np.ndarray | None = None
+        self.filtered_center: np.ndarray | None = None
+        self.miss_streak = 0
+
+    def reset(self) -> None:
+        self.prev_center = None
+        self.filtered_center = None
+        self.miss_streak = 0
+
+    def _register_miss(self) -> None:
+        self.miss_streak += 1
+        if self.miss_streak >= self.max_misses:
+            self.prev_center = None
+            self.filtered_center = None
+            self.miss_streak = self.max_misses
+
+    @staticmethod
+    def _weighted_center(points: np.ndarray, weights: np.ndarray, mask: np.ndarray) -> np.ndarray | None:
+        masked_weights = weights[mask]
+        total = float(masked_weights.sum())
+        if total <= 1e-6:
+            return None
+        return (points[mask] * masked_weights[:, None]).sum(axis=0) / total
+
+    @staticmethod
+    def _cluster_spread(points: np.ndarray, mask: np.ndarray, center: np.ndarray) -> float:
+        used = points[mask]
+        if used.size == 0:
+            return 0.0
+        distances = np.linalg.norm(used - center, axis=1)
+        if distances.size == 0:
+            return 0.0
+        return float(distances.max())
+
+    def _confidence(self, used: int, spread: float, jump: float | None) -> float:
+        count_factor = min(1.0, used / 4.0)
+        if self.max_spread_px > 0.0:
+            spread_factor = 1.0 - max(0.0, spread) / (self.max_spread_px * 1.25)
+        else:
+            spread_factor = 1.0
+        spread_factor = float(np.clip(spread_factor, 0.0, 1.0))
+        if jump is None or self.max_jump_px <= 0.0:
+            jump_factor = 1.0
+        else:
+            jump_factor = 1.0 - max(0.0, jump) / (self.max_jump_px * 1.5)
+            jump_factor = float(np.clip(jump_factor, 0.0, 1.0))
+        return float(np.clip(0.55 * count_factor + 0.3 * spread_factor + 0.15 * jump_factor, 0.0, 1.0))
+
+    def update(self, detections: Sequence[DotDetection]) -> tuple[np.ndarray | None, dict[str, object]]:
+        metrics: dict[str, object] = {
+            'dots': len(detections),
+            'used_dots': 0,
+            'status': 'no_detections',
+            'spread_px': None,
+            'jump_px': None,
+            'confidence': 0.0,
+        }
+        if not detections:
+            self._register_miss()
+            return None, metrics
+
+        points = np.array([det.centroid for det in detections], dtype=np.float32)
+        weights = np.array([
+            max(det.area, 1.0) * max(det.brightness, 1.0) for det in detections
+        ], dtype=np.float32)
+
+        order = weights.argsort()[::-1]
+        if order.size > self.max_candidates:
+            order = order[: self.max_candidates]
+        points = points[order]
+        weights = weights[order]
+
+        if points.shape[0] < self.min_dots:
+            metrics['status'] = 'insufficient_dots'
+            metrics['used_dots'] = int(points.shape[0])
+            self._register_miss()
+            return None, metrics
+
+        mask = np.ones(points.shape[0], dtype=bool)
+        center = self._weighted_center(points, weights, mask)
+        if center is None:
+            metrics['status'] = 'low_weight'
+            self._register_miss()
+            return None, metrics
+
+        for _ in range(points.shape[0]):
+            used = int(mask.sum())
+            if used <= self.min_dots:
+                break
+            spread = self._cluster_spread(points, mask, center)
+            if spread <= self.max_spread_px:
+                break
+            idxs = np.where(mask)[0]
+            distances = np.linalg.norm(points[idxs] - center, axis=1)
+            drop_idx = idxs[int(np.argmax(distances))]
+            mask[drop_idx] = False
+            center_candidate = self._weighted_center(points, weights, mask)
+            if center_candidate is None:
+                mask[drop_idx] = True
+                break
+            center = center_candidate
+
+        used = int(mask.sum())
+        center = self._weighted_center(points, weights, mask)
+        if center is None:
+            metrics['status'] = 'low_weight'
+            metrics['used_dots'] = used
+            self._register_miss()
+            return None, metrics
+
+        raw_center = center.astype(np.float32, copy=False)
+        if self.filtered_center is None:
+            filtered = raw_center.copy()
+        else:
+            filtered = ((1.0 - self.ema_alpha) * self.filtered_center + self.ema_alpha * raw_center).astype(np.float32)
+
+        spread_val = self._cluster_spread(points, mask, raw_center)
+        if self.prev_center is None:
+            jump_val = None
+        else:
+            jump_val = float(np.linalg.norm(raw_center - self.prev_center))
+
+        confidence = self._confidence(used, spread_val, jump_val)
+
+        metrics.update({
+            'status': 'ok' if confidence >= self.min_confidence else 'low_confidence',
+            'used_dots': used,
+            'spread_px': float(spread_val),
+            'jump_px': jump_val,
+            'confidence': confidence,
+            'raw_center': raw_center.copy(),
+        })
+
+        if confidence < self.min_confidence:
+            self._register_miss()
+            return None, metrics
+
+        self.filtered_center = filtered
+        self.prev_center = raw_center.copy()
+        self.miss_streak = 0
+        return filtered.copy(), metrics
 def _weighted_centroid(intensity_roi: np.ndarray, mask: np.ndarray, offset: tuple[int, int]) -> np.ndarray:
     y_idx, x_idx = np.nonzero(mask)
     if x_idx.size == 0:
@@ -194,243 +313,6 @@ def detect_reflective_dots(ir_off_gray: np.ndarray, ir_on_gray: np.ndarray) -> l
     return detections
 
 
-def _hungarian(cost: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    if linear_sum_assignment is not None:
-        rows, cols = linear_sum_assignment(cost)
-        return rows.astype(np.int32), cols.astype(np.int32)
-    rows = cost.shape[0]
-    cols = cost.shape[1]
-    if rows == 0 or cols == 0:
-        return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
-    if rows > cols:
-        raise RuntimeError(
-            "Hungarian fallback requires rows <= cols; reduce detections or install SciPy."
-        )
-    best_cost = float("inf")
-    best_perm: Optional[Tuple[int, ...]] = None
-    all_cols = range(cols)
-    for perm in itertools.permutations(all_cols, rows):
-        total = 0.0
-        for r, c in enumerate(perm):
-            total += float(cost[r, c])
-            if total >= best_cost:
-                break
-        if total < best_cost:
-            best_cost = total
-            best_perm = perm
-    if best_perm is None:
-        return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
-    rows_idx = np.arange(rows, dtype=np.int32)
-    cols_idx = np.array(best_perm, dtype=np.int32)
-    return rows_idx, cols_idx
-
-
-class ReflectiveDotTracker:
-    def __init__(
-        self,
-        model_points: np.ndarray,
-        clubface_center: np.ndarray,
-        camera_matrix: np.ndarray,
-        dist_coeffs: np.ndarray,
-    ) -> None:
-        if model_points.shape[0] < 4:
-            raise ValueError("At least four model points are required for pose estimation")
-        self.model_points = model_points.astype(np.float32)
-        self.clubface_center = clubface_center.astype(np.float32)
-        self.camera_matrix = camera_matrix.astype(np.float32)
-        self.dist_coeffs = dist_coeffs.astype(np.float32)
-        self.prev_pose: Optional[tuple[np.ndarray, np.ndarray]] = None
-
-    def project_model(self, rvec: np.ndarray, tvec: np.ndarray) -> np.ndarray:
-        projected, _ = cv2.projectPoints(self.model_points, rvec, tvec, self.camera_matrix, self.dist_coeffs)
-        return projected.reshape(-1, 2).astype(np.float32)
-
-    def assign_matches(
-        self,
-        detections: Sequence[DotDetection],
-        projected_points: np.ndarray,
-    ) -> list[tuple[int, int, float]]:
-        if not detections:
-            return []
-        max_assignable = min(len(detections), projected_points.shape[0])
-        if max_assignable == 0:
-            return []
-        if len(detections) > max_assignable:
-            order = np.argsort([-det.brightness for det in detections])[:max_assignable]
-        else:
-            order = np.arange(len(detections))
-        det_points = np.array([detections[idx].centroid for idx in order], dtype=np.float32)
-        diff = det_points[:, None, :] - projected_points[None, :, :]
-        cost = np.linalg.norm(diff, axis=2)
-        try:
-            rows, cols = _hungarian(cost)
-        except RuntimeError:
-            return []
-        matches: list[tuple[int, int, float]] = []
-        for det_idx_local, model_idx in zip(rows, cols):
-            distance = float(cost[det_idx_local, model_idx])
-            if distance <= DOT_ASSIGNMENT_MAX_DISTANCE:
-                matches.append((int(order[det_idx_local]), int(model_idx), distance))
-        return matches
-
-    def _initial_pose(
-        self,
-        detections: Sequence[DotDetection],
-    ) -> Optional[tuple[np.ndarray, np.ndarray, list[tuple[int, int, float]]]]:
-        if len(detections) < 4:
-            return None
-        det_points = np.array([det.centroid for det in detections], dtype=np.float32)
-        best_pose: Optional[tuple[np.ndarray, np.ndarray]] = None
-        best_matches: list[tuple[int, int, float]] = []
-        best_inliers = 0
-        model_indices = list(range(self.model_points.shape[0]))
-        det_indices = list(range(len(detections)))
-        trials = min(DOT_INITIAL_POSE_TRIALS, math.comb(len(det_indices), 4) * math.comb(len(model_indices), 4))
-        for _ in range(trials):
-            det_sample = random.sample(det_indices, 4)
-            model_sample = random.sample(model_indices, 4)
-            perm_list = list(itertools.permutations(model_sample))
-            random.shuffle(perm_list)
-            for perm in perm_list[: min(6, len(perm_list))]:
-                object_pts = self.model_points[list(perm)].astype(np.float32)
-                image_pts = det_points[det_sample].astype(np.float32)
-                success, rvec, tvec = cv2.solvePnP(
-                    object_pts,
-                    image_pts,
-                    self.camera_matrix,
-                    self.dist_coeffs,
-                    flags=cv2.SOLVEPNP_EPNP,
-                )
-                if not success:
-                    continue
-                projected = self.project_model(rvec, tvec)
-                matches = self.assign_matches(detections, projected)
-                inliers = [m for m in matches if m[2] <= DOT_INLIER_THRESHOLD]
-                if len(inliers) > best_inliers or (
-                    len(inliers) == best_inliers
-                    and matches
-                    and sum(m[2] for m in matches) < sum(m[2] for m in best_matches)
-                ):
-                    best_pose = (rvec, tvec)
-                    best_matches = matches
-                    best_inliers = len(inliers)
-                if best_inliers >= 4:
-                    break
-            if best_inliers >= 4:
-                break
-        if best_pose is None or len(best_matches) < 4:
-            return None
-        return best_pose[0], best_pose[1], best_matches
-
-    def estimate_pose(
-        self,
-        detections: Sequence[DotDetection],
-    ) -> Optional[dict]:
-        if len(detections) < 3:
-            return None
-        detection_points = np.array([det.centroid for det in detections], dtype=np.float32)
-        candidate_matches: list[tuple[int, int, float]] = []
-        if self.prev_pose is not None:
-            rvec_prev, tvec_prev = self.prev_pose
-            projected_prev = self.project_model(rvec_prev, tvec_prev)
-            matches_prev = self.assign_matches(detections, projected_prev)
-            inliers_prev = [m for m in matches_prev if m[2] <= DOT_INLIER_THRESHOLD]
-            if len(inliers_prev) >= 4:
-                candidate_matches = matches_prev
-        if not candidate_matches:
-            initial = self._initial_pose(detections)
-            if initial is None:
-                return None
-            candidate_matches = initial[2]
-        if len(candidate_matches) < 4:
-            return None
-        object_points = np.array(
-            [self.model_points[m_idx] for _, m_idx, _ in candidate_matches], dtype=np.float32
-        )
-        image_points = np.array(
-            [detection_points[d_idx] for d_idx, _, _ in candidate_matches], dtype=np.float32
-        )
-        success, rvec, tvec, inliers = cv2.solvePnPRansac(
-            object_points,
-            image_points,
-            self.camera_matrix,
-            self.dist_coeffs,
-            iterationsCount=100,
-            reprojectionError=DOT_RANSAC_REPROJECTION_ERROR,
-            confidence=0.99,
-            flags=cv2.SOLVEPNP_AP3P,
-        )
-        if not success:
-            return None
-        inlier_mask = np.zeros(object_points.shape[0], dtype=bool)
-        if inliers is not None and inliers.size:
-            inlier_mask[inliers.flatten()] = True
-        inlier_count = int(inlier_mask.sum()) if inliers is not None else object_points.shape[0]
-        if inlier_count < 3:
-            return None
-        if inlier_count >= 4:
-            refined_obj = object_points[inlier_mask]
-            refined_img = image_points[inlier_mask]
-            success_refine, rvec, tvec = cv2.solvePnP(
-                refined_obj,
-                refined_img,
-                self.camera_matrix,
-                self.dist_coeffs,
-                rvec,
-                tvec,
-                useExtrinsicGuess=True,
-                flags=cv2.SOLVEPNP_ITERATIVE,
-            )
-            if not success_refine:
-                return None
-        projected_points, _ = cv2.projectPoints(
-            object_points,
-            rvec,
-            tvec,
-            self.camera_matrix,
-            self.dist_coeffs,
-        )
-        residuals = np.linalg.norm(
-            image_points - projected_points.reshape(-1, 2),
-            axis=1,
-        )
-        if inliers is not None and inliers.size:
-            reprojection_error = float(residuals[inliers.flatten()].mean())
-        else:
-            reprojection_error = float(residuals.mean())
-        clubface_px, _ = cv2.projectPoints(
-            self.clubface_center.reshape(1, 3),
-            rvec,
-            tvec,
-            self.camera_matrix,
-            self.dist_coeffs,
-        )
-        self.prev_pose = (rvec.copy(), tvec.copy())
-        return {
-            "rvec": rvec.reshape(3, 1).astype(np.float32),
-            "tvec": tvec.reshape(3, 1).astype(np.float32),
-            "clubface_px": clubface_px.reshape(2).astype(np.float32),
-            "inliers": inlier_count,
-            "reprojection_error": reprojection_error,
-        }
-
-
-def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
-    """Convert a rotation vector to roll, pitch and yaw in degrees."""
-    rotation_matrix, _ = cv2.Rodrigues(rvec)
-    flip = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]], dtype=float)
-    rotation_matrix = flip @ rotation_matrix
-    sy = np.sqrt(rotation_matrix[0, 0] ** 2 + rotation_matrix[1, 0] ** 2)
-    singular = sy < 1e-6
-    if not singular:
-        roll = np.arctan2(rotation_matrix[2, 1], rotation_matrix[2, 2])
-        pitch = np.arctan2(-rotation_matrix[2, 0], sy)
-        yaw = np.arctan2(rotation_matrix[1, 0], rotation_matrix[0, 0])
-    else:
-        roll = np.arctan2(-rotation_matrix[1, 2], rotation_matrix[1, 1])
-        pitch = np.arctan2(-rotation_matrix[2, 0], sy)
-        yaw = 0.0
-    return tuple(np.degrees([roll, pitch, yaw]))
 
 
 def bbox_to_ball_metrics(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
@@ -860,7 +742,7 @@ def process_video(
     sticker_path: str,
     frames_dir: str = "ball_frames",
 ) -> str:
-    """Process video_path saving ball and clubface pose information to JSON."""
+    """Process video_path saving ball trajectory and clubface center coordinates to JSON."""
 
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -893,9 +775,7 @@ def process_video(
         f"{start_frame}-{end_frame} (" + ", ".join(parts) + ")"
     )
 
-    tracker_compile_start = time.perf_counter()
-    dot_tracker = ReflectiveDotTracker(MODEL_POINTS, CLUBFACE_CENTER, CAMERA_MATRIX, DIST_COEFFS)
-    tracker_compile_time = time.perf_counter() - tracker_compile_start
+    clubface_tracker = ClubfaceCentroidTracker()
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -915,7 +795,7 @@ def process_video(
                 pass
 
     ball_time = 0.0
-    dot_time = 0.0
+    clubface_time = 0.0
     ball_coords: list[dict] = []
     clubface_records: list[dict] = []
     processed_dot_frames: set[int] = set()
@@ -1022,55 +902,56 @@ def process_video(
                 on_idx not in processed_dot_frames
                 and inference_start <= on_idx < inference_end
             ):
-                start_pose = time.perf_counter()
+                start_clubface = time.perf_counter()
                 dot_detections = detect_reflective_dots(off_gray, on_gray)
-                pose = dot_tracker.estimate_pose(dot_detections)
-                dot_time += time.perf_counter() - start_pose
-                if pose is not None:
-                    rvec = pose["rvec"]
-                    tvec = pose["tvec"]
-                    clubface_px = pose["clubface_px"]
-                    roll, pitch, yaw = rvec_to_euler(rvec)
-                    record = {
+                filtered_center, metrics = clubface_tracker.update(dot_detections)
+                clubface_time += time.perf_counter() - start_clubface
+                if filtered_center is not None:
+                    quality = {
+                        "status": metrics.get("status"),
+                        "dots": int(metrics.get("dots", 0)),
+                        "used_dots": int(metrics.get("used_dots", 0)),
+                        "spread_px": (
+                            round(float(metrics["spread_px"]), 2)
+                            if metrics.get("spread_px") is not None
+                            else None
+                        ),
+                        "jump_px": (
+                            round(float(metrics["jump_px"]), 2)
+                            if metrics.get("jump_px") is not None
+                            else None
+                        ),
+                        "confidence": round(float(metrics.get("confidence", 0.0)), 3),
+                    }
+                    record: dict[str, object] = {
                         "time": round(on_time, 3),
                         "frame": int(on_idx),
                         "clubface_center": {
-                            "u": round(float(clubface_px[0]), 2),
-                            "v": round(float(clubface_px[1]), 2),
+                            "u": round(float(filtered_center[0]), 2),
+                            "v": round(float(filtered_center[1]), 2),
                         },
-                        "pose": {
-                            "x": round(float(tvec[0]), 2),
-                            "y": round(float(tvec[1]), 2),
-                            "z": round(float(tvec[2]), 2),
-                            "roll": round(float(roll), 2),
-                            "pitch": round(float(pitch), 2),
-                            "yaw": round(float(yaw), 2),
-                        },
-                        "quality": {
-                            "inliers": int(pose["inliers"]),
-                            "reprojection_error": round(float(pose["reprojection_error"]), 3),
-                            "dots": len(dot_detections),
-                        },
+                        "quality": quality,
                     }
+                    raw_center = metrics.get("raw_center")
+                    if isinstance(raw_center, np.ndarray):
+                        record["raw_center"] = {
+                            "u": round(float(raw_center[0]), 2),
+                            "v": round(float(raw_center[1]), 2),
+                        }
                     clubface_records.append(record)
                     processed_dot_frames.add(on_idx)
                     if on_idx == frame_idx:
-                        cv2.circle(
-                            enhanced,
-                            (int(round(clubface_px[0])), int(round(clubface_px[1]))),
-                            6,
-                            (255, 0, 0),
-                            2,
+                        filtered_pt = (
+                            int(round(float(filtered_center[0]))),
+                            int(round(float(filtered_center[1]))),
                         )
-                        cv2.drawFrameAxes(
-                            enhanced,
-                            CAMERA_MATRIX,
-                            DIST_COEFFS,
-                            rvec,
-                            tvec,
-                            CLUBFACE_AXIS_LENGTH,
-                            2,
-                        )
+                        cv2.circle(enhanced, filtered_pt, 6, (255, 0, 0), 2)
+                        if isinstance(raw_center, np.ndarray):
+                            raw_pt = (
+                                int(round(float(raw_center[0]))),
+                                int(round(float(raw_center[1]))),
+                            )
+                            cv2.circle(enhanced, raw_pt, 3, (0, 0, 255), -1)
 
         if frames_dir and inference_start <= frame_idx < inference_end:
             cv2.imwrite(
@@ -1087,8 +968,6 @@ def process_video(
 
     ball_coords.sort(key=lambda c: c["time"])
     clubface_records.sort(key=lambda c: c["time"])
-    if not clubface_records:
-        raise RuntimeError("No reflective dots detected in the video")
 
     with open(ball_path, "w", encoding="utf-8") as f:
         json.dump(ball_coords, f, indent=2)
@@ -1096,17 +975,19 @@ def process_video(
         json.dump(clubface_records, f, indent=2)
 
     print(f"Saved {len(ball_coords)} ball points to {ball_path}")
-    print(f"Saved {len(clubface_records)} clubface points to {sticker_path}")
+    if clubface_records:
+        print(f"Saved {len(clubface_records)} clubface points to {sticker_path}")
+    else:
+        print("Warning: No reflective dots detected; sticker file left empty")
     print(f"Ball detection compile time: {ball_compile_time:.2f}s")
-    print(f"Clubface tracking compile time: {tracker_compile_time:.2f}s")
     print(f"Ball detection time: {ball_time:.2f}s")
-    print(f"Clubface tracking time: {dot_time:.2f}s")
+    print(f"Clubface tracking time: {clubface_time:.2f}s")
     return "skibidi"
 
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "newSticker_4.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "newSticker_1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
