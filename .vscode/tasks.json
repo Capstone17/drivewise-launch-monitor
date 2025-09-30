@@ -11,7 +11,7 @@
                 "-e",
                 "bash",
                 "-lc",
-                "cd ~/webcamGolf && /home/danik/webcamGolf/venv/bin/python -m debugpy --listen 5678 --wait-for-client video_ball_detector.py"
+                "cd ~/webcamGolf && /home/danik/webcamGolf/venv/bin/python debugpy_launcher.py --host 0.0.0.0 --port 5678"
             ],
             "isBackground": true,
             "problemMatcher": {
@@ -25,8 +25,8 @@
                 ],
                 "background": {
                     "activeOnStart": true,
-                    "beginsPattern": "^\\d+\\.\\d+s - ",
-                    "endsPattern": "^Debugger attached"
+                    "beginsPattern": "^\\[debugpy\\] listening on ",
+                    "endsPattern": "^\\[debugpy\\] listening on "
                 }
             },
             "presentation": {
@@ -46,7 +46,7 @@
                 "-e",
                 "bash",
                 "-lc",
-                "pkill -f video_ball_detector.py || true"
+                "pkill -f debugpy_launcher.py || true"
             ],
             "presentation": {
                 "reveal": "never"
