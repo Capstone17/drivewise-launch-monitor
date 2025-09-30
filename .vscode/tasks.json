@@ -18,6 +18,7 @@
                 "pattern": [
                     {
                         "regexp": "^(.*)$",
+                        "kind": "file",
                         "file": 1,
                         "message": 1
                     }
