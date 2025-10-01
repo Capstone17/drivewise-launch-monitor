@@ -1196,14 +1196,11 @@ def process_video(
                         last_ball_center = center
                         last_ball_radius = rad
                         if w is not None and h is not None:
-                            x1_i = max(0, int(math.floor(x1)))
-                            y1_i = max(0, int(math.floor(y1)))
-                            x2_i = min(int(math.ceil(x2)), int(w))
-                            y2_i = min(int(math.ceil(y2)), int(h))
-                            if x2_i > x1_i and y2_i > y1_i:
-                                ir_gray[y1_i:y2_i, x1_i:x2_i] = 0
-                                orig[y1_i:y2_i, x1_i:x2_i] = 0
-                                enhanced[y1_i:y2_i, x1_i:x2_i] = 0
+                            center_int = (int(round(cx)), int(round(cy)))
+                            radius_int = int(math.ceil(rad))
+                            cv2.circle(ir_gray, center_int, radius_int, 0, thickness=-1)
+                            cv2.circle(orig, center_int, radius_int, (0, 0, 0), thickness=-1)
+                            cv2.circle(enhanced, center_int, radius_int, (0, 0, 0), thickness=-1)
                         detected = True
 
         if not detected and last_ball_center is not None and in_window:
