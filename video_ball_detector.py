@@ -71,24 +71,110 @@ MAX_MOTION_FRAMES = 40  # maximum allowed motion window length in frames
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
-# Reflective dot tracking parameters (mirroring MATLAB demo defaults)
-DOT_MIN_AREA_PX = 15
-DOT_MAX_AREA_PX = 400
-DOT_MIN_BRIGHTNESS = 60.0
-DOT_MIN_CIRCULARITY = 0.25
+# Reflective dot tracking parameters (Canny-based detector)
+CANNY_RESIZE_W = 500
+CANNY_RESIZE_H = 500
+CANNY_LOW_THRESHOLD = 0.16
+CANNY_HIGH_THRESHOLD = 0.19
+CANNY_DILATE_RADIUS = 2
+CANNY_CLOSE_RADIUS = 4
+CANNY_MIN_COMPONENT_AREA = 30
+CANNY_EQUIV_DIAMETER_MIN = 12.0
+CANNY_EQUIV_DIAMETER_MAX = 40.0
+CANNY_MIN_CIRCULARITY = 0.65
+CANNY_MIN_SOLIDITY = 0.85
+CANNY_MAX_ECCENTRICITY = 0.75
 DOT_MAX_DETECTIONS = 4
-TOPHAT_RADIUS_PX = 12
-ADAPTIVE_SENSITIVITY = 0.38
-STATIC_THRESHOLD = 0.30
-WHITE_VALUE_THRESHOLD = 0.88
-WHITE_SAT_MAX = 0.25
-ADAPTIVE_BLOCK_SIZE = 35  # odd kernel size for adaptive thresholding
 
-TOPHAT_KERNEL = cv2.getStructuringElement(
-    cv2.MORPH_ELLIPSE, (2 * TOPHAT_RADIUS_PX + 1, 2 * TOPHAT_RADIUS_PX + 1)
+CANNY_DILATE_KERNEL = cv2.getStructuringElement(
+    cv2.MORPH_ELLIPSE, (CANNY_DILATE_RADIUS * 2 + 1, CANNY_DILATE_RADIUS * 2 + 1)
 )
-OPEN_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-CLOSE_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+CANNY_CLOSE_KERNEL = cv2.getStructuringElement(
+    cv2.MORPH_ELLIPSE, (CANNY_CLOSE_RADIUS * 2 + 1, CANNY_CLOSE_RADIUS * 2 + 1)
+)
+
+
+def _fill_holes(mask: np.ndarray) -> np.ndarray:
+    filled = mask.copy()
+    h, w = mask.shape
+    flood = filled.copy()
+    mask_pad = np.zeros((h + 2, w + 2), np.uint8)
+    cv2.floodFill(flood, mask_pad, (0, 0), 255)
+    flood_inv = cv2.bitwise_not(flood)
+    return cv2.bitwise_or(filled, flood_inv)
+
+
+def _remove_small_components(mask: np.ndarray, min_area: int) -> np.ndarray:
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    cleaned = np.zeros_like(mask)
+    for label in range(1, num_labels):
+        if stats[label, cv2.CC_STAT_AREA] >= min_area:
+            cleaned[labels == label] = 255
+    return cleaned
+
+
+def _region_features(mask: np.ndarray, gray: np.ndarray) -> list[dict[str, float]]:
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    feats: list[dict[str, float]] = []
+    for cnt in contours:
+        area = float(cv2.contourArea(cnt))
+        if area <= 0:
+            continue
+        perimeter = float(cv2.arcLength(cnt, True))
+        if perimeter <= 0:
+            continue
+        hull = cv2.convexHull(cnt)
+        hull_area = float(cv2.contourArea(hull))
+        solidity = area / hull_area if hull_area > 1e-6 else 0.0
+        moments = cv2.moments(cnt)
+        if moments["m00"] == 0.0:
+            continue
+        cx = moments["m10"] / moments["m00"]
+        cy = moments["m01"] / moments["m00"]
+        equiv_diameter = np.sqrt(4.0 * area / np.pi)
+        mu20 = moments["mu20"] / moments["m00"]
+        mu02 = moments["mu02"] / moments["m00"]
+        mu11 = moments["mu11"] / moments["m00"]
+        cov = np.array([[mu20, mu11], [mu11, mu02]])
+        eigvals = np.linalg.eigvals(cov)
+        eigvals.sort()
+        if eigvals[1] <= 1e-6:
+            eccentricity = 0.0
+        else:
+            eccentricity = float(np.sqrt(max(0.0, 1.0 - eigvals[0] / eigvals[1])))
+        circularity = float((4.0 * np.pi * area) / (perimeter * perimeter))
+        component_mask = np.zeros_like(mask)
+        cv2.drawContours(component_mask, [cnt], -1, 255, cv2.FILLED)
+        mean_intensity = float(gray[component_mask.astype(bool)].mean())
+        feats.append(
+            {
+                "area": area,
+                "perimeter": perimeter,
+                "solidity": solidity,
+                "eccentricity": eccentricity,
+                "equiv_diameter": equiv_diameter,
+                "circularity": circularity,
+                "centroid": (cx, cy),
+                "brightness": mean_intensity,
+            }
+        )
+    return feats
+
+
+def _filter_canny_features(features: list[dict[str, float]]) -> list[dict[str, float]]:
+    accepted: list[dict[str, float]] = []
+    for feat in features:
+        d = feat["equiv_diameter"]
+        if not (CANNY_EQUIV_DIAMETER_MIN <= d <= CANNY_EQUIV_DIAMETER_MAX):
+            continue
+        if feat["circularity"] < CANNY_MIN_CIRCULARITY:
+            continue
+        if feat["solidity"] < CANNY_MIN_SOLIDITY:
+            continue
+        if feat["eccentricity"] > CANNY_MAX_ECCENTRICITY:
+            continue
+        accepted.append(feat)
+    return accepted
 
 CLUBFACE_MAX_SPREAD_PX = 140.0
 CLUBFACE_MAX_JUMP_PX = 80.0
@@ -502,79 +588,37 @@ def detect_reflective_dots(
         return image
 
     on_bgr = _ensure_bgr(on_frame)
-    gray = cv2.cvtColor(on_bgr, cv2.COLOR_BGR2GRAY)
-    gray_clahe = CLAHE.apply(gray)
+    orig_h, orig_w = on_bgr.shape[:2]
+    resized = cv2.resize(on_bgr, (CANNY_RESIZE_W, CANNY_RESIZE_H), interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    gray_norm = gray.astype(np.float32) / 255.0
 
-    tophat = cv2.morphologyEx(gray_clahe, cv2.MORPH_TOPHAT, TOPHAT_KERNEL)
-    tophat_norm = cv2.normalize(
-        tophat.astype(np.float32), None, 0.0, 1.0, cv2.NORM_MINMAX
-    )
+    low = int(round(CANNY_LOW_THRESHOLD * 255))
+    high = int(round(CANNY_HIGH_THRESHOLD * 255))
+    edges = cv2.Canny((gray_norm * 255).astype(np.uint8), low, high, L2gradient=True)
+    dilated = cv2.dilate(edges, CANNY_DILATE_KERNEL, iterations=1)
+    closed = cv2.morphologyEx(dilated, cv2.MORPH_CLOSE, CANNY_CLOSE_KERNEL, iterations=1)
+    filled = _fill_holes(closed)
+    mask = _remove_small_components(filled, CANNY_MIN_COMPONENT_AREA)
 
-    block_size = ADAPTIVE_BLOCK_SIZE if ADAPTIVE_BLOCK_SIZE % 2 == 1 else ADAPTIVE_BLOCK_SIZE + 1
-    block_size = max(3, block_size)
-    adaptive_c = max(0, int(round((1.0 - ADAPTIVE_SENSITIVITY) * 15)))
-    adaptive_src = (tophat_norm * 255.0).astype(np.uint8)
-    mask_adaptive = cv2.adaptiveThreshold(
-        adaptive_src,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        block_size,
-        adaptive_c,
-    )
+    features = _region_features(mask, gray_norm)
+    filtered = _filter_canny_features(features)
 
-    static_mask = (tophat_norm >= STATIC_THRESHOLD).astype(np.uint8) * 255
-    hsv = cv2.cvtColor(on_bgr, cv2.COLOR_BGR2HSV)
-    value_channel = hsv[:, :, 2].astype(np.float32) / 255.0
-    saturation_channel = hsv[:, :, 1].astype(np.float32) / 255.0
-    mask_white = (
-        (value_channel >= WHITE_VALUE_THRESHOLD)
-        & (saturation_channel <= WHITE_SAT_MAX)
-    )
-
-    mask = cv2.bitwise_and(mask_adaptive, static_mask)
-    mask = cv2.bitwise_and(mask, (mask_white.astype(np.uint8) * 255))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, OPEN_KERNEL)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, CLOSE_KERNEL)
-
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     detections: list[DotDetection] = []
-    gray_weights = gray_clahe.astype(np.float32)
+    scale_x = orig_w / CANNY_RESIZE_W
+    scale_y = orig_h / CANNY_RESIZE_H
 
-    for label in range(1, num_labels):
-        area = stats[label, cv2.CC_STAT_AREA]
-        if area < DOT_MIN_AREA_PX or area > DOT_MAX_AREA_PX:
-            continue
-        x = stats[label, cv2.CC_STAT_LEFT]
-        y = stats[label, cv2.CC_STAT_TOP]
-        w = stats[label, cv2.CC_STAT_WIDTH]
-        h = stats[label, cv2.CC_STAT_HEIGHT]
-        roi_mask = labels[y : y + h, x : x + w] == label
-        if not np.any(roi_mask):
-            continue
-        roi_intensity = gray_weights[y : y + h, x : x + w]
-        brightness = float(roi_intensity[roi_mask].mean())
-        if brightness < DOT_MIN_BRIGHTNESS:
-            continue
-        contour_img = (roi_mask.astype(np.uint8) * 255)
-        contours, _ = cv2.findContours(
-            contour_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        if not contours:
-            continue
-        perimeter = float(cv2.arcLength(contours[0], True))
-        if perimeter <= 1e-6:
-            continue
-        circularity = float((4.0 * math.pi * area) / (perimeter * perimeter))
-        if circularity < DOT_MIN_CIRCULARITY:
-            continue
-        centroid = _weighted_centroid(roi_intensity, roi_mask, (x, y))
+    for feat in filtered:
+        cx, cy = feat["centroid"]
+        centroid = np.array([cx * scale_x, cy * scale_y], dtype=np.float32)
+        area = feat["area"] * scale_x * scale_y
+        brightness = feat["brightness"] * 255.0
         detections.append(
             DotDetection(
                 centroid=centroid,
                 area=float(area),
-                brightness=brightness,
-                circularity=circularity,
+                brightness=float(brightness),
+                circularity=float(feat["circularity"]),
             )
         )
 
