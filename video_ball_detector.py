@@ -71,15 +71,24 @@ MAX_MOTION_FRAMES = 40  # maximum allowed motion window length in frames
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
-# Reflective dot tracking parameters
-DOT_MIN_AREA_PX = 6
-DOT_MAX_AREA_PX = 1600
-DOT_MIN_BRIGHTNESS = 120.0
-DOT_MIN_DIFF_MEAN = 10.0
-DOT_MIN_CIRCULARITY = 0.45
-DOT_KERNEL_SIZE = 3
-DOT_OPEN_ITER = 1
-DOT_CLOSE_ITER = 1
+# Reflective dot tracking parameters (mirroring MATLAB demo defaults)
+DOT_MIN_AREA_PX = 15
+DOT_MAX_AREA_PX = 400
+DOT_MIN_BRIGHTNESS = 60.0
+DOT_MIN_CIRCULARITY = 0.25
+DOT_MAX_DETECTIONS = 4
+TOPHAT_RADIUS_PX = 12
+ADAPTIVE_SENSITIVITY = 0.38
+STATIC_THRESHOLD = 0.30
+WHITE_VALUE_THRESHOLD = 0.88
+WHITE_SAT_MAX = 0.25
+ADAPTIVE_BLOCK_SIZE = 35  # odd kernel size for adaptive thresholding
+
+TOPHAT_KERNEL = cv2.getStructuringElement(
+    cv2.MORPH_ELLIPSE, (2 * TOPHAT_RADIUS_PX + 1, 2 * TOPHAT_RADIUS_PX + 1)
+)
+OPEN_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+CLOSE_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
 
 CLUBFACE_MAX_SPREAD_PX = 140.0
 CLUBFACE_MAX_JUMP_PX = 80.0
@@ -481,72 +490,97 @@ def _weighted_centroid(intensity_roi: np.ndarray, mask: np.ndarray, offset: tupl
     return np.array([offset[0] + x, offset[1] + y], dtype=np.float32)
 
 
-def detect_reflective_dots(ir_off_gray: np.ndarray, ir_on_gray: np.ndarray) -> list[DotDetection]:
-    diff = cv2.absdiff(ir_on_gray, ir_off_gray)
-    diff = cv2.convertScaleAbs(diff)
-    blurred = cv2.GaussianBlur(diff, (5, 5), 0)
-    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (DOT_KERNEL_SIZE, DOT_KERNEL_SIZE))
-    opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=DOT_OPEN_ITER)
-    cleaned = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=DOT_CLOSE_ITER)
+def detect_reflective_dots(
+    off_frame: np.ndarray | None, on_frame: np.ndarray | None
+) -> list[DotDetection]:
+    if on_frame is None or on_frame.size == 0:
+        return []
 
-    def _extract(mask: np.ndarray) -> list[DotDetection]:
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-        found: list[DotDetection] = []
-        for label in range(1, num_labels):
-            x = stats[label, cv2.CC_STAT_LEFT]
-            y = stats[label, cv2.CC_STAT_TOP]
-            w = stats[label, cv2.CC_STAT_WIDTH]
-            h = stats[label, cv2.CC_STAT_HEIGHT]
-            area = stats[label, cv2.CC_STAT_AREA]
-            if area < DOT_MIN_AREA_PX or area > DOT_MAX_AREA_PX:
-                continue
-            roi_mask = labels[y : y + h, x : x + w] == label
-            roi_on = ir_on_gray[y : y + h, x : x + w]
-            roi_diff = diff[y : y + h, x : x + w]
-            masked_pixels = roi_on[roi_mask]
-            if masked_pixels.size == 0:
-                continue
-            brightness = float(masked_pixels.mean())
-            if brightness < DOT_MIN_BRIGHTNESS:
-                continue
-            diff_pixels = roi_diff[roi_mask]
-            if diff_pixels.size == 0:
-                continue
-            mean_diff = float(diff_pixels.mean())
-            if mean_diff < DOT_MIN_DIFF_MEAN:
-                continue
-            contour_img = (roi_mask.astype(np.uint8) * 255)
-            contours, _ = cv2.findContours(contour_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not contours:
-                continue
-            perimeter = float(cv2.arcLength(contours[0], True))
-            if perimeter <= 1e-6:
-                continue
-            circularity = float((4.0 * math.pi * area) / (perimeter * perimeter))
-            if circularity < DOT_MIN_CIRCULARITY:
-                continue
-            centroid = _weighted_centroid(roi_on, roi_mask, (x, y))
-            found.append(
-                DotDetection(
-                    centroid=centroid,
-                    area=float(area),
-                    brightness=brightness,
-                    circularity=circularity,
-                )
+    def _ensure_bgr(image: np.ndarray) -> np.ndarray:
+        if image.ndim == 2 or image.shape[-1] == 1:
+            return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        return image
+
+    on_bgr = _ensure_bgr(on_frame)
+    gray = cv2.cvtColor(on_bgr, cv2.COLOR_BGR2GRAY)
+    gray_clahe = CLAHE.apply(gray)
+
+    tophat = cv2.morphologyEx(gray_clahe, cv2.MORPH_TOPHAT, TOPHAT_KERNEL)
+    tophat_norm = cv2.normalize(
+        tophat.astype(np.float32), None, 0.0, 1.0, cv2.NORM_MINMAX
+    )
+
+    block_size = ADAPTIVE_BLOCK_SIZE if ADAPTIVE_BLOCK_SIZE % 2 == 1 else ADAPTIVE_BLOCK_SIZE + 1
+    block_size = max(3, block_size)
+    adaptive_c = max(0, int(round((1.0 - ADAPTIVE_SENSITIVITY) * 15)))
+    adaptive_src = (tophat_norm * 255.0).astype(np.uint8)
+    mask_adaptive = cv2.adaptiveThreshold(
+        adaptive_src,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        block_size,
+        adaptive_c,
+    )
+
+    static_mask = (tophat_norm >= STATIC_THRESHOLD).astype(np.uint8) * 255
+    hsv = cv2.cvtColor(on_bgr, cv2.COLOR_BGR2HSV)
+    value_channel = hsv[:, :, 2].astype(np.float32) / 255.0
+    saturation_channel = hsv[:, :, 1].astype(np.float32) / 255.0
+    mask_white = (
+        (value_channel >= WHITE_VALUE_THRESHOLD)
+        & (saturation_channel <= WHITE_SAT_MAX)
+    )
+
+    mask = cv2.bitwise_and(mask_adaptive, static_mask)
+    mask = cv2.bitwise_and(mask, (mask_white.astype(np.uint8) * 255))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, OPEN_KERNEL)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, CLOSE_KERNEL)
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    detections: list[DotDetection] = []
+    gray_weights = gray_clahe.astype(np.float32)
+
+    for label in range(1, num_labels):
+        area = stats[label, cv2.CC_STAT_AREA]
+        if area < DOT_MIN_AREA_PX or area > DOT_MAX_AREA_PX:
+            continue
+        x = stats[label, cv2.CC_STAT_LEFT]
+        y = stats[label, cv2.CC_STAT_TOP]
+        w = stats[label, cv2.CC_STAT_WIDTH]
+        h = stats[label, cv2.CC_STAT_HEIGHT]
+        roi_mask = labels[y : y + h, x : x + w] == label
+        if not np.any(roi_mask):
+            continue
+        roi_intensity = gray_weights[y : y + h, x : x + w]
+        brightness = float(roi_intensity[roi_mask].mean())
+        if brightness < DOT_MIN_BRIGHTNESS:
+            continue
+        contour_img = (roi_mask.astype(np.uint8) * 255)
+        contours, _ = cv2.findContours(
+            contour_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if not contours:
+            continue
+        perimeter = float(cv2.arcLength(contours[0], True))
+        if perimeter <= 1e-6:
+            continue
+        circularity = float((4.0 * math.pi * area) / (perimeter * perimeter))
+        if circularity < DOT_MIN_CIRCULARITY:
+            continue
+        centroid = _weighted_centroid(roi_intensity, roi_mask, (x, y))
+        detections.append(
+            DotDetection(
+                centroid=centroid,
+                area=float(area),
+                brightness=brightness,
+                circularity=circularity,
             )
-        return found
+        )
 
-    detections = _extract(cleaned)
-
-    if not detections:
-        high = float(np.percentile(blurred, 99.0))
-        if high > 0.0:
-            thr = max(5.0, high * 0.6)
-            _, fallback = cv2.threshold(blurred, thr, 255, cv2.THRESH_BINARY)
-            fallback = cv2.morphologyEx(fallback, cv2.MORPH_CLOSE, kernel, iterations=1)
-            fallback = cv2.dilate(fallback, kernel, iterations=1)
-            detections = _extract(fallback)
+    detections.sort(key=lambda d: d.brightness, reverse=True)
+    if len(detections) > DOT_MAX_DETECTIONS:
+        detections = detections[:DOT_MAX_DETECTIONS]
 
     return detections
 
@@ -1042,6 +1076,7 @@ def process_video(
     prev_ir_idx: int | None = None
     prev_ir_time: float | None = None
     prev_ir_mean: float | None = None
+    prev_color: np.ndarray | None = None
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
     ball_velocity = np.zeros(2, dtype=float)
@@ -1116,6 +1151,15 @@ def process_video(
                             ball_velocity = center - last_ball_center
                         last_ball_center = center
                         last_ball_radius = rad
+                        if w is not None and h is not None:
+                            x1_i = max(0, int(math.floor(x1)))
+                            y1_i = max(0, int(math.floor(y1)))
+                            x2_i = min(int(math.ceil(x2)), int(w))
+                            y2_i = min(int(math.ceil(y2)), int(h))
+                            if x2_i > x1_i and y2_i > y1_i:
+                                ir_gray[y1_i:y2_i, x1_i:x2_i] = 0
+                                orig[y1_i:y2_i, x1_i:x2_i] = 0
+                                enhanced[y1_i:y2_i, x1_i:x2_i] = 0
                         detected = True
 
         if not detected and last_ball_center is not None and in_window:
@@ -1129,22 +1173,30 @@ def process_video(
         current_mean = float(ir_gray.mean())
         if prev_ir_gray is not None and prev_ir_idx is not None and prev_ir_time is not None:
             prev_mean = prev_ir_mean if prev_ir_mean is not None else float(prev_ir_gray.mean())
+            on_color: np.ndarray | None = None
+            off_color: np.ndarray | None = None
             if current_mean >= prev_mean:
                 on_idx = frame_idx
                 on_time = t
                 on_gray = ir_gray
                 off_gray = prev_ir_gray
+                on_color = orig
+                off_color = prev_color
             else:
                 on_idx = prev_ir_idx
                 on_time = prev_ir_time
                 on_gray = prev_ir_gray
                 off_gray = ir_gray
+                on_color = prev_color
+                off_color = orig
             if (
                 on_idx not in processed_dot_frames
                 and inference_start <= on_idx < inference_end
+                and on_color is not None
+                and off_color is not None
             ):
                 start_clubface = time.perf_counter()
-                dot_detections = detect_reflective_dots(off_gray, on_gray)
+                dot_detections = detect_reflective_dots(off_color, on_color)
                 observation, metrics = clubface_tracker.update(
                     dot_detections,
                     approx_depth_cm=last_ball_distance,
@@ -1209,6 +1261,7 @@ def process_video(
         prev_ir_idx = frame_idx
         prev_ir_time = t
         prev_ir_mean = current_mean
+        prev_color = orig
         frame_idx += 1
 
     cap.release()
