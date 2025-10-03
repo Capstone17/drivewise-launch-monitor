@@ -47,7 +47,7 @@ fi
 # Compute Center Crop
 # -------------------------
 crop_x=$(((1456 - width) / 2))
-crop_y=$((((1088 - height) / 2) + 15))
+crop_y=$((((1088 - height) / 2) + 30))
 max_crop_y=$((1088 - height))
 
 if (( crop_y > max_crop_y )); then
