@@ -77,6 +77,9 @@ DOT_MAX_AREA_PX = 400
 DOT_MIN_BRIGHTNESS = 60.0
 DOT_MIN_CIRCULARITY = 0.25
 DOT_MAX_DETECTIONS = 4
+DOT_DIFF_THRESHOLD = 0.05
+DOT_DIFF_MEAN_THRESHOLD = 0.08
+DOT_MIN_Y_PX = 40.0
 TOPHAT_RADIUS_PX = 12
 ADAPTIVE_SENSITIVITY = 0.38
 STATIC_THRESHOLD = 0.30
@@ -510,8 +513,16 @@ def detect_reflective_dots(
     off_frame = _invert(off_frame)
 
     on_bgr = _ensure_bgr(on_frame)
+    off_bgr = _ensure_bgr(off_frame) if off_frame is not None else on_bgr
+
     gray = cv2.cvtColor(on_bgr, cv2.COLOR_BGR2GRAY)
     gray_clahe = CLAHE.apply(gray)
+    off_gray = cv2.cvtColor(off_bgr, cv2.COLOR_BGR2GRAY)
+    off_gray_clahe = CLAHE.apply(off_gray)
+
+    diff = cv2.subtract(gray_clahe, off_gray_clahe)
+    diff_norm = cv2.normalize(diff.astype(np.float32), None, 0.0, 1.0, cv2.NORM_MINMAX)
+    diff_mask = (diff_norm >= DOT_DIFF_THRESHOLD).astype(np.uint8) * 255
 
     tophat = cv2.morphologyEx(gray_clahe, cv2.MORPH_TOPHAT, TOPHAT_KERNEL)
     tophat_norm = cv2.normalize(
@@ -542,6 +553,7 @@ def detect_reflective_dots(
 
     mask = cv2.bitwise_and(mask_adaptive, static_mask)
     mask = cv2.bitwise_and(mask, (mask_white.astype(np.uint8) * 255))
+    mask = cv2.bitwise_and(mask, diff_mask)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, OPEN_KERNEL)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, CLOSE_KERNEL)
 
@@ -561,6 +573,10 @@ def detect_reflective_dots(
         if not np.any(roi_mask):
             continue
         roi_intensity = gray_weights[y : y + h, x : x + w]
+        roi_diff = diff_norm[y : y + h, x : x + w]
+        diff_mean = float(roi_diff[roi_mask].mean()) if np.any(roi_mask) else 0.0
+        if diff_mean < DOT_DIFF_MEAN_THRESHOLD:
+            continue
         brightness = float(roi_intensity[roi_mask].mean())
         if brightness < DOT_MIN_BRIGHTNESS:
             continue
@@ -577,6 +593,8 @@ def detect_reflective_dots(
         if circularity < DOT_MIN_CIRCULARITY:
             continue
         centroid = _weighted_centroid(roi_intensity, roi_mask, (x, y))
+        if centroid[1] < DOT_MIN_Y_PX:
+            continue
         detections.append(
             DotDetection(
                 centroid=centroid,
