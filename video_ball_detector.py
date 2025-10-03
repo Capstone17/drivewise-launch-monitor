@@ -501,6 +501,14 @@ def detect_reflective_dots(
             return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
         return image
 
+    def _invert(image: np.ndarray | None) -> np.ndarray | None:
+        if image is None:
+            return None
+        return cv2.bitwise_not(image)
+
+    on_frame = _invert(on_frame)
+    off_frame = _invert(off_frame)
+
     on_bgr = _ensure_bgr(on_frame)
     gray = cv2.cvtColor(on_bgr, cv2.COLOR_BGR2GRAY)
     gray_clahe = CLAHE.apply(gray)
@@ -1151,15 +1159,6 @@ def process_video(
                             ball_velocity = center - last_ball_center
                         last_ball_center = center
                         last_ball_radius = rad
-                        if w is not None and h is not None:
-                            x1_i = max(0, int(math.floor(x1)))
-                            y1_i = max(0, int(math.floor(y1)))
-                            x2_i = min(int(math.ceil(x2)), int(w))
-                            y2_i = min(int(math.ceil(y2)), int(h))
-                            if x2_i > x1_i and y2_i > y1_i:
-                                ir_gray[y1_i:y2_i, x1_i:x2_i] = 0
-                                orig[y1_i:y2_i, x1_i:x2_i] = 0
-                                enhanced[y1_i:y2_i, x1_i:x2_i] = 0
                         detected = True
 
         if not detected and last_ball_center is not None and in_window:
@@ -1292,7 +1291,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "newSticker_1.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "black_swing_1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
