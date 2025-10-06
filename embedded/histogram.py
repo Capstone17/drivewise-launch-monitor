@@ -20,7 +20,7 @@ def extract_exposure_from_filename(filename: str) -> Optional[float]:
 # Can play with the target brightness if the results are not good
 def analyze_exposure_in_folder(folder_path: str,
                                visualize: bool = True,
-                               target_brightness: float = 98.0) -> Tuple[List[float], List[float], float]:
+                               target_brightness: float = 103.0) -> Tuple[List[float], List[float], float]:
     """
     Analyze all images in a folder to determine the ideal exposure.
 
