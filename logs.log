@@ -1289,3 +1289,157 @@
 2025-08-09 15:27:54,601 - __main__ - DEBUG - Updated value after script
 2025-08-09 15:27:54,601 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
 2025-08-09 15:28:40,803 - __main__ - DEBUG - sending feedback based on metrics: 'Straight: Now that is a strike!'
+2025-09-13 17:09:12,745 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-13 17:09:12,746 - __main__ - INFO - Registering GATT application...
+2025-09-13 17:09:12,759 - __main__ - INFO - GATT application registered
+2025-09-13 17:09:12,762 - __main__ - INFO - Advertisement registered
+2025-09-14 19:22:49,019 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-14 19:22:49,020 - __main__ - INFO - Registering GATT application...
+2025-09-14 19:22:49,030 - __main__ - INFO - GATT application registered
+2025-09-14 19:22:49,033 - __main__ - INFO - Advertisement registered
+2025-09-16 18:54:48,133 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-16 18:54:48,138 - __main__ - INFO - Registering GATT application...
+2025-09-16 18:54:48,151 - __main__ - INFO - GATT application registered
+2025-09-16 18:54:48,154 - __main__ - INFO - Advertisement registered
+2025-09-16 19:02:28,628 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-16 19:02:28,630 - __main__ - INFO - Registering GATT application...
+2025-09-16 19:02:28,653 - __main__ - INFO - GATT application registered
+2025-09-16 19:02:28,658 - __main__ - INFO - Advertisement registered
+2025-09-16 19:05:43,233 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-16 19:05:43,236 - __main__ - INFO - Registering GATT application...
+2025-09-16 19:05:43,269 - __main__ - INFO - GATT application registered
+2025-09-16 19:05:43,272 - __main__ - INFO - Advertisement registered
+2025-09-16 19:06:23,904 - __main__ - DEBUG - Hostname found: '207.23.189.192 \n'
+2025-09-18 20:15:58,113 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-18 20:15:58,114 - __main__ - INFO - Registering GATT application...
+2025-09-18 20:15:58,120 - __main__ - INFO - GATT application registered
+2025-09-18 20:15:58,123 - __main__ - INFO - Advertisement registered
+2025-09-18 20:23:30,387 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-18 20:23:30,387 - __main__ - INFO - Registering GATT application...
+2025-09-18 20:23:30,398 - __main__ - INFO - GATT application registered
+2025-09-18 20:23:30,401 - __main__ - INFO - Advertisement registered
+2025-09-18 20:25:39,795 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-18 20:25:39,796 - __main__ - INFO - Registering GATT application...
+2025-09-18 20:25:39,806 - __main__ - INFO - GATT application registered
+2025-09-18 20:25:39,809 - __main__ - INFO - Advertisement registered
+2025-09-18 20:30:34,813 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-18 20:30:34,814 - __main__ - INFO - Registering GATT application...
+2025-09-18 20:30:34,826 - __main__ - INFO - GATT application registered
+2025-09-18 20:30:34,828 - __main__ - INFO - Advertisement registered
+2025-09-18 20:31:53,705 - __main__ - DEBUG - Hostname found: '207.23.222.48 \n'
+2025-09-18 20:40:32,198 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-18 20:40:32,199 - __main__ - INFO - Registering GATT application...
+2025-09-18 20:40:32,211 - __main__ - INFO - GATT application registered
+2025-09-18 20:40:32,213 - __main__ - INFO - Advertisement registered
+2025-09-18 20:45:38,788 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-18 20:45:38,789 - __main__ - INFO - Registering GATT application...
+2025-09-18 20:45:38,799 - __main__ - INFO - GATT application registered
+2025-09-18 20:45:38,800 - __main__ - INFO - Advertisement registered
+2025-09-18 20:56:01,704 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-18 20:56:01,705 - __main__ - INFO - Registering GATT application...
+2025-09-18 20:56:01,722 - __main__ - INFO - GATT application registered
+2025-09-18 20:56:01,725 - __main__ - INFO - Advertisement registered
+2025-09-18 22:41:35,271 - __main__ - DEBUG - Hostname found: '207.23.222.48 \n'
+2025-09-18 22:53:57,688 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-18 22:53:57,690 - __main__ - INFO - Registering GATT application...
+2025-09-18 22:53:57,710 - __main__ - INFO - GATT application registered
+2025-09-18 22:53:57,713 - __main__ - INFO - Advertisement registered
+2025-09-24 01:19:51,471 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-24 01:19:51,473 - __main__ - INFO - Registering GATT application...
+2025-09-24 01:19:51,490 - __main__ - INFO - GATT application registered
+2025-09-24 01:19:51,493 - __main__ - INFO - Advertisement registered
+2025-09-24 01:29:13,047 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-24 01:29:13,048 - __main__ - INFO - Registering GATT application...
+2025-09-24 01:29:13,064 - __main__ - INFO - GATT application registered
+2025-09-24 01:29:13,067 - __main__ - INFO - Advertisement registered
+2025-09-24 01:41:26,132 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-24 01:41:26,135 - __main__ - INFO - Registering GATT application...
+2025-09-24 01:41:26,153 - __main__ - INFO - GATT application registered
+2025-09-24 01:41:26,155 - __main__ - INFO - Advertisement registered
+2025-09-24 01:58:08,057 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-24 01:58:08,059 - __main__ - INFO - Registering GATT application...
+2025-09-24 01:58:08,074 - __main__ - INFO - GATT application registered
+2025-09-24 01:58:08,077 - __main__ - INFO - Advertisement registered
+2025-09-25 23:17:41,528 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-25 23:17:41,529 - __main__ - INFO - Registering GATT application...
+2025-09-25 23:17:41,542 - __main__ - INFO - GATT application registered
+2025-09-25 23:17:41,545 - __main__ - INFO - Advertisement registered
+2025-09-25 23:55:09,395 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-25 23:55:09,397 - __main__ - INFO - Registering GATT application...
+2025-09-25 23:55:09,414 - __main__ - INFO - GATT application registered
+2025-09-25 23:55:09,416 - __main__ - INFO - Advertisement registered
+2025-09-26 03:05:07,400 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-26 03:05:07,401 - __main__ - INFO - Registering GATT application...
+2025-09-26 03:05:07,419 - __main__ - INFO - GATT application registered
+2025-09-26 03:05:07,421 - __main__ - INFO - Advertisement registered
+2025-09-28 02:48:05,137 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-28 02:48:05,138 - __main__ - INFO - Registering GATT application...
+2025-09-28 02:48:05,153 - __main__ - INFO - GATT application registered
+2025-09-28 02:48:05,156 - __main__ - INFO - Advertisement registered
+2025-09-28 19:51:27,997 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-28 19:51:27,998 - __main__ - INFO - Registering GATT application...
+2025-09-28 19:51:28,008 - __main__ - INFO - GATT application registered
+2025-09-28 19:51:28,010 - __main__ - INFO - Advertisement registered
+2025-09-28 19:51:43,487 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-28 19:51:43,487 - __main__ - INFO - Registering GATT application...
+2025-09-28 19:51:43,498 - __main__ - INFO - GATT application registered
+2025-09-28 19:51:43,499 - __main__ - INFO - Advertisement registered
+2025-09-28 19:55:24,134 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-28 19:55:24,135 - __main__ - INFO - Registering GATT application...
+2025-09-28 19:55:24,145 - __main__ - INFO - GATT application registered
+2025-09-28 19:55:24,147 - __main__ - INFO - Advertisement registered
+2025-09-28 19:56:34,490 - __main__ - DEBUG - Hostname found: '207.23.189.12 \n'
+2025-09-28 20:09:04,457 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-28 20:09:04,458 - __main__ - INFO - Registering GATT application...
+2025-09-28 20:09:04,469 - __main__ - INFO - GATT application registered
+2025-09-28 20:09:04,471 - __main__ - INFO - Advertisement registered
+2025-09-29 01:18:43,601 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-29 01:18:43,602 - __main__ - INFO - Registering GATT application...
+2025-09-29 01:18:43,810 - __main__ - INFO - GATT application registered
+2025-09-29 01:18:43,813 - __main__ - INFO - Advertisement registered
+2025-09-29 23:19:46,180 - __main__ - DEBUG - Hostname found: '192.75.242.124 \n'
+2025-09-29 23:45:03,766 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-29 23:45:03,767 - __main__ - INFO - Registering GATT application...
+2025-09-29 23:45:03,787 - __main__ - INFO - GATT application registered
+2025-09-29 23:45:03,790 - __main__ - INFO - Advertisement registered
+2025-09-29 23:48:19,762 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-29 23:48:19,764 - __main__ - INFO - Registering GATT application...
+2025-09-29 23:48:19,780 - __main__ - INFO - GATT application registered
+2025-09-29 23:48:19,783 - __main__ - INFO - Advertisement registered
+2025-09-29 23:54:00,468 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-29 23:54:00,469 - __main__ - INFO - Registering GATT application...
+2025-09-29 23:54:00,488 - __main__ - INFO - GATT application registered
+2025-09-29 23:54:00,491 - __main__ - INFO - Advertisement registered
+2025-09-29 23:56:23,222 - __main__ - DEBUG - Hostname found: '192.75.242.124 \n'
+2025-09-30 00:26:29,495 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-30 00:26:29,497 - __main__ - INFO - Registering GATT application...
+2025-09-30 00:26:29,516 - __main__ - INFO - GATT application registered
+2025-09-30 00:26:29,519 - __main__ - INFO - Advertisement registered
+2025-09-30 01:14:13,101 - __main__ - DEBUG - Hostname found: '192.75.242.124 \n'
+2025-09-30 01:22:06,437 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-09-30 01:22:06,439 - __main__ - INFO - Registering GATT application...
+2025-09-30 01:22:06,456 - __main__ - INFO - GATT application registered
+2025-09-30 01:22:06,459 - __main__ - INFO - Advertisement registered
+2025-10-03 00:36:31,288 - __main__ - DEBUG - Hostname found: '172.16.205.70 \n'
+2025-10-03 00:37:14,138 - __main__ - DEBUG - Hostname found: '172.16.205.70 \n'
+2025-10-03 00:46:23,406 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-03 00:46:23,407 - __main__ - INFO - Registering GATT application...
+2025-10-03 00:46:23,416 - __main__ - INFO - GATT application registered
+2025-10-03 00:46:23,418 - __main__ - INFO - Advertisement registered
+2025-10-03 00:46:15,285 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-03 00:46:15,287 - __main__ - INFO - Registering GATT application...
+2025-10-03 00:46:15,304 - __main__ - INFO - GATT application registered
+2025-10-03 00:46:15,307 - __main__ - INFO - Advertisement registered
+2025-10-03 00:52:07,547 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-03 00:52:07,548 - __main__ - INFO - Registering GATT application...
+2025-10-03 00:52:07,559 - __main__ - INFO - GATT application registered
+2025-10-03 00:52:07,561 - __main__ - INFO - Advertisement registered
+2025-10-03 00:53:28,175 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-03 00:53:28,176 - __main__ - INFO - Registering GATT application...
+2025-10-03 00:53:28,192 - __main__ - INFO - GATT application registered
+2025-10-03 00:53:28,195 - __main__ - INFO - Advertisement registered
+2025-10-03 01:33:19,403 - __main__ - DEBUG - Hostname found: '172.16.205.70 \n'
+2025-10-03 02:09:11,845 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-03 02:09:11,846 - __main__ - INFO - Registering GATT application...
+2025-10-03 02:09:11,859 - __main__ - INFO - GATT application registered
+2025-10-03 02:09:11,862 - __main__ - INFO - Advertisement registered

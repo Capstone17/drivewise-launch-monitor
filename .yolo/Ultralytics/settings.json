@@ -1,0 +1,21 @@
+{
+  "settings_version": "0.0.6",
+  "datasets_dir": "/home/kreml/Documents/webcamGolf/datasets",
+  "weights_dir": "weights",
+  "runs_dir": "runs",
+  "uuid": "60200b5502aee18c0c074715a1cbabc131180301e34a57ede6ec47bb131df02c",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "hub": true,
+  "mlflow": true,
+  "neptune": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}

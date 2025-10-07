@@ -1,3 +1,10 @@
+# ---------------------------------------
+#
+# To shut off script temporarily: sudo systemctl stop webcamgolf.service
+#
+# ---------------------------------------
+
+
 import logging
 
 import dbus
@@ -101,6 +108,8 @@ class rpiService(Service):
         }
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
         self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
+        self.add_characteristic(FindIPCharacteristic(bus, 2, self))
+        # self.add_characteristic(PowerOffCharacteristic(bus, 3, self))
 
 
 class SwingAnalysisCharacteristic(Characteristic):
@@ -126,18 +135,25 @@ class SwingAnalysisCharacteristic(Characteristic):
     def WriteValue(self, value, options):
         logger.debug("Received write command")
         try:
-            # Run script
+            # Run config script
             subprocess.run(
                 [
-                    "./embedded/GScrop_improved_flip.sh",
-                    "400",
-                    "144",
-                    "387",
-                    "5000",
-                    "700",
+                    "./embedded/GS_config.sh"
+                    # , If we want to specify width or height we should do so here
                 ],
                 check=True,
             )
+
+            # Run video script
+            subprocess.run(
+                [
+                    "./embedded/rpicam_run.sh",
+                    "5s",  # Time in seconds
+                    200
+                ],
+                check=True,
+            )
+
             logger.info("processing video now")
              # Find most recent tst*.mp4 file in output directory
             output_dir = os.path.expanduser("~/Documents/webcamGolf")
@@ -234,6 +250,38 @@ class GenerateFeedbackCharacteristic(Characteristic):
         logger.debug("sending feedback based on metrics: " + repr(self.value))
         result_bytes = json.dumps(self.value).encode('utf-8')
         return [dbus.Byte(b) for b in result_bytes]
+    
+class FindIPCharacteristic(Characteristic):
+    uuid = "2c75511d-11b8-407d-b275-a295ef2c199f"
+    description = b"Read to get IP!"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["read"], service,
+        )
+        self.value = "IP Failed"
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 2, self))
+
+    def ReadValue(self, options):
+        # 
+        self.value = subprocess.check_output(["hostname", "-I"], text=True, )
+        logger.debug("Hostname found: " + repr(self.value))
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        return [dbus.Byte(b) for b in result_bytes]
+    
+# class PowerOffCharacteristic(Characteristic):
+#     uuid = ""
+#     description = b"Write to power off BLE!"
+
+#     def __init__(self, bus, index, service):
+#         Characteristic.__init__(
+#             self, bus, index, self.uuid, ["write"], service,
+#         )
+#         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
+
+#     def WriteValue(self, options):
+#         # CHANGE IN FUTURE TO POWER DOWN DEVICE
+        
 
 
 class CharacteristicUserDescriptionDescriptor(Descriptor):
