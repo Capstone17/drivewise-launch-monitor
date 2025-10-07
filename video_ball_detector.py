@@ -68,7 +68,7 @@ CX = float(CAMERA_MATRIX[0, 2])
 CY = float(CAMERA_MATRIX[1, 2])
 
 MAX_MISSING_FRAMES = 12
-MAX_MOTION_FRAMES = 30  # maximum allowed motion window length in frames
+MAX_MOTION_FRAMES = 40
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
@@ -1423,7 +1423,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_black_100exp.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_100exp.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
