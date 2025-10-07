@@ -76,22 +76,26 @@ DOT_MIN_AREA_PX = 15
 DOT_MAX_AREA_PX = 400
 DOT_MIN_BRIGHTNESS = 60.0
 DOT_MIN_CIRCULARITY = 0.25
-DOT_MAX_DETECTIONS = 4
-DOT_DIFF_THRESHOLD = 0.05
-DOT_DIFF_MEAN_THRESHOLD = 0.08
+DOT_MAX_DETECTIONS = 6
 DOT_MIN_Y_PX = 40.0
-TOPHAT_RADIUS_PX = 12
-ADAPTIVE_SENSITIVITY = 0.38
-STATIC_THRESHOLD = 0.30
-WHITE_VALUE_THRESHOLD = 0.88
-WHITE_SAT_MAX = 0.25
-ADAPTIVE_BLOCK_SIZE = 35  # odd kernel size for adaptive thresholding
 
-TOPHAT_KERNEL = cv2.getStructuringElement(
-    cv2.MORPH_ELLIPSE, (2 * TOPHAT_RADIUS_PX + 1, 2 * TOPHAT_RADIUS_PX + 1)
-)
-OPEN_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-CLOSE_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+CLUB_CANNY_LOW_THRESHOLD = int(round(0.35 * 255))
+CLUB_CANNY_HIGH_THRESHOLD = int(round(0.45 * 255))
+CLUB_CANNY_APERTURE_SIZE = 3
+CLUB_RING_MIN_RADIUS = 7
+CLUB_RING_MAX_RADIUS = 12
+CLUB_RING_HALF_THICKNESS = 2
+CLUB_RESPONSE_GAUSSIAN_SIZE = 5
+CLUB_RESPONSE_GAUSSIAN_SIGMA = 1.0
+CLUB_PRIMARY_THRESHOLD_SCALE = 0.45
+CLUB_SECONDARY_THRESHOLD_SCALE = 0.35
+CLUB_PEAK_MIN_SEPARATION_PX = 9
+CLUB_CLUSTER_NEIGHBOR_RADIUS_PX = 28
+CLUB_MAX_PEAK_CANDIDATES = 30
+CLUB_RESIZE_WIDTH = 500
+CLUB_RESIZE_HEIGHT = 500
+CLUB_CLUSTER_SCORE_WEIGHT = 0.7
+CLUB_CLUSTER_DENSITY_WEIGHT = 0.3
 
 CLUBFACE_MAX_SPREAD_PX = 140.0
 CLUBFACE_MAX_JUMP_PX = 80.0
@@ -101,10 +105,10 @@ CLUBFACE_MAX_MISSES = 8
 CLUBFACE_MAX_CANDIDATES = 6
 CLUBFACE_MIN_CONFIDENCE = 0.35
 
-# Pattern geometry: three markers stacked vertically on the heel side
-# (2 cm separation) and a single marker 6.5 cm toward the toe, roughly
-# aligned with the middle dot. We treat the clubface center as midway
-# between the heel column and the toe marker.
+# Pattern geometry: four markers stacked vertically on the heel side
+# (2 cm separation) and two markers toward the toe, roughly aligned
+# across the face. We treat the clubface center as midway between the
+# heel and toe columns.
 CLUBFACE_VERTICAL_SPACING_CM = 2.0
 CLUBFACE_HORIZONTAL_SPACING_CM = 6.5
 CLUBFACE_COLUMN_SPLIT_PX = 10.0
@@ -112,6 +116,7 @@ CLUBFACE_DEPTH_MIN_CM = 10.0
 CLUBFACE_DEPTH_MAX_CM = 400.0
 CLUBFACE_CENTER_OFFSET_CM = CLUBFACE_HORIZONTAL_SPACING_CM / 2.0
 CLUBFACE_Z_OFFSET_CM = 30.0
+CLUBFACE_VERTICAL_ALIGNMENT_PX = 40.0
 
 
 @dataclass
@@ -433,27 +438,71 @@ class ClubfaceCentroidTracker:
                         {
                             'depth_cm': depth_cm,
                             'pixels': dist_px,
-                            'type': f'vertical_{steps}',
+                            'type': f'vertical_left_{steps}',
                             'points': (ordered[i], ordered[j]),
                             'steps': steps,
                         }
                     )
         if left_points.shape[0] >= 1 and right_points.shape[0] >= 1:
-            right_point = right_points.mean(axis=0)
+            pair_candidates: list[dict[str, object]] = []
             for lp in left_points:
-                dist_px = float(np.linalg.norm(lp - right_point))
-                if dist_px < 1.0:
-                    continue
-                depth_cm = (FOCAL_LENGTH * CLUBFACE_HORIZONTAL_SPACING_CM) / dist_px
-                candidates.append(
-                    {
-                        'depth_cm': depth_cm,
-                        'pixels': dist_px,
-                        'type': 'horizontal',
-                        'points': (lp, right_point.copy()),
-                        'steps': 0,
-                    }
-                )
+                for rp in right_points:
+                    vertical_delta = abs(float(lp[1]) - float(rp[1]))
+                    if vertical_delta > CLUBFACE_VERTICAL_ALIGNMENT_PX:
+                        continue
+                    dist_px = float(np.linalg.norm(lp - rp))
+                    if dist_px < 1.0:
+                        continue
+                    depth_cm = (FOCAL_LENGTH * CLUBFACE_HORIZONTAL_SPACING_CM) / dist_px
+                    pair_candidates.append(
+                        {
+                            'depth_cm': depth_cm,
+                            'pixels': dist_px,
+                            'type': 'horizontal_pair',
+                            'points': (lp, rp),
+                            'vertical_delta': vertical_delta,
+                        }
+                    )
+            if pair_candidates:
+                candidates.extend(pair_candidates)
+            else:
+                right_point = right_points.mean(axis=0)
+                for lp in left_points:
+                    dist_px = float(np.linalg.norm(lp - right_point))
+                    if dist_px < 1.0:
+                        continue
+                    depth_cm = (FOCAL_LENGTH * CLUBFACE_HORIZONTAL_SPACING_CM) / dist_px
+                    candidates.append(
+                        {
+                            'depth_cm': depth_cm,
+                            'pixels': dist_px,
+                            'type': 'horizontal_mean',
+                            'points': (lp, right_point.copy()),
+                            'vertical_delta': abs(float(lp[1]) - float(right_point[1])),
+                        }
+                    )
+        if right_points.shape[0] >= 2:
+            order_r = np.argsort(right_points[:, 1])
+            ordered_r = right_points[order_r]
+            for i in range(ordered_r.shape[0]):
+                for j in range(i + 1, ordered_r.shape[0]):
+                    steps = j - i
+                    real_cm = steps * CLUBFACE_VERTICAL_SPACING_CM
+                    if real_cm <= 0.0:
+                        continue
+                    dist_px = float(np.linalg.norm(ordered_r[i] - ordered_r[j]))
+                    if dist_px < 1.0:
+                        continue
+                    depth_cm = (FOCAL_LENGTH * real_cm) / dist_px
+                    candidates.append(
+                        {
+                            'depth_cm': depth_cm,
+                            'pixels': dist_px,
+                            'type': f'vertical_right_{steps}',
+                            'points': (ordered_r[i], ordered_r[j]),
+                            'steps': steps,
+                        }
+                    )
         return candidates
 
     def _select_depth_candidate(
@@ -466,9 +515,9 @@ class ClubfaceCentroidTracker:
 
         def priority(candidate: dict[str, object]) -> int:
             ctype = str(candidate['type'])
-            if ctype == 'horizontal':
+            if ctype.startswith('horizontal'):
                 return 0
-            if ctype == 'vertical_1':
+            if ctype.startswith('vertical') and ctype.endswith('_1'):
                 return 1
             return 2
 
@@ -476,21 +525,50 @@ class ClubfaceCentroidTracker:
         filtered = [c for c in candidates if CLUBFACE_DEPTH_MIN_CM <= c['depth_cm'] <= CLUBFACE_DEPTH_MAX_CM]
         pool = filtered if filtered else candidates
         if ref is not None:
-            pool.sort(key=lambda c: (priority(c), abs(float(c['depth_cm']) - ref)))
+            pool.sort(
+                key=lambda c: (
+                    priority(c),
+                    abs(float(c['depth_cm']) - ref),
+                    float(c.get('vertical_delta', 0.0)),
+                )
+            )
         else:
-            pool.sort(key=lambda c: (priority(c), -float(c['pixels'])))
+            pool.sort(
+                key=lambda c: (
+                    priority(c),
+                    -float(c['pixels']),
+                    float(c.get('vertical_delta', 0.0)),
+                )
+            )
         return pool[0] if pool else None
-def _weighted_centroid(intensity_roi: np.ndarray, mask: np.ndarray, offset: tuple[int, int]) -> np.ndarray:
-    y_idx, x_idx = np.nonzero(mask)
-    if x_idx.size == 0:
-        return np.array(offset, dtype=np.float32)
-    weights = intensity_roi[y_idx, x_idx].astype(np.float32)
-    total = float(weights.sum())
-    if total <= 1e-6:
-        return np.array(offset, dtype=np.float32)
-    x = (x_idx.astype(np.float32) * weights).sum() / total
-    y = (y_idx.astype(np.float32) * weights).sum() / total
-    return np.array([offset[0] + x, offset[1] + y], dtype=np.float32)
+
+def _ring_kernel(radius: int, half_thickness: int) -> np.ndarray:
+    outer_radius = float(radius + half_thickness)
+    inner_radius = max(0.0, float(radius - half_thickness))
+    size = int(2 * math.ceil(outer_radius) + 1)
+    coords = np.arange(size, dtype=np.float32) - (size - 1) / 2.0
+    yy, xx = np.meshgrid(coords, coords, indexing="ij")
+    distance_sq = xx * xx + yy * yy
+    outer_mask = distance_sq <= outer_radius * outer_radius
+    inner_mask = distance_sq <= inner_radius * inner_radius
+    kernel = outer_mask.astype(np.float32) - inner_mask.astype(np.float32)
+    kernel -= kernel.mean()
+    norm = float(np.linalg.norm(kernel))
+    if norm > 1e-6:
+        kernel /= norm
+    return kernel
+
+
+def _normalize01(values: np.ndarray) -> np.ndarray:
+    if values.size == 0:
+        return np.zeros_like(values, dtype=np.float32)
+    values = values.astype(np.float32, copy=False)
+    minimum = float(values.min())
+    maximum = float(values.max())
+    if maximum - minimum <= 1e-6:
+        return np.zeros_like(values, dtype=np.float32)
+    return (values - minimum) / (maximum - minimum)
+
 
 
 def detect_reflective_dots(
@@ -504,110 +582,130 @@ def detect_reflective_dots(
             return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
         return image
 
-    def _invert(image: np.ndarray | None) -> np.ndarray | None:
-        if image is None:
-            return None
-        return cv2.bitwise_not(image)
-
-    on_frame = _invert(on_frame)
-    off_frame = _invert(off_frame)
-
     on_bgr = _ensure_bgr(on_frame)
-    off_bgr = _ensure_bgr(off_frame) if off_frame is not None else on_bgr
+    height, width = on_bgr.shape[:2]
+    if height == 0 or width == 0:
+        return []
 
-    gray = cv2.cvtColor(on_bgr, cv2.COLOR_BGR2GRAY)
-    gray_clahe = CLAHE.apply(gray)
-    off_gray = cv2.cvtColor(off_bgr, cv2.COLOR_BGR2GRAY)
-    off_gray_clahe = CLAHE.apply(off_gray)
+    resized = cv2.resize(on_bgr, (CLUB_RESIZE_WIDTH, CLUB_RESIZE_HEIGHT), interpolation=cv2.INTER_LINEAR)
+    scale_x = width / float(CLUB_RESIZE_WIDTH)
+    scale_y = height / float(CLUB_RESIZE_HEIGHT)
 
-    diff = cv2.subtract(gray_clahe, off_gray_clahe)
-    diff_norm = cv2.normalize(diff.astype(np.float32), None, 0.0, 1.0, cv2.NORM_MINMAX)
-    diff_mask = (diff_norm >= DOT_DIFF_THRESHOLD).astype(np.uint8) * 255
-
-    tophat = cv2.morphologyEx(gray_clahe, cv2.MORPH_TOPHAT, TOPHAT_KERNEL)
-    tophat_norm = cv2.normalize(
-        tophat.astype(np.float32), None, 0.0, 1.0, cv2.NORM_MINMAX
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(
+        gray,
+        CLUB_CANNY_LOW_THRESHOLD,
+        CLUB_CANNY_HIGH_THRESHOLD,
+        apertureSize=CLUB_CANNY_APERTURE_SIZE,
+        L2gradient=True,
     )
+    dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    edges = cv2.dilate(edges, dilate_kernel, iterations=1)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_kernel)
+    edges_float = edges.astype(np.float32) / 255.0
 
-    block_size = ADAPTIVE_BLOCK_SIZE if ADAPTIVE_BLOCK_SIZE % 2 == 1 else ADAPTIVE_BLOCK_SIZE + 1
-    block_size = max(3, block_size)
-    adaptive_c = max(0, int(round((1.0 - ADAPTIVE_SENSITIVITY) * 15)))
-    adaptive_src = (tophat_norm * 255.0).astype(np.uint8)
-    mask_adaptive = cv2.adaptiveThreshold(
-        adaptive_src,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        block_size,
-        adaptive_c,
-    )
+    best_score = np.zeros_like(edges_float, dtype=np.float32)
+    best_radius = np.zeros_like(edges_float, dtype=np.float32)
+    for radius in range(CLUB_RING_MIN_RADIUS, CLUB_RING_MAX_RADIUS + 1):
+        kernel = _ring_kernel(radius, CLUB_RING_HALF_THICKNESS)
+        response = cv2.filter2D(edges_float, -1, kernel, borderType=cv2.BORDER_REPLICATE)
+        mask = response > best_score
+        best_score[mask] = response[mask]
+        best_radius[mask] = float(radius)
 
-    static_mask = (tophat_norm >= STATIC_THRESHOLD).astype(np.uint8) * 255
-    hsv = cv2.cvtColor(on_bgr, cv2.COLOR_BGR2HSV)
-    value_channel = hsv[:, :, 2].astype(np.float32) / 255.0
-    saturation_channel = hsv[:, :, 1].astype(np.float32) / 255.0
-    mask_white = (
-        (value_channel >= WHITE_VALUE_THRESHOLD)
-        & (saturation_channel <= WHITE_SAT_MAX)
-    )
-
-    mask = cv2.bitwise_and(mask_adaptive, static_mask)
-    mask = cv2.bitwise_and(mask, (mask_white.astype(np.uint8) * 255))
-    mask = cv2.bitwise_and(mask, diff_mask)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, OPEN_KERNEL)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, CLOSE_KERNEL)
-
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    detections: list[DotDetection] = []
-    gray_weights = gray_clahe.astype(np.float32)
-
-    for label in range(1, num_labels):
-        area = stats[label, cv2.CC_STAT_AREA]
-        if area < DOT_MIN_AREA_PX or area > DOT_MAX_AREA_PX:
-            continue
-        x = stats[label, cv2.CC_STAT_LEFT]
-        y = stats[label, cv2.CC_STAT_TOP]
-        w = stats[label, cv2.CC_STAT_WIDTH]
-        h = stats[label, cv2.CC_STAT_HEIGHT]
-        roi_mask = labels[y : y + h, x : x + w] == label
-        if not np.any(roi_mask):
-            continue
-        roi_intensity = gray_weights[y : y + h, x : x + w]
-        roi_diff = diff_norm[y : y + h, x : x + w]
-        diff_mean = float(roi_diff[roi_mask].mean()) if np.any(roi_mask) else 0.0
-        if diff_mean < DOT_DIFF_MEAN_THRESHOLD:
-            continue
-        brightness = float(roi_intensity[roi_mask].mean())
-        if brightness < DOT_MIN_BRIGHTNESS:
-            continue
-        contour_img = (roi_mask.astype(np.uint8) * 255)
-        contours, _ = cv2.findContours(
-            contour_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    if CLUB_RESPONSE_GAUSSIAN_SIZE > 1:
+        response_map = cv2.GaussianBlur(
+            best_score,
+            (CLUB_RESPONSE_GAUSSIAN_SIZE, CLUB_RESPONSE_GAUSSIAN_SIZE),
+            CLUB_RESPONSE_GAUSSIAN_SIGMA,
+            borderType=cv2.BORDER_REPLICATE,
         )
-        if not contours:
+    else:
+        response_map = best_score
+
+    max_score = float(response_map.max())
+    if max_score <= 1e-6:
+        return []
+
+    candidate_coords: np.ndarray | None = None
+    for scale in (CLUB_PRIMARY_THRESHOLD_SCALE, CLUB_SECONDARY_THRESHOLD_SCALE):
+        threshold = scale * max_score
+        coords = np.column_stack(np.where(response_map >= threshold))
+        if coords.size:
+            candidate_coords = coords
+            break
+    if candidate_coords is None or candidate_coords.size == 0:
+        return []
+
+    scores = response_map[candidate_coords[:, 0], candidate_coords[:, 1]]
+    order = np.argsort(scores)[::-1]
+    coords_sorted = candidate_coords[order]
+    scores_sorted = scores[order]
+
+    selected_xy: list[tuple[float, float]] = []
+    selected_scores: list[float] = []
+    for (y, x), score in zip(coords_sorted, scores_sorted):
+        if len(selected_xy) >= CLUB_MAX_PEAK_CANDIDATES:
+            break
+        if selected_xy:
+            distances = np.linalg.norm(np.array(selected_xy) - np.array([x, y]), axis=1)
+            if np.any(distances < CLUB_PEAK_MIN_SEPARATION_PX):
+                continue
+        selected_xy.append((float(x), float(y)))
+        selected_scores.append(float(score))
+
+    if not selected_xy:
+        return []
+
+    coords_arr = np.array(selected_xy, dtype=np.float32)
+    scores_arr = np.array(selected_scores, dtype=np.float32)
+
+    if coords_arr.shape[0] > 1:
+        diff = coords_arr[:, None, :] - coords_arr[None, :, :]
+        dist = np.linalg.norm(diff, axis=2)
+    else:
+        dist = np.zeros((1, 1), dtype=np.float32)
+    neighbor_counts = (dist <= CLUB_CLUSTER_NEIGHBOR_RADIUS_PX).sum(axis=1)
+
+    score_norm = _normalize01(scores_arr)
+    density_norm = _normalize01(neighbor_counts.astype(np.float32))
+    rank_score = (
+        CLUB_CLUSTER_SCORE_WEIGHT * score_norm
+        + CLUB_CLUSTER_DENSITY_WEIGHT * density_norm
+    )
+
+    rank_order = np.argsort(rank_score)[::-1]
+    rank_order = rank_order[: min(DOT_MAX_DETECTIONS, rank_order.size)]
+
+    detections: list[DotDetection] = []
+    for idx in rank_order:
+        x_res, y_res = coords_arr[idx]
+        score = scores_arr[idx]
+        rx = int(np.clip(round(x_res), 0, best_radius.shape[1] - 1))
+        ry = int(np.clip(round(y_res), 0, best_radius.shape[0] - 1))
+        radius_res = float(best_radius[ry, rx])
+        if radius_res <= 0.0:
             continue
-        perimeter = float(cv2.arcLength(contours[0], True))
-        if perimeter <= 1e-6:
+        cx = float(x_res * scale_x)
+        cy = float(y_res * scale_y)
+        if cy < DOT_MIN_Y_PX:
             continue
-        circularity = float((4.0 * math.pi * area) / (perimeter * perimeter))
-        if circularity < DOT_MIN_CIRCULARITY:
-            continue
-        centroid = _weighted_centroid(roi_intensity, roi_mask, (x, y))
-        if centroid[1] < DOT_MIN_Y_PX:
-            continue
+        radius = radius_res * 0.5 * (scale_x + scale_y)
+        area = math.pi * (radius ** 2)
+        brightness = float(score * 255.0)
         detections.append(
             DotDetection(
-                centroid=centroid,
-                area=float(area),
+                centroid=np.array([cx, cy], dtype=np.float32),
+                area=area,
                 brightness=brightness,
-                circularity=circularity,
+                circularity=1.0,
             )
         )
 
     detections.sort(key=lambda d: d.brightness, reverse=True)
     if len(detections) > DOT_MAX_DETECTIONS:
         detections = detections[:DOT_MAX_DETECTIONS]
-
     return detections
 
 
