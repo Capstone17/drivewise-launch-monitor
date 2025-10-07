@@ -41,6 +41,7 @@ EDGE_MARGIN_PX = 1
 BALL_SCORE_THRESHOLD = 0.25
 MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
+MOTION_WINDOW_FORWARD_SHIFT = 10
 MAX_CENTER_JUMP_PX = 120.0
 
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
@@ -67,7 +68,7 @@ CX = float(CAMERA_MATRIX[0, 2])
 CY = float(CAMERA_MATRIX[1, 2])
 
 MAX_MISSING_FRAMES = 12
-MAX_MOTION_FRAMES = 40  # maximum allowed motion window length in frames
+MAX_MOTION_FRAMES = 30  # maximum allowed motion window length in frames
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
@@ -1122,7 +1123,22 @@ def find_motion_window(
         if end_frame - start_frame > max_frames:
             start_frame = max(0, end_frame - max_frames)
 
+        original_start = start_frame
+        original_end = end_frame
+
+        shift = MOTION_WINDOW_FORWARD_SHIFT
+        if shift != 0:
+            start_frame = min(total, start_frame + shift)
+            end_frame = min(total, end_frame + shift)
+            if end_frame - start_frame > max_frames:
+                start_frame = max(0, end_frame - max_frames)
+            if start_frame >= end_frame:
+                start_frame = max(0, end_frame - 1)
+        applied_shift = start_frame - original_start
+
         stats["frames_processed"] = len(detection_cache)
+        stats["forward_shift"] = applied_shift
+        stats["initial_window"] = (original_start, original_end)
         stats["detector_calls"] = stats["detector_runs"]
         stats["coarse_false_frame"] = coarse_false
         stats["last_detection_frame"] = last_detection_idx
