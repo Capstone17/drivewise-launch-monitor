@@ -79,9 +79,12 @@ DOT_MIN_BRIGHTNESS = 60.0
 DOT_MIN_CIRCULARITY = 0.25
 DOT_MAX_DETECTIONS = 6
 DOT_MIN_Y_PX = 40.0
+DOT_MIN_Y_FRACTION = 0.05
+DOT_MIN_LEFT_COLUMN = 3
+DOT_MIN_RIGHT_COLUMN = 1
 
-CLUB_CANNY_LOW_THRESHOLD = int(round(0.35 * 255))
-CLUB_CANNY_HIGH_THRESHOLD = int(round(0.45 * 255))
+CLUB_CANNY_LOW_THRESHOLD = int(round(0.21 * 255))
+CLUB_CANNY_HIGH_THRESHOLD = int(round(0.55 * 255))
 CLUB_CANNY_APERTURE_SIZE = 3
 CLUB_RING_MIN_RADIUS = 7
 CLUB_RING_MAX_RADIUS = 12
@@ -679,6 +682,10 @@ def detect_reflective_dots(
     rank_order = np.argsort(rank_score)[::-1]
     rank_order = rank_order[: min(DOT_MAX_DETECTIONS, rank_order.size)]
 
+    height_thresh = min(float(height) * DOT_MIN_Y_FRACTION, DOT_MIN_Y_PX)
+    if height < 200:
+        height_thresh *= float(height) / 200.0
+    height_thresh = max(0.0, height_thresh)
     detections: list[DotDetection] = []
     for idx in rank_order:
         x_res, y_res = coords_arr[idx]
@@ -690,7 +697,7 @@ def detect_reflective_dots(
             continue
         cx = float(x_res * scale_x)
         cy = float(y_res * scale_y)
-        if cy < DOT_MIN_Y_PX:
+        if cy < height_thresh:
             continue
         radius = radius_res * 0.5 * (scale_x + scale_y)
         area = math.pi * (radius ** 2)
@@ -703,6 +710,24 @@ def detect_reflective_dots(
                 circularity=1.0,
             )
         )
+
+    if len(detections) < DOT_MIN_LEFT_COLUMN + DOT_MIN_RIGHT_COLUMN:
+        return []
+
+    coords_for_columns = np.array([d.centroid for d in detections], dtype=np.float32)
+    sorted_x_idx = np.argsort(coords_for_columns[:, 0])
+    sorted_x = coords_for_columns[sorted_x_idx, 0]
+    gaps = np.diff(sorted_x)
+    if gaps.size == 0:
+        return []
+    max_gap = float(gaps.max())
+    if max_gap < CLUBFACE_COLUMN_SPLIT_PX:
+        return []
+    split = int(np.argmax(gaps) + 1)
+    left_count = split
+    right_count = coords_for_columns.shape[0] - split
+    if left_count < DOT_MIN_LEFT_COLUMN or right_count < DOT_MIN_RIGHT_COLUMN:
+        return []
 
     detections.sort(key=lambda d: d.brightness, reverse=True)
     if len(detections) > DOT_MAX_DETECTIONS:
