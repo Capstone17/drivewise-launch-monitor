@@ -6,17 +6,21 @@ from histogram import analyze_exposure_in_folder
 # For example, ['ls', '-l'] represents the command 'ls -l'.
 commands = [
     ['echo', 'Starting command series...'],
+    ['rpicam-still', '-o', 'exposure_samples/50_exposure.jpg', '--shutter', '50' ' --gain', '1', '--immediate'],
     ['rpicam-still', '-o', 'exposure_samples/100_exposure.jpg', '--shutter', '100' ' --gain', '1', '--immediate'],
+    ['rpicam-still', '-o', 'exposure_samples/150_exposure.jpg', '--shutter', '150' ' --gain', '1', '--immediate'],
     ['rpicam-still', '-o', 'exposure_samples/200_exposure.jpg', '--shutter', '200' ' --gain', '1', '--immediate'],
+    ['rpicam-still', '-o', 'exposure_samples/250_exposure.jpg', '--shutter', '250' ' --gain', '1', '--immediate'],
     ['rpicam-still', '-o', 'exposure_samples/300_exposure.jpg', '--shutter', '300' ' --gain', '1', '--immediate'],
+    ['rpicam-still', '-o', 'exposure_samples/350_exposure.jpg', '--shutter', '350' ' --gain', '1', '--immediate'],
     ['rpicam-still', '-o', 'exposure_samples/400_exposure.jpg', '--shutter', '400' ' --gain', '1', '--immediate'],
+    ['rpicam-still', '-o', 'exposure_samples/450_exposure.jpg', '--shutter', '450' ' --gain', '1', '--immediate'],
     ['rpicam-still', '-o', 'exposure_samples/500_exposure.jpg', '--shutter', '500' ' --gain', '1', '--immediate'],
+    ['rpicam-still', '-o', 'exposure_samples/550_exposure.jpg', '--shutter', '550' ' --gain', '1', '--immediate'],
     ['rpicam-still', '-o', 'exposure_samples/600_exposure.jpg', '--shutter', '600' ' --gain', '1', '--immediate'],
+    ['rpicam-still', '-o', 'exposure_samples/650_exposure.jpg', '--shutter', '650' ' --gain', '1', '--immediate'],
     ['rpicam-still', '-o', 'exposure_samples/700_exposure.jpg', '--shutter', '700' ' --gain', '1', '--immediate'],
-    ['rpicam-still', '-o', 'exposure_samples/800_exposure.jpg', '--shutter', '800' ' --gain', '1', '--immediate'],
-    ['rpicam-still', '-o', 'exposure_samples/900_exposure.jpg', '--shutter', '900' ' --gain', '1', '--immediate'],
-    ['rpicam-still', '-o', 'exposure_samples/1000_exposure.jpg', '--shutter', '1000' ' --gain', '1', '--immediate']
-    ] 
+    ['rpicam-still', '-o', 'exposure_samples/750_exposure.jpg', '--shutter', '750' ' --gain', '1', '--immediate']]
 
 for cmd in commands:
     try:

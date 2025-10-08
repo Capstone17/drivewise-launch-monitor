@@ -1443,3 +1443,8 @@
 2025-10-03 02:09:11,846 - __main__ - INFO - Registering GATT application...
 2025-10-03 02:09:11,859 - __main__ - INFO - GATT application registered
 2025-10-03 02:09:11,862 - __main__ - INFO - Advertisement registered
+2025-10-08 22:51:36,883 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-08 22:51:36,884 - __main__ - INFO - Registering GATT application...
+2025-10-08 22:51:36,909 - __main__ - INFO - GATT application registered
+2025-10-08 22:51:36,911 - __main__ - INFO - Advertisement registered
+2025-10-08 22:54:04,429 - __main__ - DEBUG - Hostname found: '172.16.205.70 \n'
