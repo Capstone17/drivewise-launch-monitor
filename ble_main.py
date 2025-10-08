@@ -288,8 +288,10 @@ class CalibrationCharacteristic(Characteristic):
             logger.debug("Calibration successful. Now running GS_config")
             subprocess.run(
                 [
-                    "./embedded/GS_config.sh"
+                    "./embedded/GS_config.sh",
                     # , If we want to specify width or height we should do so here
+                    "224", # Width
+                    "128"  # Height
                 ],
                 check=True,
             )
