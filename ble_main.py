@@ -107,7 +107,7 @@ class rpiService(Service):
             "metrics": None,
             "feedback": None
         }
-        self.exposure = 200
+        self.exposure = "200"
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
         self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
         self.add_characteristic(FindIPCharacteristic(bus, 2, self))
