@@ -3,6 +3,7 @@ import math
 import os
 import sys
 import time
+import warnings
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -735,6 +736,174 @@ def detect_reflective_dots(
     return detections
 
 
+def _polyfit_with_mask(
+    times: np.ndarray,
+    values: np.ndarray,
+    mask: np.ndarray,
+    degree: int,
+) -> np.ndarray | None:
+    """Return polynomial coefficients for the selected ``times``/``values`` subset."""
+    count = int(np.count_nonzero(mask))
+    if count == 0:
+        return None
+    deg = int(max(0, min(degree, count - 1)))
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", np.RankWarning)
+            coeffs = np.polyfit(times[mask], values[mask], deg)
+    except (np.linalg.LinAlgError, ValueError):
+        return None
+    return coeffs
+
+
+def _robust_polyfit(
+    times: np.ndarray,
+    values: np.ndarray,
+    *,
+    degree: int,
+    max_iter: int = 5,
+    sigma: float = 2.5,
+) -> tuple[np.ndarray | None, np.ndarray, np.ndarray]:
+    """Robust polynomial fit that iteratively masks outliers using a MAD threshold."""
+    finite_mask = np.isfinite(values)
+    if int(finite_mask.sum()) == 0:
+        return None, np.full_like(values, np.nan, dtype=np.float64), finite_mask
+
+    current_mask = finite_mask.copy()
+    coeffs = _polyfit_with_mask(times, values, current_mask, degree)
+    if coeffs is None:
+        return None, np.full_like(values, np.nan, dtype=np.float64), current_mask
+
+    for _ in range(max_iter):
+        fitted = np.polyval(coeffs, times)
+        residuals = values - fitted
+        inlier_residuals = residuals[current_mask]
+        if inlier_residuals.size == 0:
+            break
+        scale = float(np.median(np.abs(inlier_residuals)))
+        if not np.isfinite(scale) or scale < 1e-6:
+            break
+        threshold = sigma * 1.4826 * scale + 1e-6
+        new_mask = current_mask & (np.abs(residuals) <= threshold)
+        if int(new_mask.sum()) == int(current_mask.sum()):
+            break
+        current_mask = new_mask
+        coeffs = _polyfit_with_mask(times, values, current_mask, degree)
+        if coeffs is None:
+            break
+
+    if coeffs is None:
+        coeffs = _polyfit_with_mask(times, values, finite_mask, 0)
+    fitted = np.polyval(coeffs, times) if coeffs is not None else np.copy(values)
+    return coeffs, fitted, current_mask
+
+
+def refine_clubface_trajectory(coords: list[dict[str, float]]) -> list[dict[str, float]]:
+    """Remove outliers from clubface samples and interpolate gaps along a smooth curve."""
+    if len(coords) < 4:
+        return coords
+
+    time_groups: dict[float, list[tuple[float, float, float]]] = {}
+    for entry in coords:
+        try:
+            t = float(entry["time"])
+            x_val = float(entry["x"])
+            y_val = float(entry["y"])
+            z_val = float(entry["z"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        time_groups.setdefault(t, []).append((x_val, y_val, z_val))
+
+    if len(time_groups) < 3:
+        return coords
+
+    sorted_times = [float(t) for t in sorted(time_groups.keys())]
+    times = np.array(sorted_times, dtype=np.float64)
+    xs = np.array(
+        [float(np.mean([p[0] for p in time_groups[t]])) for t in sorted_times],
+        dtype=np.float64,
+    )
+    ys = np.array(
+        [float(np.mean([p[1] for p in time_groups[t]])) for t in sorted_times],
+        dtype=np.float64,
+    )
+    zs = np.array(
+        [float(np.mean([p[2] for p in time_groups[t]])) for t in sorted_times],
+        dtype=np.float64,
+    )
+
+    degree_target = min(5, max(1, times.size - 1))
+    coeff_x, _, mask_x = _robust_polyfit(times, xs, degree=degree_target)
+    coeff_y, _, mask_y = _robust_polyfit(times, ys, degree=degree_target)
+    coeff_z, _, mask_z = _robust_polyfit(times, zs, degree=degree_target)
+    if coeff_x is None or coeff_y is None or coeff_z is None:
+        return coords
+
+    combined_mask = mask_x & mask_y & mask_z
+    if int(combined_mask.sum()) < 3:
+        combined_mask = mask_x | mask_y | mask_z
+    if int(combined_mask.sum()) < 2:
+        return coords
+
+    axis_values = {"x": xs, "y": ys, "z": zs}
+    final_coeffs: dict[str, np.ndarray] = {}
+    for axis, values in axis_values.items():
+        coeffs = _polyfit_with_mask(times, values, combined_mask, degree_target)
+        if coeffs is None:
+            return coords
+        final_coeffs[axis] = coeffs
+
+    combined_times: list[float] = sorted_times.copy()
+    if times.size > 1:
+        diffs = np.diff(times)
+        positive_diffs = diffs[diffs > 1e-6]
+        dt = float(np.median(positive_diffs)) if positive_diffs.size else None
+    else:
+        dt = None
+    if dt is not None and dt > 1e-6:
+        for prev, curr in zip(times[:-1], times[1:]):
+            gap = curr - prev
+            if gap <= 1.5 * dt:
+                continue
+            num_missing = max(0, int(round(gap / dt)) - 1)
+            for step in range(1, num_missing + 1):
+                combined_times.append(float(prev + step * dt))
+
+    combined_times_arr = np.unique(
+        np.round(np.array(combined_times, dtype=np.float64), 6)
+    )
+    x_curve = np.polyval(final_coeffs["x"], combined_times_arr)
+    y_curve = np.polyval(final_coeffs["y"], combined_times_arr)
+    z_curve = np.polyval(final_coeffs["z"], combined_times_arr)
+
+    refined: list[dict[str, float]] = []
+    last_time: float | None = None
+    for t, x_val, y_val, z_val in zip(combined_times_arr, x_curve, y_curve, z_curve):
+        if not (
+            np.isfinite(t)
+            and np.isfinite(x_val)
+            and np.isfinite(y_val)
+            and np.isfinite(z_val)
+        ):
+            continue
+        time_out = round(float(t), 3)
+        if last_time is not None and abs(time_out - last_time) <= 1e-3:
+            if refined:
+                refined[-1]["x"] = round(float(x_val), 2)
+                refined[-1]["y"] = round(float(y_val), 2)
+                refined[-1]["z"] = round(float(z_val), 2)
+            continue
+        refined.append(
+            {
+                "time": time_out,
+                "x": round(float(x_val), 2),
+                "y": round(float(y_val), 2),
+                "z": round(float(z_val), 2),
+            }
+        )
+        last_time = time_out
+
+    return refined if refined else coords
 
 
 def bbox_to_ball_metrics(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
@@ -1424,6 +1593,8 @@ def process_video(
 
     ball_coords.sort(key=lambda c: c["time"])
     clubface_coords.sort(key=lambda c: c["time"])
+    if clubface_coords:
+        clubface_coords = refine_clubface_trajectory(clubface_coords)
 
     with open(ball_path, "w", encoding="utf-8") as f:
         json.dump(ball_coords, f, indent=2)
@@ -1448,7 +1619,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_100exp.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_200exp1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
