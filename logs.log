@@ -1448,3 +1448,32 @@
 2025-10-08 22:51:36,909 - __main__ - INFO - GATT application registered
 2025-10-08 22:51:36,911 - __main__ - INFO - Advertisement registered
 2025-10-08 22:54:04,429 - __main__ - DEBUG - Hostname found: '172.16.205.70 \n'
+2025-10-08 23:28:56,064 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-08 23:28:56,065 - __main__ - INFO - Registering GATT application...
+2025-10-08 23:28:56,076 - __main__ - INFO - GATT application registered
+2025-10-08 23:28:56,078 - __main__ - INFO - Advertisement registered
+2025-10-08 23:31:03,298 - __main__ - DEBUG - Received write command
+2025-10-08 23:31:03,358 - __main__ - DEBUG - Analysis finished, sending metrics: None
+2025-10-08 23:31:10,018 - __main__ - DEBUG - sending feedback based on metrics: 'Please run calibration first!'
+2025-10-08 23:36:06,717 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-08 23:36:06,718 - __main__ - INFO - Registering GATT application...
+2025-10-08 23:36:06,729 - __main__ - INFO - GATT application registered
+2025-10-08 23:36:06,731 - __main__ - INFO - Advertisement registered
+2025-10-08 23:38:19,691 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-08 23:38:19,692 - __main__ - INFO - Registering GATT application...
+2025-10-08 23:38:19,702 - __main__ - INFO - GATT application registered
+2025-10-08 23:38:19,704 - __main__ - INFO - Advertisement registered
+2025-10-08 23:38:40,327 - __main__ - DEBUG - Hostname found: '172.16.205.70 \n'
+2025-10-08 23:40:11,323 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-08 23:40:11,324 - __main__ - INFO - Registering GATT application...
+2025-10-08 23:40:11,335 - __main__ - INFO - GATT application registered
+2025-10-08 23:40:11,337 - __main__ - INFO - Advertisement registered
+2025-10-08 23:43:28,477 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-08 23:43:28,478 - __main__ - INFO - Registering GATT application...
+2025-10-08 23:43:28,490 - __main__ - INFO - GATT application registered
+2025-10-08 23:43:28,492 - __main__ - INFO - Advertisement registered
+2025-10-08 23:43:42,793 - __main__ - DEBUG - received write command
+2025-10-08 23:43:42,793 - __main__ - DEBUG - Began calibration function
+2025-10-08 23:43:44,096 - __main__ - INFO - Exposure from calibration: 280
+2025-10-08 23:43:44,096 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-08 23:43:44,110 - __main__ - ERROR - Calibration function failed: Command '['./embedded/GS_config.sh']' returned non-zero exit status 1.
