@@ -278,17 +278,30 @@ class CalibrationCharacteristic(Characteristic):
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
 
     def WriteValue(self, options):
-            # Run calibration script
-            self.service.exposure = calibrate_exposure()
-            logger.info(f"Exposure from calibration: {self.service.exposure}")
-            # Run config script
-            subprocess.run(
-                [
-                    "./embedded/GS_config.sh"
-                    # , If we want to specify width or height we should do so here
-                ],
-                check=True,
-            )
+            try: 
+                # Run calibration script
+                logger.debug("Began calibration function")
+                self.service.exposure = calibrate_exposure()
+                logger.info(f"Exposure from calibration: {self.service.exposure}")
+                # Run config script
+                logger.debug("Calibration successful. Now running GS_config")
+                subprocess.run(
+                    [
+                        "./embedded/GS_config.sh"
+                        # , If we want to specify width or height we should do so here
+                    ],
+                    check=True,
+                )
+            except Exception as e:
+                logger.error(f"Calibration function failed: {e}")
+
+            except subprocess.CalledProcessError as e:
+                logger.error(f"GS crop script failed: {e}")
+
+            else:
+                # This block runs only if try block completes without exception
+                logger.debug("Calibration and GS_Crop successful")
+
 
 
 # class PowerOffCharacteristic(Characteristic):
