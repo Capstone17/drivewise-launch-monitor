@@ -31,6 +31,7 @@ import glob
 
 from video_ball_detector import process_video
 from metrics.ruleBasedSystem import rule_based_system
+from embedded.exposure_calibration import calibrate_exposure
 
 MainLoop = None
 try:
@@ -278,7 +279,7 @@ class CalibrationCharacteristic(Characteristic):
 
     def WriteValue(self, options):
             # Run calibration script
-            self.service.exposure = 
+            self.service.exposure = calibrate_exposure()
             logger.info(f"Exposure from calibration: {self.service.exposure}")
             # Run config script
             subprocess.run(
