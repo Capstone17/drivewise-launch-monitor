@@ -273,8 +273,9 @@ class CalibrationCharacteristic(Characteristic):
 
     def __init__(self, bus, index, service):
         Characteristic.__init__(
-            self, bus, index, self.uuid, ["write"], service,
+            self, bus, index, self.uuid, ["write", "notify"], service,
         )
+        self.notifying = False
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
 
     def WriteValue(self, value, options):
@@ -297,13 +298,48 @@ class CalibrationCharacteristic(Characteristic):
             )
         except Exception as e:
             logger.error(f"Calibration function failed: {e}")
+            if self.notifying:
+                self.notify_client()
 
         except subprocess.CalledProcessError as e:
             logger.error(f"GS crop script failed: {e}")
+            if self.notifying:
+                self.notify_client()
 
         else:
             # This block runs only if try block completes without exception
             logger.debug("Calibration and GS_Crop successful")
+            if self.notifying:
+                self.notify_client()
+
+    def StartNotify(self):
+        if self.notifying:
+            logger.debug("Already notifying")
+            return
+        logger.debug("StartNotify called")
+        self.notifying = True
+        # self.notify_client()
+
+    def StopNotify(self):
+        if not self.notifying:
+            logger.debug("Not currently notifying")
+            return
+        logger.debug("StopNotify called")
+        self.notifying = False
+
+    def notify_client(self):
+        if not self.notifying:
+            logger.debug("Not notifying, skipping notify_client")
+            return
+
+        self.value = "Calibration complete!"
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        logger.debug("Notifying values changed")
+        self.PropertiesChanged(
+        GATT_CHRC_IFACE,
+        {"Value": [dbus.Byte(b) for b in result_bytes]},
+        []
+        )
 
 
 
