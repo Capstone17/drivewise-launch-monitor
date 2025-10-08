@@ -137,68 +137,68 @@ class SwingAnalysisCharacteristic(Characteristic):
         
     def WriteValue(self, value, options):
         logger.debug("Received write command")
-        if self.service.exposure == None: 
+        # if self.service.exposure == None: 
+        #     self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+        #     self.service.shared_data["feedback"] = "Please run calibration first!"
+        # else:
+        try:
+            # Run video script
+            subprocess.run(
+                [
+                    "./embedded/rpicam_run.sh",
+                    "5s",  # Time in seconds
+                    self.service.exposure
+                ],
+                check=True,
+            )
+
+            logger.info("processing video now")
+            # Find most recent tst*.mp4 file in output directory
+            output_dir = os.path.expanduser("~/Documents/webcamGolf")
+            mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
+            if not mp4_files:
+                raise FileNotFoundError("No vid*.mp4 files found in webcamGolf directory")
+
+            latest_file = max(mp4_files, key=os.path.getmtime)
+            logger.info(f"Latest video file: {latest_file}")
+
+            # For testing
+            # latest_file = "exposure_test/tst_skinny_240.mp4"
+
+            # Process video
+            result = process_video(
+                latest_file,
+                "ball_coords.json",
+                "sticker_coords.json",
+                "ball_frames",
+            )
+            if result != "skibidi":
+                raise RuntimeError("Video processing did not complete")
+            # Run metric calculations
+            self.service.shared_data = rule_based_system("mid-iron")
+            self.value = self.service.shared_data["metrics"]
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Shell script failed: {e}")
             self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
-            self.service.shared_data["feedback"] = "Please run calibration first!"
+            self.service.shared_data["feedback"] = "Script execution failed!"
+            self.value = self.service.shared_data["metrics"]
+            if self.notifying:
+                self.notify_client()
+
+        except Exception as e:
+            logger.error(f"Processing failed: {e}")
+            self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+            self.service.shared_data["feedback"] = "Swing analysis failed! Please try again."
+            self.value = self.service.shared_data["metrics"]
+            if self.notifying:
+                self.notify_client()
+
         else:
-            try:
-                # Run video script
-                subprocess.run(
-                    [
-                        "./embedded/rpicam_run.sh",
-                        "5s",  # Time in seconds
-                        self.service.exposure
-                    ],
-                    check=True,
-                )
-
-                logger.info("processing video now")
-                # Find most recent tst*.mp4 file in output directory
-                output_dir = os.path.expanduser("~/Documents/webcamGolf")
-                mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
-                if not mp4_files:
-                    raise FileNotFoundError("No vid*.mp4 files found in webcamGolf directory")
-
-                latest_file = max(mp4_files, key=os.path.getmtime)
-                logger.info(f"Latest video file: {latest_file}")
-
-                # For testing
-                # latest_file = "exposure_test/tst_skinny_240.mp4"
-
-                # Process video
-                result = process_video(
-                    latest_file,
-                    "ball_coords.json",
-                    "sticker_coords.json",
-                    "ball_frames",
-                )
-                if result != "skibidi":
-                    raise RuntimeError("Video processing did not complete")
-                # Run metric calculations
-                self.service.shared_data = rule_based_system("mid-iron")
-                self.value = self.service.shared_data["metrics"]
-
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Shell script failed: {e}")
-                self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
-                self.service.shared_data["feedback"] = "Script execution failed!"
-                self.value = self.service.shared_data["metrics"]
-                if self.notifying:
-                    self.notify_client()
-
-            except Exception as e:
-                logger.error(f"Processing failed: {e}")
-                self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
-                self.service.shared_data["feedback"] = "Swing analysis failed! Please try again."
-                self.value = self.service.shared_data["metrics"]
-                if self.notifying:
-                    self.notify_client()
-
-            else:
-                # This block runs only if try block completes without exception
-                logger.debug("Updated value after script")
-                if self.notifying:
-                    self.notify_client()
+            # This block runs only if try block completes without exception
+            logger.debug("Updated value after script")
+            if self.notifying:
+                self.notify_client()
 
         
     def StartNotify(self):
