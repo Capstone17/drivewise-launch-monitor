@@ -278,6 +278,7 @@ class CalibrationCharacteristic(Characteristic):
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
 
     def WriteValue(self, options):
+        logger.debug("received write command")
         try: 
             # Run calibration script
             logger.debug("Began calibration function")
