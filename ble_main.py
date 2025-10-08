@@ -154,16 +154,16 @@ class SwingAnalysisCharacteristic(Characteristic):
 
             logger.info("processing video now")
             # Find most recent tst*.mp4 file in output directory
-            output_dir = os.path.expanduser("~/Documents/webcamGolf")
-            mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
-            if not mp4_files:
-                raise FileNotFoundError("No vid*.mp4 files found in webcamGolf directory")
+            # output_dir = os.path.expanduser("~/Documents/webcamGolf")
+            # mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
+            # if not mp4_files:
+            #     raise FileNotFoundError("No vid*.mp4 files found in webcamGolf directory")
 
-            latest_file = max(mp4_files, key=os.path.getmtime)
-            logger.info(f"Latest video file: {latest_file}")
+            # latest_file = max(mp4_files, key=os.path.getmtime)
+            # logger.info(f"Latest video file: {latest_file}")
 
             # For testing
-            # latest_file = "exposure_test/tst_skinny_240.mp4"
+            latest_file = "CEsticker_white_200exp1.mp4"
 
             # Process video
             result = process_video(
