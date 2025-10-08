@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import warnings
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -130,6 +131,14 @@ class DotDetection:
     area: float
     brightness: float
     circularity: float
+
+
+@dataclass
+class RefinedTrajectory:
+    coords: list[dict[str, float]]
+    inlier_times: set[float]
+    original_times: set[float]
+    pixel_points: list[dict[str, float]]
 
 
 
@@ -798,10 +807,56 @@ def _robust_polyfit(
     return coeffs, fitted, current_mask
 
 
-def refine_clubface_trajectory(coords: list[dict[str, float]]) -> list[dict[str, float]]:
+def _world_to_pixel(x_cm: float, y_cm: float, z_cm: float) -> tuple[float, float] | None:
+    depth_cm = float(z_cm + CLUBFACE_Z_OFFSET_CM)
+    if depth_cm <= 1e-3 or not np.isfinite(depth_cm):
+        return None
+    u = x_cm * FX / depth_cm + CX
+    v = y_cm * FY / depth_cm + CY
+    if not (np.isfinite(u) and np.isfinite(v)):
+        return None
+    return float(u), float(v)
+
+
+def _coords_to_pixel_points(
+    coords: list[dict[str, float]],
+    original_times: set[float],
+) -> list[dict[str, float]]:
+    """Project trajectory coordinates into pixel space."""
+    points: list[dict[str, float]] = []
+    for entry in coords:
+        try:
+            time_val = round(float(entry["time"]), 3)
+            x_cm = float(entry["x"])
+            y_cm = float(entry["y"])
+            z_cm = float(entry["z"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        pixel = _world_to_pixel(x_cm, y_cm, z_cm)
+        if pixel is None:
+            continue
+        u, v = pixel
+        points.append(
+            {
+                "time": time_val,
+                "u": u,
+                "v": v,
+                "is_original": time_val in original_times,
+            }
+        )
+    return points
+
+
+def refine_clubface_trajectory(coords: list[dict[str, float]]) -> RefinedTrajectory:
     """Remove outliers from clubface samples and interpolate gaps along a smooth curve."""
+    original_times = {
+        round(float(entry["time"]), 3)
+        for entry in coords
+        if "time" in entry
+    }
     if len(coords) < 4:
-        return coords
+        pixel_points = _coords_to_pixel_points(coords, original_times)
+        return RefinedTrajectory(coords, original_times.copy(), original_times, pixel_points)
 
     time_groups: dict[float, list[tuple[float, float, float]]] = {}
     for entry in coords:
@@ -815,7 +870,8 @@ def refine_clubface_trajectory(coords: list[dict[str, float]]) -> list[dict[str,
         time_groups.setdefault(t, []).append((x_val, y_val, z_val))
 
     if len(time_groups) < 3:
-        return coords
+        pixel_points = _coords_to_pixel_points(coords, original_times)
+        return RefinedTrajectory(coords, original_times.copy(), original_times, pixel_points)
 
     sorted_times = [float(t) for t in sorted(time_groups.keys())]
     times = np.array(sorted_times, dtype=np.float64)
@@ -837,20 +893,23 @@ def refine_clubface_trajectory(coords: list[dict[str, float]]) -> list[dict[str,
     coeff_y, _, mask_y = _robust_polyfit(times, ys, degree=degree_target)
     coeff_z, _, mask_z = _robust_polyfit(times, zs, degree=degree_target)
     if coeff_x is None or coeff_y is None or coeff_z is None:
-        return coords
+        pixel_points = _coords_to_pixel_points(coords, original_times)
+        return RefinedTrajectory(coords, original_times.copy(), original_times, pixel_points)
 
     combined_mask = mask_x & mask_y & mask_z
     if int(combined_mask.sum()) < 3:
         combined_mask = mask_x | mask_y | mask_z
     if int(combined_mask.sum()) < 2:
-        return coords
+        pixel_points = _coords_to_pixel_points(coords, original_times)
+        return RefinedTrajectory(coords, original_times.copy(), original_times, pixel_points)
 
     axis_values = {"x": xs, "y": ys, "z": zs}
     final_coeffs: dict[str, np.ndarray] = {}
     for axis, values in axis_values.items():
         coeffs = _polyfit_with_mask(times, values, combined_mask, degree_target)
         if coeffs is None:
-            return coords
+            pixel_points = _coords_to_pixel_points(coords, original_times)
+            return RefinedTrajectory(coords, original_times.copy(), original_times, pixel_points)
         final_coeffs[axis] = coeffs
 
     combined_times: list[float] = sorted_times.copy()
@@ -876,7 +935,7 @@ def refine_clubface_trajectory(coords: list[dict[str, float]]) -> list[dict[str,
     y_curve = np.polyval(final_coeffs["y"], combined_times_arr)
     z_curve = np.polyval(final_coeffs["z"], combined_times_arr)
 
-    refined: list[dict[str, float]] = []
+    refined_coords: list[dict[str, float]] = []
     last_time: float | None = None
     for t, x_val, y_val, z_val in zip(combined_times_arr, x_curve, y_curve, z_curve):
         if not (
@@ -888,12 +947,12 @@ def refine_clubface_trajectory(coords: list[dict[str, float]]) -> list[dict[str,
             continue
         time_out = round(float(t), 3)
         if last_time is not None and abs(time_out - last_time) <= 1e-3:
-            if refined:
-                refined[-1]["x"] = round(float(x_val), 2)
-                refined[-1]["y"] = round(float(y_val), 2)
-                refined[-1]["z"] = round(float(z_val), 2)
+            if refined_coords:
+                refined_coords[-1]["x"] = round(float(x_val), 2)
+                refined_coords[-1]["y"] = round(float(y_val), 2)
+                refined_coords[-1]["z"] = round(float(z_val), 2)
             continue
-        refined.append(
+        refined_coords.append(
             {
                 "time": time_out,
                 "x": round(float(x_val), 2),
@@ -903,7 +962,129 @@ def refine_clubface_trajectory(coords: list[dict[str, float]]) -> list[dict[str,
         )
         last_time = time_out
 
-    return refined if refined else coords
+    inlier_times = {
+        round(float(sorted_times[idx]), 3)
+        for idx, flag in enumerate(combined_mask)
+        if flag
+    }
+    if not refined_coords:
+        refined_coords = coords
+    pixel_points = _coords_to_pixel_points(refined_coords, original_times)
+    return RefinedTrajectory(refined_coords, inlier_times, original_times, pixel_points)
+
+
+def _annotate_clubface_frames(
+    frames_dir: str,
+    samples_by_frame: dict[int, list[dict[str, object]]],
+    trajectory: RefinedTrajectory,
+) -> None:
+    """Overlay refined clubface trajectory and point status on saved frame images."""
+    if not frames_dir or not trajectory.coords:
+        return
+    if not os.path.isdir(frames_dir):
+        return
+
+    interpolated_points = [
+        p
+        for p in trajectory.pixel_points
+        if not p.get("is_original", False)
+    ]
+
+    outlier_times = trajectory.original_times - trajectory.inlier_times
+    frame_entries: list[tuple[int, str]] = []
+    for name in os.listdir(frames_dir):
+        if not (name.startswith("frame_") and name.endswith(".png")):
+            continue
+        try:
+            frame_idx = int(name[6:-4])
+        except ValueError:
+            continue
+        frame_entries.append((frame_idx, os.path.join(frames_dir, name)))
+    if not frame_entries:
+        return
+
+    for frame_idx, frame_path in sorted(frame_entries):
+        image = cv2.imread(frame_path)
+        if image is None:
+            continue
+        height, width = image.shape[:2]
+
+        path_points: list[tuple[int, int]] = []
+        for point in trajectory.pixel_points:
+            u = point.get("u")
+            v = point.get("v")
+            if u is None or v is None:
+                continue
+            if not (np.isfinite(u) and np.isfinite(v)):
+                continue
+            if 0 <= u < width and 0 <= v < height:
+                path_points.append((int(round(u)), int(round(v))))
+        if len(path_points) >= 2:
+            cv2.polylines(
+                image,
+                [np.array(path_points, dtype=np.int32)],
+                isClosed=False,
+                color=(255, 215, 0),
+                thickness=2,
+                lineType=cv2.LINE_AA,
+            )
+        elif len(path_points) == 1:
+            cv2.circle(image, path_points[0], 3, (255, 215, 0), -1, cv2.LINE_AA)
+
+        for point in interpolated_points:
+            u = point.get("u")
+            v = point.get("v")
+            if u is None or v is None:
+                continue
+            if not (np.isfinite(u) and np.isfinite(v)):
+                continue
+            if 0 <= u < width and 0 <= v < height:
+                cv2.circle(
+                    image,
+                    (int(round(u)), int(round(v))),
+                    4,
+                    (0, 215, 255),
+                    -1,
+                    cv2.LINE_AA,
+                )
+
+        samples = samples_by_frame.get(frame_idx, [])
+        for sample in samples:
+            center = sample.get("center_px")
+            time_val = sample.get("time")
+            if center is None or time_val is None:
+                continue
+            try:
+                u = float(center[0])
+                v = float(center[1])
+            except (TypeError, ValueError):
+                continue
+            if not (np.isfinite(u) and np.isfinite(v)):
+                continue
+            if not (0 <= u < width and 0 <= v < height):
+                continue
+            is_inlier = time_val in trajectory.inlier_times
+            color = (0, 255, 0) if is_inlier else (0, 0, 255)
+            cv2.circle(
+                image,
+                (int(round(u)), int(round(v))),
+                5,
+                color,
+                -1,
+                cv2.LINE_AA,
+            )
+            if not is_inlier and time_val in outlier_times:
+                cv2.drawMarker(
+                    image,
+                    (int(round(u)), int(round(v))),
+                    (0, 0, 255),
+                    markerType=cv2.MARKER_TILTED_CROSS,
+                    markerSize=10,
+                    thickness=2,
+                    line_type=cv2.LINE_AA,
+                )
+
+        cv2.imwrite(frame_path, image)
 
 
 def bbox_to_ball_metrics(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
@@ -1405,6 +1586,7 @@ def process_video(
     ball_coords: list[dict] = []
     clubface_coords: list[dict] = []
     clubface_debug: list[dict] = []
+    clubface_samples_by_frame: dict[int, list[dict[str, object]]] = defaultdict(list)
     processed_dot_frames: set[int] = set()
     prev_ir_gray: np.ndarray | None = None
     prev_ir_idx: int | None = None
@@ -1547,35 +1729,32 @@ def process_video(
                         x_cm = (u - CX) * depth_cm / FX
                         y_cm = (v - CY) * depth_cm / FY
                         z_cm = depth_cm - CLUBFACE_Z_OFFSET_CM
+                        time_rounded = round(on_time, 3)
                         clubface_coords.append(
                             {
-                                "time": round(on_time, 3),
+                                "time": time_rounded,
                                 "x": round(float(x_cm), 2),
                                 "y": round(float(y_cm), 2),
                                 "z": round(float(z_cm), 2),
                             }
                         )
+                        clubface_samples_by_frame[on_idx].append(
+                            {
+                                "time": time_rounded,
+                                "center_px": (u, v),
+                            }
+                        )
                         if on_idx == frame_idx:
-                            center_pt = (int(round(u)), int(round(v)))
-                            cv2.circle(enhanced, center_pt, 6, (255, 0, 0), 2)
                             cv2.putText(
                                 enhanced,
                                 f"X:{x_cm:.2f} Y:{y_cm:.2f} Z:{z_cm:.2f}",
-                                (center_pt[0] + 8, center_pt[1] - 8),
+                                (int(u) + 8, int(v) - 8),
                                 cv2.FONT_HERSHEY_SIMPLEX,
                                 0.45,
                                 (255, 0, 0),
                                 1,
                                 cv2.LINE_AA,
                             )
-                    if on_idx == frame_idx:
-                        raw_center = observation.get("raw_center")
-                        if isinstance(raw_center, np.ndarray):
-                            raw_pt = (
-                                int(round(float(raw_center[0]))),
-                                int(round(float(raw_center[1]))),
-                            )
-                            cv2.circle(enhanced, raw_pt, 3, (0, 0, 255), -1)
 
         if frames_dir and inference_start <= frame_idx < inference_end:
             cv2.imwrite(
@@ -1593,8 +1772,12 @@ def process_video(
 
     ball_coords.sort(key=lambda c: c["time"])
     clubface_coords.sort(key=lambda c: c["time"])
+    refined_trajectory: RefinedTrajectory | None = None
     if clubface_coords:
-        clubface_coords = refine_clubface_trajectory(clubface_coords)
+        refined_trajectory = refine_clubface_trajectory(clubface_coords)
+        clubface_coords = refined_trajectory.coords
+        if frames_dir:
+            _annotate_clubface_frames(frames_dir, clubface_samples_by_frame, refined_trajectory)
 
     with open(ball_path, "w", encoding="utf-8") as f:
         json.dump(ball_coords, f, indent=2)
