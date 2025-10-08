@@ -106,9 +106,11 @@ class rpiService(Service):
             "metrics": None,
             "feedback": None
         }
+        self.exposure = None
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
         self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
         self.add_characteristic(FindIPCharacteristic(bus, 2, self))
+        self.add_characteristic(CalibrationCharacteristic(bus, 3, self))
         # self.add_characteristic(PowerOffCharacteristic(bus, 3, self))
 
 
@@ -134,73 +136,68 @@ class SwingAnalysisCharacteristic(Characteristic):
         
     def WriteValue(self, value, options):
         logger.debug("Received write command")
-        try:
-            # Run config script
-            subprocess.run(
-                [
-                    "./embedded/GS_config.sh"
-                    # , If we want to specify width or height we should do so here
-                ],
-                check=True,
-            )
-
-            # Run video script
-            subprocess.run(
-                [
-                    "./embedded/rpicam_run.sh",
-                    "5s",  # Time in seconds
-                    200
-                ],
-                check=True,
-            )
-
-            logger.info("processing video now")
-             # Find most recent tst*.mp4 file in output directory
-            output_dir = os.path.expanduser("~/Documents/webcamGolf")
-            mp4_files = glob.glob(os.path.join(output_dir, "tst*.mp4"))
-            if not mp4_files:
-                raise FileNotFoundError("No tst*.mp4 files found in webcamGolf directory")
-
-            latest_file = max(mp4_files, key=os.path.getmtime)
-            logger.info(f"Latest video file: {latest_file}")
-
-            # For testing
-            # latest_file = "exposure_test/tst_skinny_240.mp4"
-
-            # Process video
-            result = process_video(
-                latest_file,
-                "ball_coords.json",
-                "sticker_coords.json",
-                "ball_frames",
-            )
-            if result != "skibidi":
-                raise RuntimeError("Video processing did not complete")
-            # Run metric calculations
-            self.service.shared_data = rule_based_system("mid-iron")
-            self.value = self.service.shared_data["metrics"]
-
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Shell script failed: {e}")
+        if self.service.exposure == None: 
             self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
-            self.service.shared_data["feedback"] = "Script execution failed!"
-            self.value = self.service.shared_data["metrics"]
-            if self.notifying:
-                self.notify_client()
-
-        except Exception as e:
-            logger.error(f"Processing failed: {e}")
-            self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
-            self.service.shared_data["feedback"] = "Swing analysis failed! Please try again."
-            self.value = self.service.shared_data["metrics"]
-            if self.notifying:
-                self.notify_client()
-
+            self.service.shared_data["feedback"] = "Please run calibration first!"
         else:
-            # This block runs only if try block completes without exception
-            logger.debug("Updated value after script")
-            if self.notifying:
-                self.notify_client()
+            try:
+                # Run video script
+                subprocess.run(
+                    [
+                        "./embedded/rpicam_run.sh",
+                        "5s",  # Time in seconds
+                        self.service.exposure
+                    ],
+                    check=True,
+                )
+
+                logger.info("processing video now")
+                # Find most recent tst*.mp4 file in output directory
+                output_dir = os.path.expanduser("~/Documents/webcamGolf")
+                mp4_files = glob.glob(os.path.join(output_dir, "tst*.mp4"))
+                if not mp4_files:
+                    raise FileNotFoundError("No tst*.mp4 files found in webcamGolf directory")
+
+                latest_file = max(mp4_files, key=os.path.getmtime)
+                logger.info(f"Latest video file: {latest_file}")
+
+                # For testing
+                # latest_file = "exposure_test/tst_skinny_240.mp4"
+
+                # Process video
+                result = process_video(
+                    latest_file,
+                    "ball_coords.json",
+                    "sticker_coords.json",
+                    "ball_frames",
+                )
+                if result != "skibidi":
+                    raise RuntimeError("Video processing did not complete")
+                # Run metric calculations
+                self.service.shared_data = rule_based_system("mid-iron")
+                self.value = self.service.shared_data["metrics"]
+
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Shell script failed: {e}")
+                self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+                self.service.shared_data["feedback"] = "Script execution failed!"
+                self.value = self.service.shared_data["metrics"]
+                if self.notifying:
+                    self.notify_client()
+
+            except Exception as e:
+                logger.error(f"Processing failed: {e}")
+                self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+                self.service.shared_data["feedback"] = "Swing analysis failed! Please try again."
+                self.value = self.service.shared_data["metrics"]
+                if self.notifying:
+                    self.notify_client()
+
+            else:
+                # This block runs only if try block completes without exception
+                logger.debug("Updated value after script")
+                if self.notifying:
+                    self.notify_client()
 
         
     def StartNotify(self):
@@ -269,6 +266,30 @@ class FindIPCharacteristic(Characteristic):
         result_bytes = json.dumps(self.value).encode('utf-8')
         return [dbus.Byte(b) for b in result_bytes]
     
+class CalibrationCharacteristic(Characteristic):
+    uuid = "778c5d1a-315f-4baf-a23b-6429b84835e3"
+    description = b"Use to calibrate the exposure of the camera!"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["write"], service,
+        )
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
+
+    def WriteValue(self, options):
+            # Run calibration script
+            self.service.exposure = 
+            logger.info(f"Exposure from calibration: {self.service.exposure}")
+            # Run config script
+            subprocess.run(
+                [
+                    "./embedded/GS_config.sh"
+                    # , If we want to specify width or height we should do so here
+                ],
+                check=True,
+            )
+
+
 # class PowerOffCharacteristic(Characteristic):
 #     uuid = ""
 #     description = b"Write to power off BLE!"
