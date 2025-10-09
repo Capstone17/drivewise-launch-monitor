@@ -57,6 +57,9 @@ try:
 except ValueError:
     _early_exit_env = 0
 MOTION_WINDOW_EARLY_EXIT_MISSES = _early_exit_env if _early_exit_env > 0 else None
+MOTION_WINDOW_MAX_SCAN_MULTIPLIER = 4
+MOTION_WINDOW_MIN_SCAN_BUDGET = 1024
+MOTION_WINDOW_DECODE_FAILURE_LIMIT = 64
 
 # Load camera calibration parameters
 _calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
@@ -139,6 +142,22 @@ class RefinedTrajectory:
     inlier_times: set[float]
     original_times: set[float]
     pixel_points: list[dict[str, float]]
+
+
+class MotionWindowError(RuntimeError):
+    """Base error for failures while establishing a ball motion window."""
+
+    def __init__(self, message: str, *, stats: Optional[dict[str, object]] = None) -> None:
+        super().__init__(message)
+        self.stats = stats or {}
+
+
+class MotionWindowNotFoundError(MotionWindowError):
+    """Raised when the search could not find any candidate ball frames."""
+
+
+class MotionWindowDegenerateError(MotionWindowError):
+    """Raised when detections are present but cannot form a valid window."""
 
 
 
@@ -1313,6 +1332,15 @@ def find_motion_window(
         if MOTION_WINDOW_EARLY_EXIT_MISSES is not None
         else max(confirm_radius * 3, 9)
     )
+    max_eval_budget = max(
+        total * MOTION_WINDOW_MAX_SCAN_MULTIPLIER,
+        total + 512,
+        MOTION_WINDOW_MIN_SCAN_BUDGET,
+    )
+    decode_failure_limit = max(
+        MOTION_WINDOW_DECODE_FAILURE_LIMIT,
+        confirm_radius * 4,
+    )
 
     stats: dict[str, int | bool | None] = {
         "total_frames": total,
@@ -1329,12 +1357,24 @@ def find_motion_window(
         "refine_frames": 0,
         "refine_last_frame": None,
         "miss_limit": miss_limit,
+        "max_eval_budget": int(max_eval_budget),
+        "decode_failure_limit": int(decode_failure_limit),
+        "ball_always_visible": False,
+        "ball_never_observed": False,
     }
 
     detection_cache: dict[int, dict | None] = {}
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
     current_pos: int | None = None
+    decode_failures = 0
+
+    def finalize_stats() -> dict[str, int | bool | None]:
+        snapshot = dict(stats)
+        snapshot["frames_processed"] = len(detection_cache)
+        snapshot["detector_calls"] = stats["detector_runs"]
+        snapshot.setdefault("decode_failures", decode_failures)
+        return snapshot
 
     def debug_break(reason: str, frame_idx: int | None = None) -> None:
         if not debug:
@@ -1343,7 +1383,7 @@ def find_motion_window(
         breakpoint()
 
     def decode_frame(idx: int) -> tuple[bool, np.ndarray | None]:
-        nonlocal current_pos, frame_width, frame_height
+        nonlocal current_pos, frame_width, frame_height, decode_failures
         if idx < 0 or idx >= total:
             return False, None
         if current_pos is None or idx != current_pos:
@@ -1352,7 +1392,15 @@ def find_motion_window(
         ret, frame = cap.read()
         if not ret:
             current_pos = None
+            decode_failures += 1
+            if decode_failures > decode_failure_limit:
+                stats["decode_failures"] = decode_failures
+                raise MotionWindowError(
+                    f"Exceeded decode failure limit ({decode_failures}) while searching for the motion window",
+                    stats=finalize_stats(),
+                )
             return False, None
+        decode_failures = 0
         current_pos = idx + 1
         stats["frames_decoded"] += 1
         if frame_width == 0 or frame_height == 0:
@@ -1360,10 +1408,15 @@ def find_motion_window(
         return True, frame
 
     def detect_frame(idx: int) -> dict | None:
-        stats["frames_evaluated"] += 1
         cached = detection_cache.get(idx, ...)
         if cached is not ...:
             return cached  # type: ignore[return-value]
+        stats["frames_evaluated"] += 1
+        if stats["frames_evaluated"] > max_eval_budget:
+            raise MotionWindowError(
+                "Motion window search exceeded the evaluation budget",
+                stats=finalize_stats(),
+            )
         ok, frame = decode_frame(idx)
         if not ok or frame is None:
             detection_cache[idx] = None
@@ -1408,9 +1461,11 @@ def find_motion_window(
 
     try:
         if total == 0:
-            stats["frames_processed"] = 0
-            stats["detector_calls"] = 0
-            return 0, 0, False, stats
+            stats["ball_never_observed"] = True
+            raise MotionWindowNotFoundError(
+                "Video contains no frames to analyse for ball motion",
+                stats=finalize_stats(),
+            )
 
         coarse_true: int | None = None
         coarse_false: int | None = None
@@ -1458,15 +1513,19 @@ def find_motion_window(
         stats["coarse_frames_scanned"] = coarse_frames_total
 
         if coarse_true is None:
-            stats["frames_processed"] = len(detection_cache)
-            stats["detector_calls"] = stats["detector_runs"]
-            return 0, total, False, stats
+            stats["ball_never_observed"] = True
+            raise MotionWindowNotFoundError(
+                "Unable to locate any ball detections in the video",
+                stats=finalize_stats(),
+            )
 
         initial_det = detect_frame(coarse_true)
         if initial_det is None:
-            stats["frames_processed"] = len(detection_cache)
-            stats["detector_calls"] = stats["detector_runs"]
-            return 0, total, False, stats
+            stats["ball_never_observed"] = True
+            raise MotionWindowNotFoundError(
+                "Initial coarse detection vanished before refinement",
+                stats=finalize_stats(),
+            )
 
         last_detection_idx = coarse_true
         last_center = initial_det["center"]
@@ -1492,6 +1551,12 @@ def find_motion_window(
 
         stats["refine_frames"] = refine_frames
         stats["refine_last_frame"] = last_detection_idx
+        if coarse_false is None and last_detection_idx >= total - 1:
+            stats["ball_always_visible"] = True
+            raise MotionWindowDegenerateError(
+                "Ball detections persist through the final frame; unable to determine when the ball leaves the shot",
+                stats=finalize_stats(),
+            )
 
         start_frame = max(0, last_detection_idx - pad_frames)
         end_frame = min(total, last_detection_idx + confirm_radius + 1)
@@ -1538,13 +1603,14 @@ def process_video(
     detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
     ball_compile_time = time.perf_counter() - ball_compile_start
 
-    start_frame, end_frame, ball_found, motion_stats = find_motion_window(
-        video_path,
-        detector,
-        debug=MOTION_WINDOW_DEBUG,
-    )
-    if not ball_found:
-        raise RuntimeError("No ball detected in the video")
+    try:
+        start_frame, end_frame, _, motion_stats = find_motion_window(
+            video_path,
+            detector,
+            debug=MOTION_WINDOW_DEBUG,
+        )
+    except MotionWindowError as exc:
+        raise RuntimeError(f"Motion window detection failed: {exc}") from exc
     processed = motion_stats.get("frames_processed", 0)
     detector_calls = motion_stats.get("detector_calls", 0)
     coarse_step = motion_stats.get("coarse_step")
