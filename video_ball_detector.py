@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover - fallback when tflite-runtime is unavai
 
 # Light Pi-friendly OpenCV tweaks
 try:
-    cv2.setNumThreads(2)
+    cv2.setNumThreads(4)
     if hasattr(cv2, "ocl"):
         cv2.ocl.setUseOpenCL(False)
 except Exception:
