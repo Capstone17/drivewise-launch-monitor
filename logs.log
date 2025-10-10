@@ -1694,3 +1694,24 @@
 2025-10-09 20:50:48,227 - __main__ - INFO - Registering GATT application...
 2025-10-09 20:50:48,251 - __main__ - INFO - GATT application registered
 2025-10-09 20:50:48,254 - __main__ - INFO - Advertisement registered
+2025-10-09 20:58:52,230 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-09 20:58:52,233 - __main__ - INFO - Registering GATT application...
+2025-10-09 20:58:52,253 - __main__ - INFO - GATT application registered
+2025-10-09 20:58:52,256 - __main__ - INFO - Advertisement registered
+2025-10-10 01:43:50,006 - __main__ - DEBUG - StartNotify called
+2025-10-10 01:43:58,107 - __main__ - DEBUG - Received write command
+2025-10-10 01:44:04,613 - __main__ - INFO - processing video now
+2025-10-10 01:44:19,300 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-10 01:44:19,300 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-10 01:44:19,300 - __main__ - DEBUG - StopNotify called
+2025-10-10 01:44:19,300 - __main__ - DEBUG - StartNotify called
+2025-10-10 01:44:19,301 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+2025-10-10 01:44:19,438 - __main__ - DEBUG - Received write command
+2025-10-10 01:44:25,407 - __main__ - INFO - processing video now
+2025-10-10 01:44:39,092 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-10 01:44:39,092 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-10 01:44:39,092 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+2025-10-10 01:44:39,150 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+2025-10-10 01:44:39,209 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+2025-10-10 01:44:43,110 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+2025-10-10 01:44:52,830 - __main__ - DEBUG - sending feedback based on metrics: 'Swing analysis failed! Please try again.'
