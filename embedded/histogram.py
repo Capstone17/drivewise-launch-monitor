@@ -36,7 +36,7 @@ def analyze_exposure_in_folder(folder_path: str,
             - Estimated ideal exposure (may be interpolated)
     """
     folder = Path(folder_path).expanduser()
-    image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
+    image_extensions = {".jpg"}
 
     # Gather and sort image files
     image_files = [f for f in folder.iterdir() if f.suffix.lower() in image_extensions]
