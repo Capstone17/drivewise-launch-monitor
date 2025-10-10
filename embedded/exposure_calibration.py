@@ -1,6 +1,6 @@
 import subprocess
 from pathlib import Path
-from histogram import analyze_exposure_in_folder
+from .histogram import analyze_exposure_in_folder
 
 
 def calibrate_exposure():
@@ -49,22 +49,22 @@ def calibrate_exposure():
         ['rpicam-vid', '-o', exposure_samples_path_as_str + '700_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--no-raw', '-n', '--shutter', '700', '--frames', '1'],
         ['rpicam-vid', '-o', exposure_samples_path_as_str + '750_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--no-raw', '-n', '--shutter', '750', '--frames', '1'],
         ['echo', 'Extracting frames...'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '50_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '50_exposure.jpg'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '50_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '50_exposure.jpg'],
 	['echo', 'one frame so far...'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '100_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '100_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '150_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '150_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '200_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '200_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '250_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '250_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '300_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '300_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '350_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '350_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '400_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '400_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '450_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '450_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '500_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '500_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '550_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '550_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '600_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '600_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '650_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '650_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '700_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '700_exposure.jpg', '-y'],
-        ['ffmpeg', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '750_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '750_exposure.jpg', '-y']        
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '100_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '100_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '150_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '150_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '200_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '200_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '250_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '250_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '300_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '300_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '350_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '350_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '400_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '400_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '450_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '450_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '500_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '500_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '550_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '550_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '600_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '600_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '650_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '650_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '700_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '700_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '750_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '750_exposure.jpg', '-y']        
     ]
 
     for cmd in commands:
@@ -100,5 +100,5 @@ def calibrate_exposure():
     return str(rounded_best_exposure)
 
 
-if __name__ == "__main__":
-    calibrate_exposure()
+# if __name__ == "__main__":
+#     calibrate_exposure()
