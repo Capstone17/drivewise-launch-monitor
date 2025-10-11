@@ -77,24 +77,25 @@ MAX_MOTION_FRAMES = 40
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
-# Sticker corner tracking parameters
+# Reflective dot tracking parameters (mirroring MATLAB demo defaults)
 DOT_MIN_AREA_PX = 15
 DOT_MAX_AREA_PX = 400
 DOT_MIN_BRIGHTNESS = 60.0
 DOT_MIN_CIRCULARITY = 0.25
-DOT_MAX_DETECTIONS = 12
+DOT_MAX_DETECTIONS = 6
 DOT_MIN_Y_PX = 40.0
 DOT_MIN_Y_FRACTION = 0.05
 DOT_MIN_LEFT_COLUMN = 3
 DOT_MIN_RIGHT_COLUMN = 1
 
-CLUB_HARRIS_BLOCK_SIZE = 5
-CLUB_HARRIS_KSIZE = 3
-CLUB_HARRIS_K = 0.04
-CLUB_CORNER_DILATE_SIZE = 3
-CLUB_CORNER_RESPONSE_GAUSSIAN_SIZE = 5
-CLUB_CORNER_RESPONSE_GAUSSIAN_SIGMA = 1.0
-CLUB_CORNER_BASE_RADIUS = 4.5
+CLUB_CANNY_LOW_THRESHOLD = int(round(0.21 * 255))
+CLUB_CANNY_HIGH_THRESHOLD = int(round(0.55 * 255))
+CLUB_CANNY_APERTURE_SIZE = 3
+CLUB_RING_MIN_RADIUS = 7
+CLUB_RING_MAX_RADIUS = 12
+CLUB_RING_HALF_THICKNESS = 2
+CLUB_RESPONSE_GAUSSIAN_SIZE = 5
+CLUB_RESPONSE_GAUSSIAN_SIGMA = 1.0
 CLUB_PRIMARY_THRESHOLD_SCALE = 0.45
 CLUB_SECONDARY_THRESHOLD_SCALE = 0.35
 CLUB_PEAK_MIN_SEPARATION_PX = 9
@@ -110,7 +111,7 @@ CLUBFACE_MAX_JUMP_PX = 80.0
 CLUBFACE_EMA_ALPHA = 0.4
 CLUBFACE_MIN_DOTS = 1
 CLUBFACE_MAX_MISSES = 8
-CLUBFACE_MAX_CANDIDATES = 10
+CLUBFACE_MAX_CANDIDATES = 6
 CLUBFACE_MIN_CONFIDENCE = 0.35
 
 # Pattern geometry: four markers stacked vertically on the heel side
@@ -574,6 +575,23 @@ class ClubfaceCentroidTracker:
             )
         return pool[0] if pool else None
 
+def _ring_kernel(radius: int, half_thickness: int) -> np.ndarray:
+    outer_radius = float(radius + half_thickness)
+    inner_radius = max(0.0, float(radius - half_thickness))
+    size = int(2 * math.ceil(outer_radius) + 1)
+    coords = np.arange(size, dtype=np.float32) - (size - 1) / 2.0
+    yy, xx = np.meshgrid(coords, coords, indexing="ij")
+    distance_sq = xx * xx + yy * yy
+    outer_mask = distance_sq <= outer_radius * outer_radius
+    inner_mask = distance_sq <= inner_radius * inner_radius
+    kernel = outer_mask.astype(np.float32) - inner_mask.astype(np.float32)
+    kernel -= kernel.mean()
+    norm = float(np.linalg.norm(kernel))
+    if norm > 1e-6:
+        kernel /= norm
+    return kernel
+
+
 def _normalize01(values: np.ndarray) -> np.ndarray:
     if values.size == 0:
         return np.zeros_like(values, dtype=np.float32)
@@ -607,35 +625,37 @@ def detect_reflective_dots(
     scale_y = height / float(CLUB_RESIZE_HEIGHT)
 
     gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-    if CLAHE is not None:
-        gray = CLAHE.apply(gray)
-
-    gray_float = np.float32(gray)
-    harris_response = cv2.cornerHarris(
-        gray_float,
-        CLUB_HARRIS_BLOCK_SIZE,
-        CLUB_HARRIS_KSIZE,
-        CLUB_HARRIS_K,
+    edges = cv2.Canny(
+        gray,
+        CLUB_CANNY_LOW_THRESHOLD,
+        CLUB_CANNY_HIGH_THRESHOLD,
+        apertureSize=CLUB_CANNY_APERTURE_SIZE,
+        L2gradient=True,
     )
-    if CLUB_CORNER_DILATE_SIZE > 1:
-        dilate_kernel = cv2.getStructuringElement(
-            cv2.MORPH_RECT,
-            (CLUB_CORNER_DILATE_SIZE, CLUB_CORNER_DILATE_SIZE),
-        )
-        harris_response = cv2.dilate(harris_response, dilate_kernel)
+    dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    edges = cv2.dilate(edges, dilate_kernel, iterations=1)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_kernel)
+    edges_float = edges.astype(np.float32) / 255.0
 
-    # Negative Harris values indicate edges rather than corners.
-    np.maximum(harris_response, 0.0, out=harris_response)
+    best_score = np.zeros_like(edges_float, dtype=np.float32)
+    best_radius = np.zeros_like(edges_float, dtype=np.float32)
+    for radius in range(CLUB_RING_MIN_RADIUS, CLUB_RING_MAX_RADIUS + 1):
+        kernel = _ring_kernel(radius, CLUB_RING_HALF_THICKNESS)
+        response = cv2.filter2D(edges_float, -1, kernel, borderType=cv2.BORDER_REPLICATE)
+        mask = response > best_score
+        best_score[mask] = response[mask]
+        best_radius[mask] = float(radius)
 
-    if CLUB_CORNER_RESPONSE_GAUSSIAN_SIZE > 1:
+    if CLUB_RESPONSE_GAUSSIAN_SIZE > 1:
         response_map = cv2.GaussianBlur(
-            harris_response,
-            (CLUB_CORNER_RESPONSE_GAUSSIAN_SIZE, CLUB_CORNER_RESPONSE_GAUSSIAN_SIZE),
-            CLUB_CORNER_RESPONSE_GAUSSIAN_SIGMA,
+            best_score,
+            (CLUB_RESPONSE_GAUSSIAN_SIZE, CLUB_RESPONSE_GAUSSIAN_SIZE),
+            CLUB_RESPONSE_GAUSSIAN_SIGMA,
             borderType=cv2.BORDER_REPLICATE,
         )
     else:
-        response_map = harris_response
+        response_map = best_score
 
     max_score = float(response_map.max())
     if max_score <= 1e-6:
@@ -674,28 +694,6 @@ def detect_reflective_dots(
     coords_arr = np.array(selected_xy, dtype=np.float32)
     scores_arr = np.array(selected_scores, dtype=np.float32)
 
-    if coords_arr.size:
-        term = (
-            cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER,
-            30,
-            0.01,
-        )
-        refined = coords_arr.reshape(-1, 1, 2)
-        cv2.cornerSubPix(
-            gray,
-            refined,
-            (5, 5),
-            (-1, -1),
-            term,
-        )
-        coords_arr = refined.reshape(-1, 2)
-        resampled_scores: list[float] = []
-        for x_ref, y_ref in coords_arr:
-            xi = int(np.clip(round(x_ref), 0, response_map.shape[1] - 1))
-            yi = int(np.clip(round(y_ref), 0, response_map.shape[0] - 1))
-            resampled_scores.append(float(response_map[yi, xi]))
-        scores_arr = np.array(resampled_scores, dtype=np.float32)
-
     if coords_arr.shape[0] > 1:
         diff = coords_arr[:, None, :] - coords_arr[None, :, :]
         dist = np.linalg.norm(diff, axis=2)
@@ -721,14 +719,18 @@ def detect_reflective_dots(
     for idx in rank_order:
         x_res, y_res = coords_arr[idx]
         score = scores_arr[idx]
+        rx = int(np.clip(round(x_res), 0, best_radius.shape[1] - 1))
+        ry = int(np.clip(round(y_res), 0, best_radius.shape[0] - 1))
+        radius_res = float(best_radius[ry, rx])
+        if radius_res <= 0.0:
+            continue
         cx = float(x_res * scale_x)
         cy = float(y_res * scale_y)
         if cy < height_thresh:
             continue
-        avg_scale = 0.5 * (scale_x + scale_y)
-        radius = max(CLUB_CORNER_BASE_RADIUS * avg_scale, 1.0)
+        radius = radius_res * 0.5 * (scale_x + scale_y)
         area = math.pi * (radius ** 2)
-        brightness = float(np.clip(score / max_score, 0.0, 1.0) * 255.0)
+        brightness = float(score * 255.0)
         detections.append(
             DotDetection(
                 centroid=np.array([cx, cy], dtype=np.float32),
