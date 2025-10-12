@@ -82,29 +82,39 @@ DOT_MIN_AREA_PX = 15
 DOT_MAX_AREA_PX = 400
 DOT_MIN_BRIGHTNESS = 60.0
 DOT_MIN_CIRCULARITY = 0.25
-DOT_MAX_DETECTIONS = 6
+DOT_MAX_DETECTIONS = 20
 DOT_MIN_Y_PX = 40.0
 DOT_MIN_Y_FRACTION = 0.05
-DOT_MIN_LEFT_COLUMN = 3
+DOT_MIN_LEFT_COLUMN = 1
 DOT_MIN_RIGHT_COLUMN = 1
 
-CLUB_CANNY_LOW_THRESHOLD = int(round(0.21 * 255))
-CLUB_CANNY_HIGH_THRESHOLD = int(round(0.55 * 255))
-CLUB_CANNY_APERTURE_SIZE = 3
-CLUB_RING_MIN_RADIUS = 7
-CLUB_RING_MAX_RADIUS = 12
-CLUB_RING_HALF_THICKNESS = 2
-CLUB_RESPONSE_GAUSSIAN_SIZE = 5
-CLUB_RESPONSE_GAUSSIAN_SIGMA = 1.0
-CLUB_PRIMARY_THRESHOLD_SCALE = 0.45
-CLUB_SECONDARY_THRESHOLD_SCALE = 0.35
-CLUB_PEAK_MIN_SEPARATION_PX = 9
-CLUB_CLUSTER_NEIGHBOR_RADIUS_PX = 28
-CLUB_MAX_PEAK_CANDIDATES = 30
-CLUB_RESIZE_WIDTH = 500
-CLUB_RESIZE_HEIGHT = 500
-CLUB_CLUSTER_SCORE_WEIGHT = 0.7
-CLUB_CLUSTER_DENSITY_WEIGHT = 0.3
+CLUB_CORNER_RESIZE_WIDTH = 640
+CLUB_CORNER_RESIZE_HEIGHT = 640
+CLUB_CORNER_GFTT_MAX_CORNERS = 80
+CLUB_CORNER_GFTT_QUALITY = 0.004
+CLUB_CORNER_GFTT_MIN_DISTANCE = 6.0
+CLUB_CORNER_SUBPIX_WINDOW = (5, 5)
+CLUB_CORNER_SUBPIX_ZERO_ZONE = (-1, -1)
+CLUB_HARRIS_BLOCK_SIZE = 5
+CLUB_HARRIS_KSIZE = 3
+CLUB_HARRIS_K = 0.04
+CLUB_CORNER_DUPLICATE_DISTANCE_PX = 6.0
+CLUB_CORNER_MIN_RESPONSE = 0.15
+CLUB_CORNER_COLUMN_MIN_STRENGTH = 0.2
+CLUB_CORNER_COLUMN_MAX_WIDTH_PX = 22.0
+CLUB_CORNER_COLUMN_MAX_DEVIATION_PX = 5.0
+CLUB_CORNER_MIN_VERTICAL_SPREAD_PX = 12.0
+CLUB_CORNER_HEIGHT_SCALE = 0.02
+CLUB_CORNER_MAX_TOTAL = 20
+CLUB_TRAJECTORY_AXIS_MIN_RESIDUAL = {
+    'x': 0.35,
+    'y': 0.35,
+    'z': 0.55,
+}
+CLUB_TRAJECTORY_RESIDUAL_SIGMA = 2.2
+CLUB_TRAJECTORY_NORM_SIGMA = 2.0
+CLUB_TRAJECTORY_MIN_NORM = 0.9
+CLUB_TRAJECTORY_MASK_ITERS = 3
 
 CLUBFACE_MAX_SPREAD_PX = 140.0
 CLUBFACE_MAX_JUMP_PX = 80.0
@@ -134,6 +144,8 @@ class DotDetection:
     area: float
     brightness: float
     circularity: float
+    column: str | None = None
+    strength: float = 0.0
 
 
 @dataclass
@@ -247,21 +259,41 @@ class ClubfaceCentroidTracker:
             'confidence': 0.0,
             'depth_cm': None,
             'depth_source': None,
+            'points': [],
         }
         if not detections:
             self._register_miss()
             return None, metrics
 
         points = np.array([det.centroid for det in detections], dtype=np.float32)
-        weights = np.array([
-            max(det.area, 1.0) * max(det.brightness, 1.0) for det in detections
-        ], dtype=np.float32)
+        columns = np.array(
+            [
+                det.column if det.column is not None else "unknown"
+                for det in detections
+            ],
+            dtype=object,
+        )
+        strengths = np.array(
+            [max(det.strength, 0.0) for det in detections],
+            dtype=np.float32,
+        )
+        if {"left", "right"} - {str(c) for c in columns}:
+            metrics["status"] = "missing_columns"
+            metrics["used_dots"] = int(points.shape[0])
+            self._register_miss()
+            return None, metrics
+        weights = np.array(
+            [max(det.area, 1.0) * max(det.brightness, 1.0) for det in detections],
+            dtype=np.float32,
+        ) * np.maximum(strengths, 1e-3)
 
         order = weights.argsort()[::-1]
         if order.size > self.max_candidates:
             order = order[: self.max_candidates]
         points = points[order]
         weights = weights[order]
+        columns = columns[order]
+        strengths = strengths[order]
 
         if points.shape[0] < self.min_dots:
             metrics['status'] = 'insufficient_dots'
@@ -295,6 +327,16 @@ class ClubfaceCentroidTracker:
 
         used = int(mask.sum())
         center = self._weighted_center(points, weights, mask)
+        used_columns = {
+            str(col)
+            for col, use_flag in zip(columns, mask)
+            if use_flag and col not in (None, "unknown")
+        }
+        if {"left", "right"} - used_columns:
+            metrics["status"] = "missing_columns"
+            metrics["used_dots"] = used
+            self._register_miss()
+            return None, metrics
         if center is None:
             metrics['status'] = 'low_weight'
             metrics['used_dots'] = used
@@ -322,6 +364,16 @@ class ClubfaceCentroidTracker:
             'confidence': confidence,
             'raw_center': raw_center.copy(),
         })
+        metrics['points'] = [
+            {
+                'x': float(pt[0]),
+                'y': float(pt[1]),
+                'column': str(col),
+                'strength': float(strength),
+                'used': bool(flag),
+            }
+            for pt, col, strength, flag in zip(points, columns, strengths, mask)
+        ]
 
         if confidence < self.min_confidence:
             metrics['status'] = 'low_confidence'
@@ -575,35 +627,6 @@ class ClubfaceCentroidTracker:
             )
         return pool[0] if pool else None
 
-def _ring_kernel(radius: int, half_thickness: int) -> np.ndarray:
-    outer_radius = float(radius + half_thickness)
-    inner_radius = max(0.0, float(radius - half_thickness))
-    size = int(2 * math.ceil(outer_radius) + 1)
-    coords = np.arange(size, dtype=np.float32) - (size - 1) / 2.0
-    yy, xx = np.meshgrid(coords, coords, indexing="ij")
-    distance_sq = xx * xx + yy * yy
-    outer_mask = distance_sq <= outer_radius * outer_radius
-    inner_mask = distance_sq <= inner_radius * inner_radius
-    kernel = outer_mask.astype(np.float32) - inner_mask.astype(np.float32)
-    kernel -= kernel.mean()
-    norm = float(np.linalg.norm(kernel))
-    if norm > 1e-6:
-        kernel /= norm
-    return kernel
-
-
-def _normalize01(values: np.ndarray) -> np.ndarray:
-    if values.size == 0:
-        return np.zeros_like(values, dtype=np.float32)
-    values = values.astype(np.float32, copy=False)
-    minimum = float(values.min())
-    maximum = float(values.max())
-    if maximum - minimum <= 1e-6:
-        return np.zeros_like(values, dtype=np.float32)
-    return (values - minimum) / (maximum - minimum)
-
-
-
 def detect_reflective_dots(
     off_frame: np.ndarray | None, on_frame: np.ndarray | None
 ) -> list[DotDetection]:
@@ -620,150 +643,199 @@ def detect_reflective_dots(
     if height == 0 or width == 0:
         return []
 
-    resized = cv2.resize(on_bgr, (CLUB_RESIZE_WIDTH, CLUB_RESIZE_HEIGHT), interpolation=cv2.INTER_LINEAR)
-    scale_x = width / float(CLUB_RESIZE_WIDTH)
-    scale_y = height / float(CLUB_RESIZE_HEIGHT)
+    resized = cv2.resize(
+        on_bgr,
+        (CLUB_CORNER_RESIZE_WIDTH, CLUB_CORNER_RESIZE_HEIGHT),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    scale_x = width / float(CLUB_CORNER_RESIZE_WIDTH)
+    scale_y = height / float(CLUB_CORNER_RESIZE_HEIGHT)
 
     gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(
+    if CLAHE is not None:
+        gray = CLAHE.apply(gray)
+
+    corners = cv2.goodFeaturesToTrack(
         gray,
-        CLUB_CANNY_LOW_THRESHOLD,
-        CLUB_CANNY_HIGH_THRESHOLD,
-        apertureSize=CLUB_CANNY_APERTURE_SIZE,
-        L2gradient=True,
+        maxCorners=CLUB_CORNER_GFTT_MAX_CORNERS,
+        qualityLevel=CLUB_CORNER_GFTT_QUALITY,
+        minDistance=CLUB_CORNER_GFTT_MIN_DISTANCE,
+        blockSize=CLUB_HARRIS_BLOCK_SIZE,
+        useHarrisDetector=True,
+        k=CLUB_HARRIS_K,
     )
-    dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    edges = cv2.dilate(edges, dilate_kernel, iterations=1)
-    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_kernel)
-    edges_float = edges.astype(np.float32) / 255.0
-
-    best_score = np.zeros_like(edges_float, dtype=np.float32)
-    best_radius = np.zeros_like(edges_float, dtype=np.float32)
-    for radius in range(CLUB_RING_MIN_RADIUS, CLUB_RING_MAX_RADIUS + 1):
-        kernel = _ring_kernel(radius, CLUB_RING_HALF_THICKNESS)
-        response = cv2.filter2D(edges_float, -1, kernel, borderType=cv2.BORDER_REPLICATE)
-        mask = response > best_score
-        best_score[mask] = response[mask]
-        best_radius[mask] = float(radius)
-
-    if CLUB_RESPONSE_GAUSSIAN_SIZE > 1:
-        response_map = cv2.GaussianBlur(
-            best_score,
-            (CLUB_RESPONSE_GAUSSIAN_SIZE, CLUB_RESPONSE_GAUSSIAN_SIZE),
-            CLUB_RESPONSE_GAUSSIAN_SIGMA,
-            borderType=cv2.BORDER_REPLICATE,
-        )
-    else:
-        response_map = best_score
-
-    max_score = float(response_map.max())
-    if max_score <= 1e-6:
+    if corners is None or corners.size == 0:
         return []
 
-    candidate_coords: np.ndarray | None = None
-    for scale in (CLUB_PRIMARY_THRESHOLD_SCALE, CLUB_SECONDARY_THRESHOLD_SCALE):
-        threshold = scale * max_score
-        coords = np.column_stack(np.where(response_map >= threshold))
-        if coords.size:
-            candidate_coords = coords
-            break
-    if candidate_coords is None or candidate_coords.size == 0:
-        return []
-
-    scores = response_map[candidate_coords[:, 0], candidate_coords[:, 1]]
-    order = np.argsort(scores)[::-1]
-    coords_sorted = candidate_coords[order]
-    scores_sorted = scores[order]
-
-    selected_xy: list[tuple[float, float]] = []
-    selected_scores: list[float] = []
-    for (y, x), score in zip(coords_sorted, scores_sorted):
-        if len(selected_xy) >= CLUB_MAX_PEAK_CANDIDATES:
-            break
-        if selected_xy:
-            distances = np.linalg.norm(np.array(selected_xy) - np.array([x, y]), axis=1)
-            if np.any(distances < CLUB_PEAK_MIN_SEPARATION_PX):
-                continue
-        selected_xy.append((float(x), float(y)))
-        selected_scores.append(float(score))
-
-    if not selected_xy:
-        return []
-
-    coords_arr = np.array(selected_xy, dtype=np.float32)
-    scores_arr = np.array(selected_scores, dtype=np.float32)
-
-    if coords_arr.shape[0] > 1:
-        diff = coords_arr[:, None, :] - coords_arr[None, :, :]
-        dist = np.linalg.norm(diff, axis=2)
-    else:
-        dist = np.zeros((1, 1), dtype=np.float32)
-    neighbor_counts = (dist <= CLUB_CLUSTER_NEIGHBOR_RADIUS_PX).sum(axis=1)
-
-    score_norm = _normalize01(scores_arr)
-    density_norm = _normalize01(neighbor_counts.astype(np.float32))
-    rank_score = (
-        CLUB_CLUSTER_SCORE_WEIGHT * score_norm
-        + CLUB_CLUSTER_DENSITY_WEIGHT * density_norm
+    criteria = (
+        cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER,
+        30,
+        0.01,
     )
+    cv2.cornerSubPix(
+        gray,
+        corners,
+        CLUB_CORNER_SUBPIX_WINDOW,
+        CLUB_CORNER_SUBPIX_ZERO_ZONE,
+        criteria,
+    )
+    corners = corners.reshape(-1, 2)
 
-    rank_order = np.argsort(rank_score)[::-1]
-    rank_order = rank_order[: min(DOT_MAX_DETECTIONS, rank_order.size)]
+    gray_float = np.float32(gray)
+    harris_response = cv2.cornerHarris(gray_float, CLUB_HARRIS_BLOCK_SIZE, CLUB_HARRIS_KSIZE, CLUB_HARRIS_K)
+    harris_response = cv2.GaussianBlur(harris_response, (3, 3), 0)
+    np.maximum(harris_response, 0, out=harris_response)
+    response_max = float(harris_response.max())
 
     height_thresh = min(float(height) * DOT_MIN_Y_FRACTION, DOT_MIN_Y_PX)
     if height < 200:
         height_thresh *= float(height) / 200.0
     height_thresh = max(0.0, height_thresh)
+
     detections: list[DotDetection] = []
-    for idx in rank_order:
-        x_res, y_res = coords_arr[idx]
-        score = scores_arr[idx]
-        rx = int(np.clip(round(x_res), 0, best_radius.shape[1] - 1))
-        ry = int(np.clip(round(y_res), 0, best_radius.shape[0] - 1))
-        radius_res = float(best_radius[ry, rx])
-        if radius_res <= 0.0:
+    kept_points: list[np.ndarray] = []
+    avg_scale = 0.5 * (scale_x + scale_y)
+    radius = max(3.0 * avg_scale, 1.0)
+    area = math.pi * (radius ** 2)
+
+    for x_res, y_res in corners:
+        if not (np.isfinite(x_res) and np.isfinite(y_res)):
             continue
         cx = float(x_res * scale_x)
         cy = float(y_res * scale_y)
         if cy < height_thresh:
             continue
-        radius = radius_res * 0.5 * (scale_x + scale_y)
-        area = math.pi * (radius ** 2)
-        brightness = float(score * 255.0)
+        if kept_points:
+            distances = np.linalg.norm(
+                np.array(kept_points, dtype=np.float32)
+                - np.array([cx, cy], dtype=np.float32),
+                axis=1,
+            )
+            if float(distances.min()) < CLUB_CORNER_DUPLICATE_DISTANCE_PX:
+                continue
+        xi = int(np.clip(round(x_res), 0, harris_response.shape[1] - 1))
+        yi = int(np.clip(round(y_res), 0, harris_response.shape[0] - 1))
+        response = float(harris_response[yi, xi])
+        strength = response / response_max if response_max > 1e-6 else 0.0
+        if strength < CLUB_CORNER_MIN_RESPONSE:
+            continue
+        brightness = float(np.clip(strength, 0.0, 1.0) * 255.0)
         detections.append(
             DotDetection(
                 centroid=np.array([cx, cy], dtype=np.float32),
                 area=area,
                 brightness=brightness,
                 circularity=1.0,
+                strength=strength,
             )
         )
+        kept_points.append(np.array([cx, cy], dtype=np.float32))
+        if len(detections) >= CLUB_CORNER_MAX_TOTAL:
+            break
 
     if len(detections) < DOT_MIN_LEFT_COLUMN + DOT_MIN_RIGHT_COLUMN:
         return []
 
-    coords_for_columns = np.array([d.centroid for d in detections], dtype=np.float32)
-    sorted_x_idx = np.argsort(coords_for_columns[:, 0])
-    sorted_x = coords_for_columns[sorted_x_idx, 0]
-    gaps = np.diff(sorted_x)
+    return _finalize_corner_columns(detections, width, height)
+
+
+def _finalize_corner_columns(
+    detections: list[DotDetection],
+    width: float,
+    height: float,
+) -> list[DotDetection]:
+    if len(detections) < DOT_MIN_LEFT_COLUMN + DOT_MIN_RIGHT_COLUMN:
+        return []
+    coords = np.array([d.centroid for d in detections], dtype=np.float32)
+    if coords.shape[0] <= 1:
+        return []
+    sorted_idx = np.argsort(coords[:, 0])
+    gaps = np.diff(coords[sorted_idx, 0])
     if gaps.size == 0:
         return []
     max_gap = float(gaps.max())
     if max_gap < CLUBFACE_COLUMN_SPLIT_PX:
         return []
     split = int(np.argmax(gaps) + 1)
-    left_count = split
-    right_count = coords_for_columns.shape[0] - split
-    if left_count < DOT_MIN_LEFT_COLUMN or right_count < DOT_MIN_RIGHT_COLUMN:
+    left_idx = sorted_idx[:split]
+    right_idx = sorted_idx[split:]
+    if left_idx.size < DOT_MIN_LEFT_COLUMN or right_idx.size < DOT_MIN_RIGHT_COLUMN:
         return []
 
-    detections.sort(key=lambda d: d.brightness, reverse=True)
-    if len(detections) > DOT_MAX_DETECTIONS:
-        detections = detections[:DOT_MAX_DETECTIONS]
-    return detections
+    def _filter(indices: np.ndarray) -> np.ndarray:
+        if indices.size == 0:
+            return indices
+        pts = coords[indices]
+        center_x = float(np.median(pts[:, 0]))
+        deviation = np.abs(pts[:, 0] - center_x)
+        keep = deviation <= CLUB_CORNER_COLUMN_MAX_DEVIATION_PX
+        if not np.any(keep):
+            keep = deviation <= CLUB_CORNER_COLUMN_MAX_DEVIATION_PX * 1.5
+        return indices[keep]
 
+    left_idx = _filter(left_idx)
+    right_idx = _filter(right_idx)
+    if left_idx.size < DOT_MIN_LEFT_COLUMN or right_idx.size < DOT_MIN_RIGHT_COLUMN:
+        return []
 
+    column_width_limit = max(CLUB_CORNER_COLUMN_MAX_WIDTH_PX, float(width) * 0.03)
+    left_pts = coords[left_idx]
+    right_pts = coords[right_idx]
+    if left_pts.shape[0] >= 2:
+        if float(left_pts[:, 0].ptp()) > column_width_limit:
+            return []
+        if float(left_pts[:, 1].ptp()) < max(
+            CLUB_CORNER_MIN_VERTICAL_SPREAD_PX,
+            height * CLUB_CORNER_HEIGHT_SCALE,
+        ):
+            return []
+    if right_pts.shape[0] >= 2:
+        if float(right_pts[:, 0].ptp()) > column_width_limit:
+            return []
+        if float(right_pts[:, 1].ptp()) < max(
+            CLUB_CORNER_MIN_VERTICAL_SPREAD_PX,
+            height * CLUB_CORNER_HEIGHT_SCALE * 0.8,
+        ):
+            return []
+
+    left_strength = max(float(detections[int(i)].strength) for i in left_idx)
+    right_strength = max(float(detections[int(i)].strength) for i in right_idx)
+    if (
+        left_strength < CLUB_CORNER_COLUMN_MIN_STRENGTH
+        or right_strength < CLUB_CORNER_COLUMN_MIN_STRENGTH
+    ):
+        return []
+
+    result: list[DotDetection] = []
+    for idx in left_idx:
+        det = detections[int(idx)]
+        result.append(
+            DotDetection(
+                centroid=det.centroid.copy(),
+                area=det.area,
+                brightness=det.brightness,
+                circularity=det.circularity,
+                column='left',
+                strength=det.strength,
+            )
+        )
+    for idx in right_idx:
+        det = detections[int(idx)]
+        result.append(
+            DotDetection(
+                centroid=det.centroid.copy(),
+                area=det.area,
+                brightness=det.brightness,
+                circularity=det.circularity,
+                column='right',
+                strength=det.strength,
+            )
+        )
+
+    result.sort(key=lambda d: d.brightness, reverse=True)
+    if len(result) > DOT_MAX_DETECTIONS:
+        result = result[:DOT_MAX_DETECTIONS]
+    return result
 def _polyfit_with_mask(
     times: np.ndarray,
     values: np.ndarray,
@@ -825,6 +897,52 @@ def _robust_polyfit(
     fitted = np.polyval(coeffs, times) if coeffs is not None else np.copy(values)
     return coeffs, fitted, current_mask
 
+
+def _refine_mask_with_residuals(
+    times: np.ndarray,
+    axis_values: dict[str, np.ndarray],
+    base_mask: np.ndarray,
+    degree: int,
+) -> np.ndarray:
+    mask = base_mask.copy()
+    changed = False
+    for _ in range(CLUB_TRAJECTORY_MASK_ITERS):
+        if int(mask.sum()) <= max(degree, 1):
+            break
+        coeffs: dict[str, np.ndarray] = {}
+        for axis, values in axis_values.items():
+            coeff = _polyfit_with_mask(times, values, mask, degree)
+            if coeff is None:
+                return mask if changed else base_mask
+            coeffs[axis] = coeff
+        predictions = {axis: np.polyval(coeff, times) for axis, coeff in coeffs.items()}
+        residuals = {axis: axis_values[axis] - predictions[axis] for axis in axis_values}
+        new_mask = mask.copy()
+        for axis, res in residuals.items():
+            masked_res = res[mask]
+            if masked_res.size == 0:
+                continue
+            abs_res = np.abs(masked_res)
+            mad = float(np.median(np.abs(abs_res - np.median(abs_res))))
+            threshold = CLUB_TRAJECTORY_RESIDUAL_SIGMA * 1.4826 * mad + 1e-6
+            threshold = max(CLUB_TRAJECTORY_AXIS_MIN_RESIDUAL.get(axis, 0.5), threshold)
+            new_mask &= np.abs(res) <= threshold
+        residual_matrix = np.column_stack([residuals.get('x'), residuals.get('y'), residuals.get('z')])
+        if residual_matrix.size:
+            residual_norm = np.linalg.norm(residual_matrix, axis=1)
+            masked_norm = residual_norm[mask]
+            if masked_norm.size:
+                mad_norm = float(np.median(np.abs(masked_norm - np.median(masked_norm))))
+                norm_thresh = CLUB_TRAJECTORY_NORM_SIGMA * 1.4826 * mad_norm + 1e-6
+                norm_thresh = max(CLUB_TRAJECTORY_MIN_NORM, norm_thresh)
+                new_mask &= residual_norm <= norm_thresh
+        if int(new_mask.sum()) <= max(degree, 1):
+            break
+        if np.array_equal(new_mask, mask):
+            break
+        mask = new_mask
+        changed = True
+    return mask if changed else base_mask
 
 def _world_to_pixel(x_cm: float, y_cm: float, z_cm: float) -> tuple[float, float] | None:
     depth_cm = float(z_cm + CLUBFACE_Z_OFFSET_CM)
@@ -907,7 +1025,7 @@ def refine_clubface_trajectory(coords: list[dict[str, float]]) -> RefinedTraject
         dtype=np.float64,
     )
 
-    degree_target = min(5, max(1, times.size - 1))
+    degree_target = 2 if times.size >= 3 else max(1, times.size - 1)
     coeff_x, _, mask_x = _robust_polyfit(times, xs, degree=degree_target)
     coeff_y, _, mask_y = _robust_polyfit(times, ys, degree=degree_target)
     coeff_z, _, mask_z = _robust_polyfit(times, zs, degree=degree_target)
@@ -923,6 +1041,9 @@ def refine_clubface_trajectory(coords: list[dict[str, float]]) -> RefinedTraject
         return RefinedTrajectory(coords, original_times.copy(), original_times, pixel_points)
 
     axis_values = {"x": xs, "y": ys, "z": zs}
+    refined_mask = _refine_mask_with_residuals(times, axis_values, combined_mask, degree_target)
+    if int(refined_mask.sum()) >= max(degree_target + 1, 3):
+        combined_mask = refined_mask
     final_coeffs: dict[str, np.ndarray] = {}
     for axis, values in axis_values.items():
         coeffs = _polyfit_with_mask(times, values, combined_mask, degree_target)
