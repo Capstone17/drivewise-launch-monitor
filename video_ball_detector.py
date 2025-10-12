@@ -115,10 +115,12 @@ CLUB_TRAJECTORY_AXIS_MIN_RESIDUAL = {
     'y': 0.35,
     'z': 0.55,
 }
-CLUB_TRAJECTORY_RESIDUAL_SIGMA = 2.2
-CLUB_TRAJECTORY_NORM_SIGMA = 2.0
-CLUB_TRAJECTORY_MIN_NORM = 0.9
-CLUB_TRAJECTORY_MASK_ITERS = 3
+CLUB_TRAJECTORY_RESIDUAL_SIGMA = 6.0
+CLUB_TRAJECTORY_NORM_SIGMA = 5.5
+CLUB_TRAJECTORY_MIN_NORM = 3.0
+CLUB_TRAJECTORY_MASK_ITERS = 2
+CLUB_CENTER_TOP_ALIGNMENT_TOL = 5.0
+CLUB_CENTER_SINGLE_COLUMN_UPSHIFT = 0.2
 
 CLUBFACE_MAX_SPREAD_PX = 140.0
 CLUBFACE_MAX_JUMP_PX = 80.0
@@ -294,7 +296,19 @@ class ClubfaceCentroidTracker:
             [max(det.strength, 0.0) for det in detections],
             dtype=np.float32,
         )
-        if {"left", "right"} - {str(c) for c in columns}:
+        has_left = bool(np.any(columns == "left"))
+        has_right = bool(np.any(columns == "right"))
+        depth_hint = approx_depth_cm if approx_depth_cm is not None else self.last_depth_cm
+        allow_single = False
+        allowed_column: str | None = None
+        if not (has_left and has_right) and depth_hint is not None:
+            present = "left" if has_left else ("right" if has_right else None)
+            if present is not None:
+                present_strengths = strengths[columns == present]
+                if present_strengths.size and float(present_strengths.max()) >= CLUB_CORNER_COLUMN_MIN_STRENGTH:
+                    allow_single = True
+                    allowed_column = present
+        if not allow_single and {"left", "right"} - {str(c) for c in columns}:
             metrics["status"] = "missing_columns"
             metrics["used_dots"] = int(points.shape[0])
             self._register_miss()
@@ -349,7 +363,12 @@ class ClubfaceCentroidTracker:
             for col, use_flag in zip(columns, mask)
             if use_flag and col not in (None, "unknown")
         }
-        if {"left", "right"} - used_columns:
+        if not allow_single and {"left", "right"} - used_columns:
+            metrics["status"] = "missing_columns"
+            metrics["used_dots"] = used
+            self._register_miss()
+            return None, metrics
+        if allow_single and allowed_column is not None and allowed_column not in used_columns:
             metrics["status"] = "missing_columns"
             metrics["used_dots"] = used
             self._register_miss()
@@ -404,7 +423,10 @@ class ClubfaceCentroidTracker:
         geometry = self._geometry_from_points(points[mask], filtered, approx_depth_cm)
         metrics['depth_cm'] = geometry['depth_cm']
         metrics['depth_source'] = geometry['depth_source']
-        metrics['status'] = 'ok' if geometry['depth_cm'] is not None else 'ok_no_depth'
+        if allow_single and allowed_column is not None:
+            metrics['status'] = 'ok_single' if geometry['depth_cm'] is not None else 'ok_single_no_depth'
+        else:
+            metrics['status'] = 'ok' if geometry['depth_cm'] is not None else 'ok_no_depth'
 
         observation = {
             'center_px': geometry['center_px'],
@@ -2026,7 +2048,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "degree_0_iteration_5.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "degree_+10_2.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
@@ -2036,3 +2058,4 @@ if __name__ == "__main__":
         sticker_path,
         frames_dir,
     )
+
