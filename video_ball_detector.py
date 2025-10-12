@@ -110,6 +110,10 @@ CLUB_CORNER_CONTRAST_WINDOW = 7
 CLUB_CORNER_MIN_CONTRAST = 12.0
 CLUB_CORNER_MAX_PER_LEFT = 7
 CLUB_CORNER_MAX_PER_RIGHT = 3
+CLUB_CORNER_COLUMN_GAP_REL_TOL = 0.45
+CLUB_CORNER_COLUMN_GAP_ABS_TOL_PX = 14.0
+CLUB_CORNER_COLUMN_GAP_MIN_EXPECTED_PX = 18.0
+CLUB_CORNER_COLUMN_TOP_TOL = 4.0
 CLUB_TRAJECTORY_AXIS_MIN_RESIDUAL = {
     'x': 0.35,
     'y': 0.35,
@@ -421,6 +425,14 @@ class ClubfaceCentroidTracker:
         self.miss_streak = 0
 
         geometry = self._geometry_from_points(points[mask], filtered, approx_depth_cm)
+        if 'column_gap' in geometry and isinstance(geometry['column_gap'], dict):
+            metrics['column_gap'] = geometry['column_gap']
+        if 'orientation' in geometry and isinstance(geometry['orientation'], dict):
+            metrics['orientation'] = geometry['orientation']
+        if geometry.get('rejected'):
+            metrics['status'] = str(geometry.get('reject_reason', 'invalid_geometry'))
+            self._register_miss()
+            return None, metrics
         metrics['depth_cm'] = geometry['depth_cm']
         metrics['depth_source'] = geometry['depth_source']
         if allow_single and allowed_column is not None:
@@ -447,6 +459,39 @@ class ClubfaceCentroidTracker:
 
         return observation, metrics
 
+    def _validate_column_spacing(
+        self,
+        left_points: np.ndarray,
+        right_points: np.ndarray,
+        depth_hint: float | None,
+    ) -> tuple[bool, dict[str, float]]:
+        if left_points.size == 0 or right_points.size == 0 or depth_hint is None:
+            return True, {}
+        left_mean = float(left_points[:, 0].mean())
+        right_mean = float(right_points[:, 0].mean())
+        gap_px = abs(right_mean - left_mean)
+        expected_px = (FOCAL_LENGTH * CLUBFACE_HORIZONTAL_SPACING_CM) / float(depth_hint)
+        if not np.isfinite(expected_px) or expected_px <= 1e-3:
+            return True, {}
+        expected_px = max(expected_px, CLUB_CORNER_COLUMN_GAP_MIN_EXPECTED_PX)
+        tolerance = max(CLUB_CORNER_COLUMN_GAP_ABS_TOL_PX, expected_px * CLUB_CORNER_COLUMN_GAP_REL_TOL)
+        min_gap = max(2.0, expected_px - tolerance)
+        max_gap = expected_px + tolerance
+        info = {
+            'gap_px': gap_px,
+            'expected_px': expected_px,
+            'min_px': min_gap,
+            'max_px': max_gap,
+        }
+        if gap_px < min_gap:
+            info['reason_code'] = -1.0
+            return False, info
+        if gap_px > max_gap:
+            info['reason_code'] = 1.0
+            return False, info
+        info['reason_code'] = 0.0
+        return True, info
+
     def _geometry_from_points(
         self,
         points: np.ndarray,
@@ -465,6 +510,20 @@ class ClubfaceCentroidTracker:
         left_idx, right_idx = self._split_columns(points)
         left_points = points[left_idx] if left_idx.size else np.empty((0, 2), dtype=np.float32)
         right_points = points[right_idx] if right_idx.size else np.empty((0, 2), dtype=np.float32)
+
+        depth_hint = approx_depth_cm if approx_depth_cm is not None else self.last_depth_cm
+        spacing_ok, spacing_info = self._validate_column_spacing(left_points, right_points, depth_hint)
+        if not spacing_ok:
+            return {
+                'center_px': filtered_center.copy(),
+                'depth_cm': None,
+                'depth_source': None,
+                'pairs': [],
+                'best_pair': None,
+                'rejected': True,
+                'reject_reason': 'column_gap',
+                'column_gap': spacing_info,
+            }
 
         candidates = self._build_depth_candidates(left_points, right_points)
         best_pair: dict[str, object] | None = None
@@ -485,6 +544,20 @@ class ClubfaceCentroidTracker:
                 depth_cm = float(self.last_depth_cm)
                 depth_source = 'history'
 
+        if depth_cm is not None:
+            spacing_ok_depth, spacing_info = self._validate_column_spacing(left_points, right_points, depth_cm)
+            if not spacing_ok_depth:
+                return {
+                    'center_px': filtered_center.copy(),
+                    'depth_cm': None,
+                    'depth_source': None,
+                    'pairs': candidates,
+                    'best_pair': best_pair,
+                    'rejected': True,
+                    'reject_reason': 'column_gap_depth',
+                    'column_gap': spacing_info,
+                }
+
         center_px = filtered_center.copy()
 
         top_left = float(left_points[:, 1].min()) if left_points.size else None
@@ -493,6 +566,26 @@ class ClubfaceCentroidTracker:
         bottom_right = float(right_points[:, 1].max()) if right_points.size else None
         span_left = max((bottom_left - top_left), 1.0) if bottom_left is not None else 0.0
         span_right = max((bottom_right - top_right), 1.0) if bottom_right is not None else 0.0
+        orientation_info: dict[str, float] = {}
+        if top_left is not None:
+            orientation_info['top_left_px'] = top_left
+        if top_right is not None:
+            orientation_info['top_right_px'] = top_right
+        if top_left is not None and top_right is not None:
+            orientation_info['delta_top_px'] = top_right - top_left
+            orientation_info['tolerance_px'] = CLUB_CORNER_COLUMN_TOP_TOL
+            if top_left > top_right + CLUB_CORNER_COLUMN_TOP_TOL:
+                return {
+                    'center_px': filtered_center.copy(),
+                    'depth_cm': None,
+                    'depth_source': None,
+                    'pairs': candidates,
+                    'best_pair': best_pair,
+                    'rejected': True,
+                    'reject_reason': 'column_orientation',
+                    'column_gap': spacing_info,
+                    'orientation': orientation_info,
+                }
         if top_left is not None and top_right is not None:
             if top_left + CLUB_CENTER_TOP_ALIGNMENT_TOL < top_right:
                 center_px[1] = float(max(0.0, top_right - CLUB_CENTER_SINGLE_COLUMN_UPSHIFT * span_right))
@@ -532,6 +625,9 @@ class ClubfaceCentroidTracker:
             'depth_source': depth_source,
             'pairs': candidates,
             'best_pair': best_pair,
+            'column_gap': spacing_info,
+            'rejected': False,
+            'orientation': orientation_info,
         }
 
     @staticmethod
