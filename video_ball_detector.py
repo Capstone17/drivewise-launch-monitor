@@ -99,15 +99,16 @@ CLUB_HARRIS_BLOCK_SIZE = 5
 CLUB_HARRIS_KSIZE = 3
 CLUB_HARRIS_K = 0.04
 CLUB_CORNER_DUPLICATE_DISTANCE_PX = 6.0
-CLUB_CORNER_MIN_RESPONSE = 0.15
-CLUB_CORNER_COLUMN_MIN_STRENGTH = 0.2
-CLUB_CORNER_COLUMN_MAX_WIDTH_PX = 22.0
-CLUB_CORNER_COLUMN_MAX_DEVIATION_PX = 5.0
-CLUB_CORNER_MIN_VERTICAL_SPREAD_PX = 12.0
-CLUB_CORNER_HEIGHT_SCALE = 0.02
-CLUB_CORNER_MAX_TOTAL = 20
-CLUB_CORNER_CONTRAST_WINDOW = 7
-CLUB_CORNER_MIN_CONTRAST = 12.0
+CLUB_CORNER_MIN_RESPONSE = 0.2
+CLUB_CORNER_COLUMN_MIN_STRENGTH = 0.3
+CLUB_CORNER_COLUMN_MAX_WIDTH_PX = 18.0
+CLUB_CORNER_COLUMN_MAX_DEVIATION_PX = 4.0
+CLUB_CORNER_MIN_VERTICAL_SPREAD_PX = 16.0
+CLUB_CORNER_HEIGHT_SCALE = 0.025
+CLUB_CORNER_MAX_TOTAL = 16
+CLUB_CORNER_CHECKERBOARD_THRESHOLD = 30.0
+CLUB_CORNER_CONTRAST_WINDOW = 11
+CLUB_CORNER_MIN_CONTRAST = 20.0
 CLUB_CORNER_MAX_PER_LEFT = 7
 CLUB_CORNER_MAX_PER_RIGHT = 3
 CLUB_TRAJECTORY_AXIS_MIN_RESIDUAL = {
@@ -188,6 +189,27 @@ def _corner_patch_contrast(gray: np.ndarray, x: float, y: float, window: int) ->
         return 0.0
     patch = gray[y0:y1, x0:x1]
     return float(patch.std())
+
+def _checkerboard_cross_score(gray: np.ndarray, x: float, y: float, size: int) -> float:
+    radius = max(1, int(size))
+    xi = int(round(x))
+    yi = int(round(y))
+    x0 = max(0, xi - radius)
+    y0 = max(0, yi - radius)
+    x1 = min(gray.shape[1], xi + radius + 1)
+    y1 = min(gray.shape[0], yi + radius + 1)
+    if x1 - x0 <= 2 or y1 - y0 <= 2:
+        return 0.0
+    patch = gray[y0:y1, x0:x1].astype(np.float32)
+    half_y = patch.shape[0] // 2
+    half_x = patch.shape[1] // 2
+    tl = patch[:half_y, :half_x].mean()
+    tr = patch[:half_y, half_x:].mean()
+    bl = patch[half_y:, :half_x].mean()
+    br = patch[half_y:, half_x:].mean()
+    diag1 = (tl + br) * 0.5
+    diag2 = (tr + bl) * 0.5
+    return abs(diag1 - diag2)
 
 
 
@@ -668,12 +690,16 @@ def detect_reflective_dots(
     scale_x = width / float(CLUB_CORNER_RESIZE_WIDTH)
     scale_y = height / float(CLUB_CORNER_RESIZE_HEIGHT)
 
-    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    gray_resized = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
     if CLAHE is not None:
-        gray = CLAHE.apply(gray)
+        gray_resized = CLAHE.apply(gray_resized)
+
+    gray_full = cv2.cvtColor(on_bgr, cv2.COLOR_BGR2GRAY)
+    if CLAHE is not None:
+        gray_full = CLAHE.apply(gray_full)
 
     corners = cv2.goodFeaturesToTrack(
-        gray,
+        gray_resized,
         maxCorners=CLUB_CORNER_GFTT_MAX_CORNERS,
         qualityLevel=CLUB_CORNER_GFTT_QUALITY,
         minDistance=CLUB_CORNER_GFTT_MIN_DISTANCE,
@@ -690,7 +716,7 @@ def detect_reflective_dots(
         0.01,
     )
     cv2.cornerSubPix(
-        gray,
+        gray_resized,
         corners,
         CLUB_CORNER_SUBPIX_WINDOW,
         CLUB_CORNER_SUBPIX_ZERO_ZONE,
@@ -698,11 +724,19 @@ def detect_reflective_dots(
     )
     corners = corners.reshape(-1, 2)
 
-    gray_float = np.float32(gray)
-    harris_response = cv2.cornerHarris(gray_float, CLUB_HARRIS_BLOCK_SIZE, CLUB_HARRIS_KSIZE, CLUB_HARRIS_K)
-    harris_response = cv2.GaussianBlur(harris_response, (3, 3), 0)
-    np.maximum(harris_response, 0, out=harris_response)
-    response_max = float(harris_response.max())
+    harris_resized = cv2.cornerHarris(
+        np.float32(gray_resized), CLUB_HARRIS_BLOCK_SIZE, CLUB_HARRIS_KSIZE, CLUB_HARRIS_K
+    )
+    harris_resized = cv2.GaussianBlur(harris_resized, (3, 3), 0)
+    np.maximum(harris_resized, 0, out=harris_resized)
+    response_resized_max = float(harris_resized.max())
+
+    harris_full = cv2.cornerHarris(
+        np.float32(gray_full), CLUB_HARRIS_BLOCK_SIZE, CLUB_HARRIS_KSIZE, CLUB_HARRIS_K
+    )
+    harris_full = cv2.GaussianBlur(harris_full, (3, 3), 0)
+    np.maximum(harris_full, 0, out=harris_full)
+    response_full_max = float(harris_full.max())
 
     height_thresh = min(float(height) * DOT_MIN_Y_FRACTION, DOT_MIN_Y_PX)
     if height < 200:
@@ -729,14 +763,32 @@ def detect_reflective_dots(
             )
             if float(distances.min()) < CLUB_CORNER_DUPLICATE_DISTANCE_PX:
                 continue
-        xi = int(np.clip(round(x_res), 0, harris_response.shape[1] - 1))
-        yi = int(np.clip(round(y_res), 0, harris_response.shape[0] - 1))
-        response = float(harris_response[yi, xi])
-        strength = response / response_max if response_max > 1e-6 else 0.0
+        xi = int(np.clip(round(x_res), 0, harris_resized.shape[1] - 1))
+        yi = int(np.clip(round(y_res), 0, harris_resized.shape[0] - 1))
+        response_resized = float(harris_resized[yi, xi])
+        full_x = int(np.clip(round(cx), 0, width - 1))
+        full_y = int(np.clip(round(cy), 0, height - 1))
+        response_full = float(harris_full[full_y, full_x])
+        strength_resized = response_resized / response_resized_max if response_resized_max > 1e-6 else 0.0
+        strength_full = response_full / response_full_max if response_full_max > 1e-6 else 0.0
+        strength = min(strength_resized, strength_full)
         if strength < CLUB_CORNER_MIN_RESPONSE:
             continue
-        contrast = _corner_patch_contrast(gray, x_res, y_res, CLUB_CORNER_CONTRAST_WINDOW)
-        if contrast < CLUB_CORNER_MIN_CONTRAST:
+        contrast_resized = _corner_patch_contrast(
+            gray_resized, x_res, y_res, CLUB_CORNER_CONTRAST_WINDOW
+        )
+        contrast_full = _corner_patch_contrast(
+            gray_full, cx, cy, CLUB_CORNER_CONTRAST_WINDOW
+        )
+        if min(contrast_resized, contrast_full) < CLUB_CORNER_MIN_CONTRAST:
+            continue
+        checker_resized = _checkerboard_cross_score(
+            gray_resized, x_res, y_res, CLUB_CORNER_CONTRAST_WINDOW
+        )
+        checker_full = _checkerboard_cross_score(
+            gray_full, cx, cy, CLUB_CORNER_CONTRAST_WINDOW
+        )
+        if min(checker_resized, checker_full) < CLUB_CORNER_CHECKERBOARD_THRESHOLD:
             continue
         brightness = float(np.clip(strength, 0.0, 1.0) * 255.0)
         detections.append(
@@ -2026,7 +2078,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "degree_0_iteration_5.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "degree_+10_1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
