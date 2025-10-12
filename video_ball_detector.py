@@ -1150,12 +1150,7 @@ def _annotate_clubface_frames(
     if not os.path.isdir(frames_dir):
         return
 
-    interpolated_points = [
-        p
-        for p in trajectory.pixel_points
-        if not p.get("is_original", False)
-    ]
-
+    interpolated_points = []
     outlier_times = trajectory.original_times - trajectory.inlier_times
     frame_entries: list[tuple[int, str]] = []
     for name in os.listdir(frames_dir):
@@ -1174,45 +1169,6 @@ def _annotate_clubface_frames(
         if image is None:
             continue
         height, width = image.shape[:2]
-
-        path_points: list[tuple[int, int]] = []
-        for point in trajectory.pixel_points:
-            u = point.get("u")
-            v = point.get("v")
-            if u is None or v is None:
-                continue
-            if not (np.isfinite(u) and np.isfinite(v)):
-                continue
-            if 0 <= u < width and 0 <= v < height:
-                path_points.append((int(round(u)), int(round(v))))
-        if len(path_points) >= 2:
-            cv2.polylines(
-                image,
-                [np.array(path_points, dtype=np.int32)],
-                isClosed=False,
-                color=(255, 215, 0),
-                thickness=2,
-                lineType=cv2.LINE_AA,
-            )
-        elif len(path_points) == 1:
-            cv2.circle(image, path_points[0], 3, (255, 215, 0), -1, cv2.LINE_AA)
-
-        for point in interpolated_points:
-            u = point.get("u")
-            v = point.get("v")
-            if u is None or v is None:
-                continue
-            if not (np.isfinite(u) and np.isfinite(v)):
-                continue
-            if 0 <= u < width and 0 <= v < height:
-                cv2.circle(
-                    image,
-                    (int(round(u)), int(round(v))),
-                    4,
-                    (0, 215, 255),
-                    -1,
-                    cv2.LINE_AA,
-                )
 
         samples = samples_by_frame.get(frame_idx, [])
         for sample in samples:
