@@ -106,6 +106,10 @@ CLUB_CORNER_COLUMN_MAX_DEVIATION_PX = 5.0
 CLUB_CORNER_MIN_VERTICAL_SPREAD_PX = 12.0
 CLUB_CORNER_HEIGHT_SCALE = 0.02
 CLUB_CORNER_MAX_TOTAL = 20
+CLUB_CORNER_CONTRAST_WINDOW = 7
+CLUB_CORNER_MIN_CONTRAST = 12.0
+CLUB_CORNER_MAX_PER_LEFT = 7
+CLUB_CORNER_MAX_PER_RIGHT = 3
 CLUB_TRAJECTORY_AXIS_MIN_RESIDUAL = {
     'x': 0.35,
     'y': 0.35,
@@ -171,6 +175,19 @@ class MotionWindowNotFoundError(MotionWindowError):
 class MotionWindowDegenerateError(MotionWindowError):
     """Raised when detections are present but cannot form a valid window."""
 
+
+def _corner_patch_contrast(gray: np.ndarray, x: float, y: float, window: int) -> float:
+    radius = max(1, int(window))
+    xi = int(round(x))
+    yi = int(round(y))
+    x0 = max(0, xi - radius)
+    y0 = max(0, yi - radius)
+    x1 = min(gray.shape[1], xi + radius + 1)
+    y1 = min(gray.shape[0], yi + radius + 1)
+    if x1 - x0 <= 1 or y1 - y0 <= 1:
+        return 0.0
+    patch = gray[y0:y1, x0:x1]
+    return float(patch.std())
 
 
 
@@ -697,7 +714,6 @@ def detect_reflective_dots(
     avg_scale = 0.5 * (scale_x + scale_y)
     radius = max(3.0 * avg_scale, 1.0)
     area = math.pi * (radius ** 2)
-
     for x_res, y_res in corners:
         if not (np.isfinite(x_res) and np.isfinite(y_res)):
             continue
@@ -718,6 +734,9 @@ def detect_reflective_dots(
         response = float(harris_response[yi, xi])
         strength = response / response_max if response_max > 1e-6 else 0.0
         if strength < CLUB_CORNER_MIN_RESPONSE:
+            continue
+        contrast = _corner_patch_contrast(gray, x_res, y_res, CLUB_CORNER_CONTRAST_WINDOW)
+        if contrast < CLUB_CORNER_MIN_CONTRAST:
             continue
         brightness = float(np.clip(strength, 0.0, 1.0) * 255.0)
         detections.append(
@@ -806,8 +825,15 @@ def _finalize_corner_columns(
     ):
         return []
 
+    left_idx_sorted = sorted(left_idx, key=lambda i: float(detections[int(i)].strength), reverse=True)
+    right_idx_sorted = sorted(right_idx, key=lambda i: float(detections[int(i)].strength), reverse=True)
+    left_idx_sorted = np.array(left_idx_sorted[:CLUB_CORNER_MAX_PER_LEFT], dtype=int)
+    right_idx_sorted = np.array(right_idx_sorted[:CLUB_CORNER_MAX_PER_RIGHT], dtype=int)
+    if left_idx_sorted.size == 0 or right_idx_sorted.size == 0:
+        return []
+
     result: list[DotDetection] = []
-    for idx in left_idx:
+    for idx in left_idx_sorted:
         det = detections[int(idx)]
         result.append(
             DotDetection(
@@ -815,11 +841,11 @@ def _finalize_corner_columns(
                 area=det.area,
                 brightness=det.brightness,
                 circularity=det.circularity,
-                column='left',
+                column="left",
                 strength=det.strength,
             )
         )
-    for idx in right_idx:
+    for idx in right_idx_sorted:
         det = detections[int(idx)]
         result.append(
             DotDetection(
@@ -827,7 +853,7 @@ def _finalize_corner_columns(
                 area=det.area,
                 brightness=det.brightness,
                 circularity=det.circularity,
-                column='right',
+                column="right",
                 strength=det.strength,
             )
         )
@@ -2044,7 +2070,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "degree_+10_2.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "degree_0_iteration_5.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
