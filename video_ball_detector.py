@@ -1192,6 +1192,7 @@ def _annotate_clubface_frames(
         for sample in samples:
             center = sample.get("center_px")
             time_val = sample.get("time")
+            detections = sample.get("points") or []
             if center is None or time_val is None:
                 continue
             try:
@@ -1213,6 +1214,58 @@ def _annotate_clubface_frames(
                 -1,
                 cv2.LINE_AA,
             )
+            for det in detections:
+                try:
+                    dx = float(det.get("x", float("nan")))
+                    dy = float(det.get("y", float("nan")))
+                except (TypeError, ValueError):
+                    continue
+                if not (np.isfinite(dx) and np.isfinite(dy)):
+                    continue
+                if not (0 <= dx < width and 0 <= dy < height):
+                    continue
+                column_label = str(det.get("column", "unknown")).lower()
+                used_flag = bool(det.get("used", False))
+                if column_label == "left":
+                    det_color = (0, 165, 255)
+                    label_text = "L"
+                elif column_label == "right":
+                    det_color = (0, 255, 255)
+                    label_text = "R"
+                else:
+                    det_color = (200, 200, 200)
+                    label_text = "?"
+                radius = 4 if used_flag else 3
+                center_point = (int(round(dx)), int(round(dy)))
+                cv2.circle(
+                    image,
+                    center_point,
+                    radius,
+                    det_color,
+                    -1,
+                    cv2.LINE_AA,
+                )
+                label_org = (center_point[0] + 6, center_point[1] - 6)
+                cv2.putText(
+                    image,
+                    label_text,
+                    label_org,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (0, 0, 0),
+                    3,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    image,
+                    label_text,
+                    label_org,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    det_color,
+                    1,
+                    cv2.LINE_AA,
+                )
             if not is_inlier and time_val in outlier_times:
                 cv2.drawMarker(
                     image,
@@ -1925,10 +1978,12 @@ def process_video(
                                 "z": round(float(z_cm), 2),
                             }
                         )
+                        detection_points = metrics.get("points")
                         clubface_samples_by_frame[on_idx].append(
                             {
                                 "time": time_rounded,
                                 "center_px": (u, v),
+                                "points": detection_points if isinstance(detection_points, list) else [],
                             }
                         )
                         if on_idx == frame_idx:
