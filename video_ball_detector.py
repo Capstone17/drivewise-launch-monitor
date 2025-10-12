@@ -115,9 +115,9 @@ CLUB_TRAJECTORY_AXIS_MIN_RESIDUAL = {
     'y': 0.35,
     'z': 0.55,
 }
-CLUB_TRAJECTORY_RESIDUAL_SIGMA = 6.0
-CLUB_TRAJECTORY_NORM_SIGMA = 5.5
-CLUB_TRAJECTORY_MIN_NORM = 3.0
+CLUB_TRAJECTORY_RESIDUAL_SIGMA = 2.5
+CLUB_TRAJECTORY_NORM_SIGMA = 2.0
+CLUB_TRAJECTORY_MIN_NORM = 1.0
 CLUB_TRAJECTORY_MASK_ITERS = 2
 CLUB_CENTER_TOP_ALIGNMENT_TOL = 5.0
 CLUB_CENTER_SINGLE_COLUMN_UPSHIFT = 0.2
@@ -487,10 +487,25 @@ class ClubfaceCentroidTracker:
 
         center_px = filtered_center.copy()
 
-        if left_points.size:
-            center_px[1] = float(left_points[:, 1].mean())
-        elif right_points.size:
-            center_px[1] = float(right_points[:, 1].mean())
+        top_left = float(left_points[:, 1].min()) if left_points.size else None
+        top_right = float(right_points[:, 1].min()) if right_points.size else None
+        bottom_left = float(left_points[:, 1].max()) if left_points.size else None
+        bottom_right = float(right_points[:, 1].max()) if right_points.size else None
+        span_left = max((bottom_left - top_left), 1.0) if bottom_left is not None else 0.0
+        span_right = max((bottom_right - top_right), 1.0) if bottom_right is not None else 0.0
+        if top_left is not None and top_right is not None:
+            if top_left + CLUB_CENTER_TOP_ALIGNMENT_TOL < top_right:
+                center_px[1] = float(max(0.0, top_right - CLUB_CENTER_SINGLE_COLUMN_UPSHIFT * span_right))
+            elif top_right + CLUB_CENTER_TOP_ALIGNMENT_TOL < top_left:
+                center_px[1] = float(max(0.0, top_left - CLUB_CENTER_SINGLE_COLUMN_UPSHIFT * span_left))
+            else:
+                blended = 0.5 * (top_left + top_right)
+                avg_span = 0.5 * (span_left + span_right)
+                center_px[1] = float(max(0.0, blended - CLUB_CENTER_SINGLE_COLUMN_UPSHIFT * avg_span))
+        elif top_left is not None:
+            center_px[1] = float(max(0.0, top_left - CLUB_CENTER_SINGLE_COLUMN_UPSHIFT * span_left))
+        elif top_right is not None:
+            center_px[1] = float(max(0.0, top_right - CLUB_CENTER_SINGLE_COLUMN_UPSHIFT * span_right))
 
         if depth_cm is not None:
             if left_points.size:
