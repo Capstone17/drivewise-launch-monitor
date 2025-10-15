@@ -1715,3 +1715,124 @@
 2025-10-10 01:44:39,209 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
 2025-10-10 01:44:43,110 - __main__ - DEBUG - Analysis finished, sending metrics: {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
 2025-10-10 01:44:52,830 - __main__ - DEBUG - sending feedback based on metrics: 'Swing analysis failed! Please try again.'
+2025-10-10 03:02:08,265 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-10 03:02:08,268 - __main__ - INFO - Registering GATT application...
+2025-10-10 03:02:08,286 - __main__ - INFO - GATT application registered
+2025-10-10 03:02:08,289 - __main__ - INFO - Advertisement registered
+2025-10-11 01:07:39,571 - __main__ - DEBUG - Hostname found: '172.16.230.3 \n'
+2025-10-11 01:42:54,852 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-11 01:42:54,853 - __main__ - INFO - Registering GATT application...
+2025-10-11 01:42:54,864 - __main__ - INFO - GATT application registered
+2025-10-11 01:42:54,866 - __main__ - INFO - Advertisement registered
+2025-10-11 01:43:04,737 - __main__ - DEBUG - StartNotify called
+2025-10-11 01:43:14,097 - __main__ - DEBUG - StopNotify called
+2025-10-11 01:43:15,837 - __main__ - DEBUG - StartNotify called
+2025-10-11 01:43:18,447 - __main__ - DEBUG - received write command
+2025-10-11 01:43:18,447 - __main__ - DEBUG - Began calibration function
+2025-10-11 01:43:33,778 - __main__ - INFO - Exposure from calibration: 692
+2025-10-11 01:43:33,778 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-11 01:43:33,792 - __main__ - DEBUG - Calibration and GS_Crop successful
+2025-10-11 01:43:33,793 - __main__ - DEBUG - Notifying values changed
+2025-10-11 01:44:01,497 - __main__ - DEBUG - StartNotify called
+2025-10-11 01:44:26,937 - __main__ - DEBUG - Received write command
+2025-10-11 01:44:32,963 - __main__ - INFO - processing video now
+2025-10-11 01:44:47,668 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 01:44:47,668 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 01:57:46,403 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-11 01:57:46,404 - __main__ - INFO - Registering GATT application...
+2025-10-11 01:57:46,414 - __main__ - INFO - GATT application registered
+2025-10-11 01:57:46,416 - __main__ - INFO - Advertisement registered
+2025-10-11 01:58:02,764 - __main__ - DEBUG - StartNotify called
+2025-10-11 01:58:07,474 - __main__ - DEBUG - received write command
+2025-10-11 01:58:07,475 - __main__ - DEBUG - Began calibration function
+2025-10-11 01:58:21,992 - __main__ - INFO - Exposure from calibration: 750
+2025-10-11 01:58:21,992 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-11 01:58:22,002 - __main__ - DEBUG - Calibration and GS_Crop successful
+2025-10-11 01:58:22,002 - __main__ - DEBUG - Notifying values changed
+2025-10-11 01:58:47,435 - __main__ - DEBUG - StartNotify called
+2025-10-11 02:00:05,587 - __main__ - DEBUG - Received write command
+2025-10-11 02:00:11,620 - __main__ - INFO - processing video now
+2025-10-11 02:00:25,494 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:00:25,494 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:02:03,759 - __main__ - DEBUG - Received write command
+2025-10-11 02:02:09,795 - __main__ - INFO - processing video now
+2025-10-11 02:02:23,682 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:02:23,683 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:12:45,914 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-11 02:12:45,917 - __main__ - INFO - Registering GATT application...
+2025-10-11 02:12:45,943 - __main__ - INFO - GATT application registered
+2025-10-11 02:12:45,946 - __main__ - INFO - Advertisement registered
+2025-10-11 02:13:42,982 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-11 02:13:42,983 - __main__ - INFO - Registering GATT application...
+2025-10-11 02:13:42,993 - __main__ - INFO - GATT application registered
+2025-10-11 02:13:42,995 - __main__ - INFO - Advertisement registered
+2025-10-11 02:13:57,279 - __main__ - DEBUG - StartNotify called
+2025-10-11 02:14:01,750 - __main__ - DEBUG - received write command
+2025-10-11 02:14:01,750 - __main__ - DEBUG - Began calibration function
+2025-10-11 02:14:17,179 - __main__ - INFO - Exposure from calibration: 570
+2025-10-11 02:14:17,179 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-11 02:14:17,193 - __main__ - DEBUG - Calibration and GS_Crop successful
+2025-10-11 02:14:17,194 - __main__ - DEBUG - Notifying values changed
+2025-10-11 02:14:36,281 - __main__ - DEBUG - StartNotify called
+2025-10-11 02:15:03,882 - __main__ - DEBUG - Received write command
+2025-10-11 02:15:09,899 - __main__ - INFO - processing video now
+2025-10-11 02:15:24,605 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:15:24,605 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:16:30,223 - __main__ - DEBUG - Received write command
+2025-10-11 02:16:36,235 - __main__ - INFO - processing video now
+2025-10-11 02:16:49,965 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:16:49,965 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:18:34,936 - __main__ - DEBUG - Received write command
+2025-10-11 02:18:41,003 - __main__ - INFO - processing video now
+2025-10-11 02:18:54,718 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:18:54,718 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:21:29,389 - __main__ - DEBUG - Received write command
+2025-10-11 02:21:35,404 - __main__ - INFO - processing video now
+2025-10-11 02:21:49,091 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:21:49,091 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:25:53,515 - __main__ - DEBUG - Received write command
+2025-10-11 02:25:59,533 - __main__ - INFO - processing video now
+2025-10-11 02:26:13,255 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:26:13,255 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:28:58,858 - __main__ - DEBUG - Received write command
+2025-10-11 02:29:04,907 - __main__ - INFO - processing video now
+2025-10-11 02:29:18,663 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:29:18,663 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:33:20,463 - __main__ - DEBUG - Received write command
+2025-10-11 02:33:26,508 - __main__ - INFO - processing video now
+2025-10-11 02:33:40,298 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:33:40,299 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:36:14,495 - __main__ - DEBUG - Received write command
+2025-10-11 02:36:20,524 - __main__ - INFO - processing video now
+2025-10-11 02:36:34,819 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:36:34,819 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:38:31,418 - __main__ - DEBUG - Received write command
+2025-10-11 02:38:37,452 - __main__ - INFO - processing video now
+2025-10-11 02:38:51,187 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:38:51,187 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:40:52,116 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-11 02:40:52,117 - __main__ - INFO - Registering GATT application...
+2025-10-11 02:40:52,127 - __main__ - INFO - GATT application registered
+2025-10-11 02:40:52,129 - __main__ - INFO - Advertisement registered
+2025-10-11 02:41:12,160 - __main__ - DEBUG - StartNotify called
+2025-10-11 02:41:14,500 - __main__ - DEBUG - received write command
+2025-10-11 02:41:14,500 - __main__ - DEBUG - Began calibration function
+2025-10-11 02:41:29,003 - __main__ - INFO - Exposure from calibration: 750
+2025-10-11 02:41:29,003 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-11 02:41:29,012 - __main__ - DEBUG - Calibration and GS_Crop successful
+2025-10-11 02:41:29,013 - __main__ - DEBUG - Notifying values changed
+2025-10-11 02:41:37,151 - __main__ - DEBUG - StartNotify called
+2025-10-11 02:41:50,051 - __main__ - DEBUG - Received write command
+2025-10-11 02:41:56,076 - __main__ - INFO - processing video now
+2025-10-11 02:42:10,075 - __main__ - ERROR - Processing failed: 'yaw'
+2025-10-11 02:42:10,076 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-11 02:47:41,212 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-11 02:47:41,213 - __main__ - INFO - Registering GATT application...
+2025-10-11 02:47:41,232 - __main__ - INFO - GATT application registered
+2025-10-11 02:47:41,235 - __main__ - INFO - Advertisement registered
+2025-10-11 02:48:02,176 - __main__ - DEBUG - Hostname found: '172.16.230.3 \n'
+2025-10-13 04:13:27,024 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-13 04:13:27,025 - __main__ - INFO - Registering GATT application...
+2025-10-13 04:13:27,046 - __main__ - INFO - GATT application registered
+2025-10-13 04:13:27,048 - __main__ - INFO - Advertisement registered
+2025-10-15 02:15:40,135 - __main__ - DEBUG - Hostname found: '172.16.179.60 \n'

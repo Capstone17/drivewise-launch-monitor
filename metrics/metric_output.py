@@ -1,4 +1,11 @@
-from .metric_calculation_3_metrics import *
+# NOTES ------------------------
+# - Error checks should be added for extreme angles
+# ------------------------------
+
+
+from metric_calculation import *
+
+from pathlib import Path
 import json
 import os
 import matplotlib.pyplot as plt
@@ -196,24 +203,11 @@ def finite_diff_velocity(frames, t_target=None):
 
 
 # Find the metrics using ball data
-def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz, marker_yaw_at_impact) -> dict:
+def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz) -> dict:
 
     swing_path = horizontal_movement_angle_from_rates(marker_dx, marker_dz)
     side_angle = horizontal_movement_angle_from_rates(ball_dx, ball_dy)
     face_angle = face_angle_calc(swing_path, side_angle)
-
-    # Check for an extreme side angle or face angle
-    # If these angles are extreme then we discard them and use the marker yaw
-    if (abs(side_angle) > 25) or (abs(face_angle) > 25):
-        print("Extreme angles detected, discarding ball data\n")
-        face_angle = marker_yaw_at_impact
-        side_angle = side_angle_without_ball(swing_path, face_angle)
-
-    # If the angles are still extreme, set both to zero
-    if (abs(side_angle) > 25) or (abs(face_angle) > 25):
-        face_angle = 0.00
-        side_angle = 0.00
-
     attack_angle = vertical_movement_angle_from_rates(marker_dy, marker_dz)
     face_to_path = face_angle - swing_path
 
@@ -223,6 +217,28 @@ def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz
 
     ball_speed = cmps_to_speed_kmh(ball_dx, ball_dy, ball_dz)
     print(f'Ball speed: {ball_speed:.2f}\n')
+
+    # ---------------------------------
+    # Error checking
+    # - If any angles are very extreme, set them to zero
+    # - This is worst-case scenario, and we don't want it to happen often!
+    # ---------------------------------
+    
+    if (abs(swing_path) > 25):
+        print("Extreme swing path; using default of 0.00")
+        swing_path = 0.00
+    if (abs(side_angle) > 25):
+        print("Extreme side angle; using default of 0.00")
+        side_angle = 0.00
+    if (abs(face_angle) > 25):
+        print("Extreme face angle; using default of 0.00")
+        face_angle = 0.00
+    if (abs(attack_angle) > 25):
+        print("Extreme attack angle; using default of 0.00")
+        attack_angle = 0.00
+    if (abs(face_to_path) > 25):
+        print("Extreme face-to-path; using default of 0.00")
+        face_to_path = 0.00
 
     return {
         "face_angle": face_angle,
@@ -288,7 +304,8 @@ def return_metrics() -> dict:
     # Filepaths
     # ---------------------------------
     # Coordinate source paths
-    src_coords = './'
+    src_coords_path = Path("~/Documents/webcamGolf").expanduser()
+    src_coords = str(src_coords_path) + "/"
     ball_coords_path = os.path.join(src_coords, 'ball_coords.json')
     sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')
 
@@ -298,85 +315,51 @@ def return_metrics() -> dict:
     # ---------------------------------
     # Find ball data
     ball_window, ball_impact_idx, ball_pre_frame, ball_post_frame, ball_last_frame = load_ball_movement_window(ball_coords_path, threshold=5.0)  # Find moment of impact and its surrounding frames
-    
-    # Check if no movement was found
-    if (not ball_window) or (ball_impact_idx is None) or (len(ball_window) < 3):
-
-        # ---------------------------------
-        # Load Window & Print
-        # ---------------------------------
-        print("No movement detected, using sticker only")
-        marker_window, marker_frame_closest_impact = load_marker_poses_without_impact_time(sticker_coords_path)
-        marker_target_time = marker_frame_closest_impact["time"] 
-
-        # Print marker data
-        print("\nMarker Frames:")  
-        print("Marker impact frame:", marker_target_time)
-        for idx, frame in enumerate(marker_window):
-            print(f"Frame {idx}: time={frame['time']:.3f}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}, yaw={frame['yaw']:.2f}")
-       
-        # ---------------------------------
-        # Marker Velocity Approximation
-        # ---------------------------------
-        marker_dx, marker_dy, marker_dz = finite_diff_velocity(marker_window, t_target=marker_target_time)
-        print(f"At time {marker_target_time}, Marker dx: {marker_dx}, Marker dy: {marker_dy}, Marker dz: {marker_dz}")
-        # plot_positions(marker_window)  # For testing
         
-        marker_yaw_at_impact = marker_frame_closest_impact["yaw"] 
-        metrics = metrics_without_ball(marker_dx, marker_dy, marker_dz, marker_yaw_at_impact)
-        
-    # Ball impact has been detected, proceed normally
-    else:
 
-        # ---------------------------------
-        # Load Window & Print
-        # ---------------------------------
-        print("Movement detected, using ball and sticker")
-        marker_window, marker_frame_before_impact, marker_frame_after_impact = load_marker_poses_with_impact_time(sticker_coords_path, ball_pre_frame['time'])
+    # ---------------------------------
+    # Load Window & Print
+    # ---------------------------------
+    marker_window, marker_frame_before_impact, marker_frame_after_impact = load_marker_poses_with_impact_time(sticker_coords_path, ball_pre_frame['time'])
 
-        # Compare the absolute time differences to find the frame closest to impact
-        if marker_frame_before_impact and marker_frame_after_impact:
+    # Compare the absolute time differences to find the frame closest to impact
+    if marker_frame_before_impact and marker_frame_after_impact:
 
-            # Yaw is equal to the average between the two poses
-            marker_yaw_at_impact = (marker_frame_before_impact["yaw"] + marker_frame_after_impact["yaw"]) / 2 
-
-            # Compare absolute time differences
-            if abs(marker_frame_before_impact["time"] - ball_pre_frame["time"]) <= abs(marker_frame_after_impact["time"] - ball_pre_frame["time"]):
-                marker_target_time = marker_frame_before_impact["time"]
-            else:
-                marker_target_time = marker_frame_after_impact["time"]
-        elif marker_frame_before_impact:
+        # Compare absolute time differences
+        if abs(marker_frame_before_impact["time"] - ball_pre_frame["time"]) <= abs(marker_frame_after_impact["time"] - ball_pre_frame["time"]):
             marker_target_time = marker_frame_before_impact["time"]
-            marker_yaw_at_impact = marker_frame_before_impact["yaw"]
-        elif marker_frame_after_impact:
+        else:
             marker_target_time = marker_frame_after_impact["time"]
-            marker_yaw_at_impact = marker_frame_after_impact["yaw"]
+    elif marker_frame_before_impact:
+        marker_target_time = marker_frame_before_impact["time"]
+    elif marker_frame_after_impact:
+        marker_target_time = marker_frame_after_impact["time"]
 
-        # Print ball data
-        print("Impact frame index in window:", ball_impact_idx)
-        print("Pre-impact frame:", ball_pre_frame)
-        print("Post-impact frame:", ball_post_frame)
-        print("Ball last frame:", ball_last_frame)
-        for idx, frame in enumerate(ball_window):
-            print(f"Frame {idx}: time={frame['time']}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
+    # Print ball data
+    print("Impact frame index in window:", ball_impact_idx)
+    print("Pre-impact frame:", ball_pre_frame)
+    print("Post-impact frame:", ball_post_frame)
+    print("Ball last frame:", ball_last_frame)
+    for idx, frame in enumerate(ball_window):
+        print(f"Frame {idx}: time={frame['time']}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
 
-        # Print marker data
-        print("\nMarker Frames:")  
-        print("Marker impact frame:", marker_target_time)
-        for idx, frame in enumerate(marker_window):
-            print(f"Frame {idx}: time={frame['time']:.3f}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
+    # Print marker data
+    print("\nMarker Frames:")  
+    print("Marker impact frame:", marker_target_time)
+    for idx, frame in enumerate(marker_window):
+        print(f"Frame {idx}: time={frame['time']:.3f}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
 
-        # ---------------------------------
-        # Velocity Approximation
-        # ---------------------------------
-        ball_dx, ball_dy, ball_dz = velocity_components(ball_window)
-        print(f"Ball dx: {ball_dx}, Ball dy: {ball_dy}, Ball dz: {ball_dz}")
-        marker_dx, marker_dy, marker_dz = finite_diff_velocity(marker_window, t_target=marker_target_time)
-        print(f"At time {marker_target_time}, Marker dx: {marker_dx}, Marker dy: {marker_dy}, Marker dz: {marker_dz}")
+    # ---------------------------------
+    # Velocity Approximation
+    # ---------------------------------
+    ball_dx, ball_dy, ball_dz = velocity_components(ball_window)
+    print(f"Ball dx: {ball_dx}, Ball dy: {ball_dy}, Ball dz: {ball_dz}")
+    marker_dx, marker_dy, marker_dz = finite_diff_velocity(marker_window, t_target=marker_target_time)
+    print(f"At time {marker_target_time}, Marker dx: {marker_dx}, Marker dy: {marker_dy}, Marker dz: {marker_dz}")
 
 
-        # Calculate the metrics
-        metrics = metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz, marker_yaw_at_impact)
+    # Calculate the metrics
+    metrics = metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz)
    
 
     # ---------------------------------
