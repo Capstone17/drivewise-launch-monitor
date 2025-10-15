@@ -3,7 +3,7 @@
 # ------------------------------
 
 
-from metric_calculation import *
+from .metric_calculation import *
 
 from pathlib import Path
 import json
