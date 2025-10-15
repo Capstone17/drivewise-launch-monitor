@@ -1,5 +1,6 @@
 # NOTES ------------------------
 # - Error checks should be added for extreme angles
+# - For first frame of movement, more reliable methods could be found
 # ------------------------------
 
 
@@ -12,7 +13,7 @@ import matplotlib.pyplot as plt
 
 
 
-def load_ball_movement_window(json_path, threshold=5.0):
+def load_ball_movement_window(json_path):
     """
     Finds the first instance of major movement and returns all frames from impact onward.
     
@@ -21,6 +22,12 @@ def load_ball_movement_window(json_path, threshold=5.0):
         - pre_frame is the impact frame
         - post_frame is the frame directly after impact
     """
+
+    # x and y are much more accurate than z, hence the smaller movement thresholds
+    x_threshold = 0.1
+    y_threshold = 0.1
+    z_threshold = 8.0
+
     with open(json_path, 'r') as f:
         data = json.load(f)
 
@@ -35,7 +42,7 @@ def load_ball_movement_window(json_path, threshold=5.0):
         dy = abs(frame2['y'] - frame1['y'])
         dz = abs(frame2['z'] - frame1['z'])
 
-        if dx > threshold or dy > threshold or dz > threshold:
+        if dx > x_threshold or dy > y_threshold or dz > z_threshold:
             # Window is everything from impact onward
             window = data[i:]
             impact_idx_in_window = 0  # Impact is first frame in the window
@@ -314,7 +321,8 @@ def return_metrics() -> dict:
     # Load movement windows
     # ---------------------------------
     # Find ball data
-    ball_window, ball_impact_idx, ball_pre_frame, ball_post_frame, ball_last_frame = load_ball_movement_window(ball_coords_path, threshold=5.0)  # Find moment of impact and its surrounding frames
+    threshold = 10.0
+    ball_window, ball_impact_idx, ball_pre_frame, ball_post_frame, ball_last_frame = load_ball_movement_window(ball_coords_path)  # Find moment of impact and its surrounding frames
         
 
     # ---------------------------------
