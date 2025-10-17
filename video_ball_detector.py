@@ -1068,6 +1068,24 @@ def _annotate_clubface_frames(
                 )
 
         samples = samples_by_frame.get(frame_idx, [])
+        dot_points: set[tuple[int, int]] = set()
+        for sample in samples:
+            coords = sample.get("dot_centroids")
+            if not coords:
+                continue
+            for coord in coords:
+                if coord is None or len(coord) < 2:
+                    continue
+                try:
+                    du = float(coord[0])
+                    dv = float(coord[1])
+                except (TypeError, ValueError):
+                    continue
+                if not (np.isfinite(du) and np.isfinite(dv)):
+                    continue
+                if 0 <= du < width and 0 <= dv < height:
+                    dot_points.add((int(round(du)), int(round(dv))))
+
         for sample in samples:
             center = sample.get("center_px")
             time_val = sample.get("time")
@@ -1102,6 +1120,16 @@ def _annotate_clubface_frames(
                     thickness=2,
                     line_type=cv2.LINE_AA,
                 )
+
+        for point in dot_points:
+            cv2.circle(
+                image,
+                point,
+                3,
+                (255, 0, 255),
+                -1,
+                cv2.LINE_AA,
+            )
 
         cv2.imwrite(frame_path, image)
 
@@ -1162,7 +1190,7 @@ class TFLiteBallDetector:
         iou_threshold: float = 0.4,
         max_detections: int = 10,
     ) -> None:
-        self.interpreter = Interpreter(model_path=model_path)
+        self.interpreter = Interpreter(model_path=model_path, num_threads=4)
         self.interpreter.allocate_tensors()
         self.input_details = self.interpreter.get_input_details()[0]
         self.output_details = self.interpreter.get_output_details()[0]
@@ -1770,6 +1798,19 @@ def process_video(
             ):
                 start_clubface = time.perf_counter()
                 dot_detections = detect_reflective_dots(off_color, on_color)
+                dot_centroids: list[tuple[float, float]] = []
+                for det in dot_detections:
+                    centroid = getattr(det, "centroid", None)
+                    if centroid is None or len(centroid) < 2:
+                        continue
+                    try:
+                        du = float(centroid[0])
+                        dv = float(centroid[1])
+                    except (TypeError, ValueError):
+                        continue
+                    if not (np.isfinite(du) and np.isfinite(dv)):
+                        continue
+                    dot_centroids.append((du, dv))
                 observation, metrics = clubface_tracker.update(
                     dot_detections,
                     approx_depth_cm=last_ball_distance,
@@ -1785,6 +1826,10 @@ def process_video(
                 metrics["time"] = round(on_time, 3)
                 metrics["distance_ref"] = last_ball_distance
                 clubface_debug.append(metrics)
+                time_rounded = round(on_time, 3)
+                sample_entry: dict[str, object] = {"time": time_rounded}
+                if dot_centroids:
+                    sample_entry["dot_centroids"] = dot_centroids
                 if observation is not None:
                     processed_dot_frames.add(on_idx)
                     center_px = observation.get("center_px")
@@ -1795,7 +1840,6 @@ def process_video(
                         x_cm = (u - CX) * depth_cm / FX
                         y_cm = (v - CY) * depth_cm / FY
                         z_cm = depth_cm - CLUBFACE_Z_OFFSET_CM
-                        time_rounded = round(on_time, 3)
                         clubface_coords.append(
                             {
                                 "time": time_rounded,
@@ -1804,12 +1848,8 @@ def process_video(
                                 "z": round(float(z_cm), 2),
                             }
                         )
-                        clubface_samples_by_frame[on_idx].append(
-                            {
-                                "time": time_rounded,
-                                "center_px": (u, v),
-                            }
-                        )
+                        sample_entry["center_px"] = (u, v)
+                        clubface_samples_by_frame[on_idx].append(sample_entry)
                         if on_idx == frame_idx:
                             cv2.putText(
                                 enhanced,
@@ -1821,6 +1861,8 @@ def process_video(
                                 1,
                                 cv2.LINE_AA,
                             )
+                elif "dot_centroids" in sample_entry:
+                    clubface_samples_by_frame[on_idx].append(sample_entry)
 
         if frames_dir and inference_start <= frame_idx < inference_end:
             cv2.imwrite(
