@@ -2032,6 +2032,7 @@ def process_video(
     prev_ir_time: float | None = None
     prev_ir_mean: float | None = None
     prev_color: np.ndarray | None = None
+    prev_mask_ready = False
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
     ball_velocity = np.zeros(2, dtype=float)
@@ -2045,6 +2046,8 @@ def process_video(
         orig = frame
         enhanced, _ = preprocess_frame(frame)
         base_frame = enhanced.copy()
+        if frame_idx < inference_start or frame_idx >= inference_end:
+            foreground_extractor.update_background(base_frame)
         if h is None:
             h, w = base_frame.shape[:2]
         ir_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
@@ -2134,6 +2137,22 @@ def process_video(
                         float(cy + radius),
                     )
 
+        mask = None
+        masked_color_current = orig
+        if in_window:
+            mask = foreground_extractor.make_mask(
+                base_frame,
+                ball_bbox=ball_bbox_for_mask,
+                dot_points=dot_points_for_frame,
+                club_center=club_center_for_frame,
+            )
+        if mask is not None:
+            masked_color_current = cv2.bitwise_and(orig, orig, mask=mask)
+            output_frame = cv2.bitwise_and(base_frame, base_frame, mask=mask)
+        else:
+            output_frame = base_frame.copy()
+        mask_ready_for_detection = mask is not None
+
         current_mean = float(ir_gray.mean())
         if prev_ir_gray is not None and prev_ir_idx is not None and prev_ir_time is not None:
             prev_mean = prev_ir_mean if prev_ir_mean is not None else float(prev_ir_gray.mean())
@@ -2144,15 +2163,15 @@ def process_video(
                 on_time = t
                 on_gray = ir_gray
                 off_gray = prev_ir_gray
-                on_color = orig
-                off_color = prev_color
+                on_color = masked_color_current if mask_ready_for_detection else None
+                off_color = prev_color if prev_mask_ready else None
             else:
                 on_idx = prev_ir_idx
                 on_time = prev_ir_time
                 on_gray = prev_ir_gray
                 off_gray = ir_gray
-                on_color = prev_color
-                off_color = orig
+                on_color = prev_color if prev_mask_ready else None
+                off_color = masked_color_current if mask_ready_for_detection else None
             if (
                 on_idx not in processed_dot_frames
                 and inference_start <= on_idx < inference_end
@@ -2231,22 +2250,6 @@ def process_video(
                 elif "dot_centroids" in sample_entry:
                     clubface_samples_by_frame[on_idx].append(sample_entry)
 
-        if frame_idx < inference_start or frame_idx >= inference_end:
-            foreground_extractor.update_background(base_frame)
-
-        mask = None
-        if in_window:
-            mask = foreground_extractor.make_mask(
-                base_frame,
-                ball_bbox=ball_bbox_for_mask,
-                dot_points=dot_points_for_frame,
-                club_center=club_center_for_frame,
-            )
-        if mask is not None:
-            output_frame = cv2.bitwise_and(base_frame, base_frame, mask=mask)
-        else:
-            output_frame = base_frame.copy()
-
         if ball_overlay is not None:
             cx_i, cy_i = ball_overlay["center"]
             radius_i = max(int(ball_overlay["radius"]), 1)
@@ -2277,7 +2280,8 @@ def process_video(
         prev_ir_idx = frame_idx
         prev_ir_time = t
         prev_ir_mean = current_mean
-        prev_color = orig
+        prev_color = masked_color_current
+        prev_mask_ready = mask_ready_for_detection
         frame_idx += 1
 
     cap.release()
