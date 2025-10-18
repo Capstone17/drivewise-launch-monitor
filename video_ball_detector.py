@@ -127,6 +127,11 @@ CLUBFACE_CENTER_OFFSET_CM = CLUBFACE_HORIZONTAL_SPACING_CM / 2.0
 CLUBFACE_Z_OFFSET_CM = 30.0
 CLUBFACE_VERTICAL_ALIGNMENT_PX = 40.0
 
+MOTION_BACKGROUND_MIN_DIFF = 12.0
+MOTION_BACKGROUND_MAD_SCALE = 6.0
+MOTION_MASK_MORPH_KERNEL = 3
+MOTION_MASK_DILATE_ITER = 1
+
 
 @dataclass
 class DotDetection:
@@ -719,6 +724,43 @@ def _normalize01(values: np.ndarray) -> np.ndarray:
     if maximum - minimum <= 1e-6:
         return np.zeros_like(values, dtype=np.float32)
     return (values - minimum) / (maximum - minimum)
+
+
+def _compute_motion_masks(frames: dict[int, np.ndarray]) -> dict[int, np.ndarray]:
+    if not frames:
+        return {}
+    indices = sorted(frames.keys())
+    gray_stack: list[np.ndarray] = []
+    for idx in indices:
+        frame = frames[idx]
+        if frame is None or frame.size == 0:
+            continue
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray_stack.append(gray.astype(np.float32))
+    if not gray_stack:
+        return {}
+    stack = np.stack(gray_stack, axis=0)
+    median = np.median(stack, axis=0)
+    mad = np.median(np.abs(stack - median), axis=0)
+    threshold = np.maximum(MOTION_BACKGROUND_MIN_DIFF, mad * MOTION_BACKGROUND_MAD_SCALE)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (MOTION_MASK_MORPH_KERNEL, MOTION_MASK_MORPH_KERNEL))
+    masks: dict[int, np.ndarray] = {}
+    for idx, gray in zip(indices, gray_stack):
+        diff = np.abs(gray - median)
+        motion = (diff > threshold).astype(np.uint8) * 255
+        motion = cv2.morphologyEx(motion, cv2.MORPH_OPEN, kernel)
+        if MOTION_MASK_DILATE_ITER > 0:
+            motion = cv2.dilate(motion, kernel, iterations=MOTION_MASK_DILATE_ITER)
+        masks[idx] = motion
+    return masks
+
+
+def _apply_motion_mask(image: np.ndarray, mask: np.ndarray | None) -> np.ndarray:
+    if mask is None:
+        return image
+    if image.ndim == 2:
+        return cv2.bitwise_and(image, image, mask=mask)
+    return cv2.bitwise_and(image, image, mask=mask)
 
 
 
@@ -1776,15 +1818,38 @@ def process_video(
 
     clubface_tracker = ClubfaceCentroidTracker()
 
+    info_cap = cv2.VideoCapture(video_path)
+    if not info_cap.isOpened():
+        raise RuntimeError(f"Unable to open video: {video_path}")
+    total_frames = int(info_cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    video_fps = info_cap.get(cv2.CAP_PROP_FPS) or 30
+    w = int(info_cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
+    h = int(info_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
+    info_cap.release()
+
+    inference_start = max(0, start_frame)
+    inference_end = min(total_frames, end_frame)
+
+    motion_masks: dict[int, np.ndarray] = {}
+    if inference_end > inference_start:
+        bg_cap = cv2.VideoCapture(video_path)
+        if bg_cap.isOpened():
+            bg_cap.set(cv2.CAP_PROP_POS_FRAMES, inference_start)
+            background_frames: dict[int, np.ndarray] = {}
+            for idx in range(inference_start, inference_end):
+                ret_bg, frame_bg = bg_cap.read()
+                if not ret_bg:
+                    break
+                background_frames[idx] = frame_bg.copy()
+            motion_masks = _compute_motion_masks(background_frames)
+            bg_cap.release()
+            del background_frames
+        else:
+            motion_masks = {}
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Unable to open video: {video_path}")
-    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    inference_start = max(0, start_frame)
-    inference_end = min(total_frames, end_frame)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
     if frames_dir:
         os.makedirs(frames_dir, exist_ok=True)
         for name in os.listdir(frames_dir):
@@ -1815,14 +1880,12 @@ def process_video(
         ret, frame = cap.read()
         if not ret:
             break
-        orig = frame
-        enhanced, _ = preprocess_frame(frame)
+        motion_mask = motion_masks.get(frame_idx)
+        if motion_mask is not None:
+            frame = _apply_motion_mask(frame, motion_mask)
+        enhanced, ir_gray = preprocess_frame(frame)
         if h is None:
             h, w = enhanced.shape[:2]
-        ir_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
-        ir_gray = CLAHE.apply(ir_gray)
-        if USE_BLUR:
-            ir_gray = cv2.GaussianBlur(ir_gray, (3, 3), 0)
         t = frame_idx / video_fps
         in_window = inference_start <= frame_idx < inference_end
 
@@ -1894,20 +1957,26 @@ def process_video(
             prev_mean = prev_ir_mean if prev_ir_mean is not None else float(prev_ir_gray.mean())
             on_color: np.ndarray | None = None
             off_color: np.ndarray | None = None
+            mask_on: np.ndarray | None = None
+            mask_off: np.ndarray | None = None
             if current_mean >= prev_mean:
                 on_idx = frame_idx
                 on_time = t
                 on_gray = ir_gray
                 off_gray = prev_ir_gray
-                on_color = orig
+                on_color = frame
                 off_color = prev_color
+                mask_on = motion_masks.get(on_idx)
+                mask_off = motion_masks.get(prev_ir_idx)
             else:
                 on_idx = prev_ir_idx
                 on_time = prev_ir_time
                 on_gray = prev_ir_gray
                 off_gray = ir_gray
                 on_color = prev_color
-                off_color = orig
+                off_color = frame
+                mask_on = motion_masks.get(on_idx)
+                mask_off = motion_masks.get(frame_idx)
             if (
                 on_idx not in processed_dot_frames
                 and inference_start <= on_idx < inference_end
@@ -1915,6 +1984,10 @@ def process_video(
                 and off_color is not None
             ):
                 start_clubface = time.perf_counter()
+                if mask_on is not None:
+                    on_color = _apply_motion_mask(on_color, mask_on)
+                if mask_off is not None:
+                    off_color = _apply_motion_mask(off_color, mask_off)
                 dot_detections = detect_reflective_dots(off_color, on_color)
                 dot_centroids: list[tuple[float, float]] = []
                 for det in dot_detections:
@@ -1983,15 +2056,18 @@ def process_video(
                     clubface_samples_by_frame[on_idx].append(sample_entry)
 
         if frames_dir and inference_start <= frame_idx < inference_end:
+            output_frame = enhanced
+            if motion_mask is not None:
+                output_frame = _apply_motion_mask(output_frame, motion_mask)
             cv2.imwrite(
-                os.path.join(frames_dir, f"frame_{frame_idx:04d}.png"), enhanced
+                os.path.join(frames_dir, f"frame_{frame_idx:04d}.png"), output_frame
             )
 
         prev_ir_gray = ir_gray
         prev_ir_idx = frame_idx
         prev_ir_time = t
         prev_ir_mean = current_mean
-        prev_color = orig
+        prev_color = frame
         frame_idx += 1
 
     cap.release()
@@ -2028,7 +2104,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_200exp1.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_200exp.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
