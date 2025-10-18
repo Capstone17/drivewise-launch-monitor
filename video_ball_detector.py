@@ -218,6 +218,137 @@ class ClubfaceCentroidTracker:
             return 0.0
         return float(distances.max())
 
+    def _pattern_metrics(self, points: np.ndarray) -> dict[str, object]:
+        metrics: dict[str, object] = {
+            'pattern_priority': 0,
+            'pattern_score': 0,
+            'left_count': 0,
+            'right_count': 0,
+            'has_horizontal': False,
+            'vertical_left_pairs': 0,
+            'vertical_right_pairs': 0,
+            'best_alignment': None,
+        }
+        if points.size == 0:
+            return metrics
+
+        left_idx, right_idx = self._split_columns(points)
+        left_points = points[left_idx] if left_idx.size else np.empty((0, 2), dtype=np.float32)
+        right_points = points[right_idx] if right_idx.size else np.empty((0, 2), dtype=np.float32)
+
+        left_count = int(left_points.shape[0])
+        right_count = int(right_points.shape[0])
+        metrics['left_count'] = left_count
+        metrics['right_count'] = right_count
+        metrics['pattern_score'] = min(left_count, 4) + min(right_count, 2)
+
+        candidates = self._build_depth_candidates(left_points, right_points)
+        horizontal_candidates = [c for c in candidates if str(c['type']).startswith('horizontal')]
+        left_vertical = [int(c.get('steps', 0)) for c in candidates if str(c['type']).startswith('vertical_left')]
+        right_vertical = [int(c.get('steps', 0)) for c in candidates if str(c['type']).startswith('vertical_right')]
+
+        has_horizontal = bool(horizontal_candidates)
+        metrics['has_horizontal'] = has_horizontal
+        metrics['vertical_left_pairs'] = max(left_vertical) if left_vertical else 0
+        metrics['vertical_right_pairs'] = max(right_vertical) if right_vertical else 0
+
+        if horizontal_candidates:
+            alignment_vals = [
+                float(abs(c.get('vertical_delta', 0.0)))
+                for c in horizontal_candidates
+                if np.isfinite(c.get('vertical_delta', 0.0))
+            ]
+            if alignment_vals:
+                metrics['best_alignment'] = float(min(alignment_vals))
+
+        pattern_priority = 0
+        if has_horizontal and left_count >= 1 and right_count >= 1:
+            pattern_priority = 3
+        elif left_count >= 2 and metrics['vertical_left_pairs'] > 0:
+            pattern_priority = 2
+        elif right_count >= 2 and metrics['vertical_right_pairs'] > 0:
+            pattern_priority = 2
+        elif left_count >= 2 or right_count >= 2:
+            pattern_priority = 1
+
+        metrics['pattern_priority'] = pattern_priority
+        return metrics
+
+    def _select_cluster_mask(
+        self,
+        points: np.ndarray,
+        weights: np.ndarray,
+    ) -> tuple[np.ndarray, dict[str, object], np.ndarray | None]:
+        count_points = points.shape[0]
+        if count_points == 0:
+            return np.zeros(0, dtype=bool), {
+                'pattern_priority': 0,
+                'pattern_score': 0,
+                'spread': 0.0,
+                'count': 0,
+                'total_weight': 0.0,
+            }, None
+
+        best_score: tuple | None = None
+        best_mask: np.ndarray | None = None
+        best_info: dict[str, object] = {}
+        best_center: np.ndarray | None = None
+
+        for mask_int in range(1, 1 << count_points):
+            used = mask_int.bit_count()
+            if used < self.min_dots:
+                continue
+            mask = np.array([(mask_int >> idx) & 1 for idx in range(count_points)], dtype=bool)
+            center_candidate = self._weighted_center(points, weights, mask)
+            if center_candidate is None:
+                continue
+            spread = self._cluster_spread(points, mask, center_candidate)
+            subset_points = points[mask]
+            pattern_info = self._pattern_metrics(subset_points)
+            priority = int(pattern_info['pattern_priority'])
+            if spread > self.max_spread_px and priority == 0:
+                continue
+
+            total_weight = float(weights[mask].sum())
+            pattern_score = int(pattern_info['pattern_score'])
+            horizontal_bonus = 1 if pattern_info.get('has_horizontal') else 0
+            alignment_val = pattern_info.get('best_alignment')
+            alignment_term = -float(alignment_val) if alignment_val is not None else float('-inf')
+
+            candidate_score = (
+                priority,
+                pattern_score,
+                used,
+                horizontal_bonus,
+                alignment_term,
+                total_weight,
+                -float(spread),
+            )
+            if best_score is None or candidate_score > best_score:
+                best_score = candidate_score
+                best_mask = mask
+                best_center = center_candidate.astype(np.float32, copy=True)
+                best_info = {
+                    **pattern_info,
+                    'spread': float(spread),
+                    'count': used,
+                    'total_weight': total_weight,
+                }
+
+        if best_mask is None:
+            fallback_mask = np.ones(count_points, dtype=bool)
+            center_candidate = self._weighted_center(points, weights, fallback_mask)
+            fallback_spread = self._cluster_spread(points, fallback_mask, center_candidate) if center_candidate is not None else 0.0
+            return fallback_mask, {
+                'pattern_priority': 0,
+                'pattern_score': count_points,
+                'spread': float(fallback_spread),
+                'count': count_points,
+                'total_weight': float(weights.sum()),
+            }, center_candidate
+
+        return best_mask, best_info, best_center
+
     def _confidence(self, used: int, spread: float, jump: float | None) -> float:
         count_factor = min(1.0, used / 4.0)
         if self.max_spread_px > 0.0:
@@ -269,32 +400,15 @@ class ClubfaceCentroidTracker:
             self._register_miss()
             return None, metrics
 
-        mask = np.ones(points.shape[0], dtype=bool)
-        center = self._weighted_center(points, weights, mask)
-        if center is None:
-            metrics['status'] = 'low_weight'
+        mask, cluster_info, center = self._select_cluster_mask(points, weights)
+        used = int(mask.sum())
+        if used < self.min_dots:
+            metrics['status'] = 'insufficient_dots'
+            metrics['used_dots'] = used
             self._register_miss()
             return None, metrics
-
-        for _ in range(points.shape[0]):
-            used = int(mask.sum())
-            if used <= self.min_dots:
-                break
-            spread = self._cluster_spread(points, mask, center)
-            if spread <= self.max_spread_px:
-                break
-            idxs = np.where(mask)[0]
-            distances = np.linalg.norm(points[idxs] - center, axis=1)
-            drop_idx = idxs[int(np.argmax(distances))]
-            mask[drop_idx] = False
-            center_candidate = self._weighted_center(points, weights, mask)
-            if center_candidate is None:
-                mask[drop_idx] = True
-                break
-            center = center_candidate
-
-        used = int(mask.sum())
-        center = self._weighted_center(points, weights, mask)
+        if center is None:
+            center = self._weighted_center(points, weights, mask)
         if center is None:
             metrics['status'] = 'low_weight'
             metrics['used_dots'] = used
@@ -307,7 +421,7 @@ class ClubfaceCentroidTracker:
         else:
             filtered = ((1.0 - self.ema_alpha) * self.filtered_center + self.ema_alpha * raw_center).astype(np.float32)
 
-        spread_val = self._cluster_spread(points, mask, raw_center)
+        spread_val = float(cluster_info.get('spread', self._cluster_spread(points, mask, raw_center)))
         if self.prev_center is None:
             jump_val = None
         else:
@@ -321,6 +435,10 @@ class ClubfaceCentroidTracker:
             'jump_px': jump_val,
             'confidence': confidence,
             'raw_center': raw_center.copy(),
+            'pattern_priority': int(cluster_info.get('pattern_priority', 0)),
+            'pattern_score': int(cluster_info.get('pattern_score', 0)),
+            'left_dots': int(cluster_info.get('left_count', 0)),
+            'right_dots': int(cluster_info.get('right_count', 0)),
         })
 
         if confidence < self.min_confidence:
