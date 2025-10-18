@@ -1297,6 +1297,163 @@ def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return enhanced, gray
 
 
+class MotionForegroundExtractor:
+    """Build a background model and extract foreground masks around the club and ball."""
+
+    def __init__(
+        self,
+        *,
+        min_background_frames: int = 15,
+        learning_rate: float = 0.02,
+        min_component_area: int = 25,
+        max_component_area: int = 150_000,
+    ) -> None:
+        self.min_background_frames = max(1, int(min_background_frames))
+        self.learning_rate = float(learning_rate)
+        self.min_component_area = max(1, int(min_component_area))
+        self.max_component_area = max(self.min_component_area, int(max_component_area))
+        self._accumulator: np.ndarray | None = None
+        self._frames_seen = 0
+
+    def reset(self) -> None:
+        self._accumulator = None
+        self._frames_seen = 0
+
+    def update_background(self, frame: np.ndarray) -> None:
+        if frame is None or frame.size == 0:
+            return
+        frame_f32 = frame.astype(np.float32)
+        if self._accumulator is None:
+            self._accumulator = frame_f32.copy()
+        else:
+            cv2.accumulateWeighted(frame_f32, self._accumulator, self.learning_rate)
+        self._frames_seen += 1
+
+    @property
+    def ready(self) -> bool:
+        return self._accumulator is not None and self._frames_seen >= self.min_background_frames
+
+    def _build_support_mask(
+        self,
+        shape: tuple[int, int],
+        ball_bbox: tuple[float, float, float, float] | None,
+        dot_points: Sequence[tuple[float, float]] | None,
+        club_center: tuple[float, float] | None,
+    ) -> np.ndarray:
+        mask = np.zeros(shape, dtype=np.uint8)
+        if ball_bbox is not None:
+            x1, y1, x2, y2 = ball_bbox
+            cx = int(round((x1 + x2) / 2.0))
+            cy = int(round((y1 + y2) / 2.0))
+            radius = int(round(max(x2 - x1, y2 - y1) * 0.6))
+            radius = max(radius, 6)
+            cv2.circle(mask, (cx, cy), radius, 255, -1, lineType=cv2.LINE_AA)
+        if dot_points:
+            for point in dot_points:
+                try:
+                    u = int(round(float(point[0])))
+                    v = int(round(float(point[1])))
+                except (TypeError, ValueError):
+                    continue
+                cv2.circle(mask, (u, v), 12, 255, -1, lineType=cv2.LINE_AA)
+        if club_center is not None:
+            try:
+                u = int(round(float(club_center[0])))
+                v = int(round(float(club_center[1])))
+            except (TypeError, ValueError):
+                pass
+            else:
+                cv2.circle(mask, (u, v), 18, 255, -1, lineType=cv2.LINE_AA)
+        if np.count_nonzero(mask):
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+            mask = cv2.dilate(mask, kernel, iterations=1)
+        return mask
+
+    def make_mask(
+        self,
+        frame: np.ndarray,
+        *,
+        ball_bbox: tuple[float, float, float, float] | None = None,
+        dot_points: Sequence[tuple[float, float]] | None = None,
+        club_center: tuple[float, float] | None = None,
+    ) -> np.ndarray | None:
+        height, width = frame.shape[:2]
+        support = self._build_support_mask((height, width), ball_bbox, dot_points, club_center)
+        support_pixels = int(np.count_nonzero(support))
+        if not self.ready:
+            return support if support_pixels else None
+
+        if self._accumulator is None or self._accumulator.shape != frame.shape:
+            self.reset()
+            return support if support_pixels else None
+
+        background = cv2.convertScaleAbs(self._accumulator)
+        diff = cv2.absdiff(frame, background)
+        diff_gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+        diff_gray = cv2.GaussianBlur(diff_gray, (5, 5), 0)
+        _, motion_mask = cv2.threshold(diff_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if int(np.count_nonzero(motion_mask)) == 0:
+            _, motion_mask = cv2.threshold(diff_gray, 18, 255, cv2.THRESH_BINARY)
+        motion_mask = cv2.morphologyEx(
+            motion_mask,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+        )
+        motion_mask = cv2.morphologyEx(
+            motion_mask,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+            iterations=2,
+        )
+
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray_blur = cv2.GaussianBlur(gray_frame, (5, 5), 0)
+        mean_val, std_val = cv2.meanStdDev(gray_blur)
+        bright_thresh = float(mean_val) + 1.5 * float(std_val)
+        bright_thresh = max(0.0, min(255.0, bright_thresh))
+        if bright_thresh < 180.0:
+            bright_thresh = 180.0
+        _, bright_mask = cv2.threshold(gray_blur, bright_thresh, 255, cv2.THRESH_BINARY)
+        bright_mask = cv2.dilate(
+            bright_mask,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+            iterations=1,
+        )
+
+        combined = cv2.bitwise_or(motion_mask, bright_mask)
+        if support_pixels:
+            combined = cv2.bitwise_or(combined, support)
+        if int(np.count_nonzero(combined)) == 0:
+            return support if support_pixels else None
+
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(combined)
+        filtered = np.zeros_like(combined)
+        support_bool = support.astype(bool)
+        support_has_pixels = bool(support_pixels)
+        for label in range(1, num_labels):
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            if area < self.min_component_area or area > self.max_component_area:
+                continue
+            component_mask = labels == label
+            if support_has_pixels and not np.any(component_mask & support_bool):
+                continue
+            filtered[component_mask] = 255
+
+        if int(np.count_nonzero(filtered)) == 0:
+            filtered = support.copy()
+        else:
+            filtered = cv2.bitwise_or(filtered, support)
+
+        closing_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        filtered = cv2.morphologyEx(filtered, cv2.MORPH_CLOSE, closing_kernel, iterations=1)
+        filtered = cv2.dilate(
+            filtered,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+            iterations=1,
+        )
+        return filtered if int(np.count_nonzero(filtered)) else None
+
+
 class TFLiteBallDetector:
     """Thin wrapper around the exported YOLOv8 TFLite model with custom post-processing."""
 
@@ -1775,6 +1932,9 @@ def process_video(
     )
 
     clubface_tracker = ClubfaceCentroidTracker()
+    foreground_extractor = MotionForegroundExtractor()
+    dot_points_by_frame: dict[int, list[tuple[float, float]]] = {}
+    club_centers_by_frame: dict[int, tuple[float, float]] = {}
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -1817,14 +1977,22 @@ def process_video(
             break
         orig = frame
         enhanced, _ = preprocess_frame(frame)
+        base_frame = enhanced.copy()
         if h is None:
-            h, w = enhanced.shape[:2]
+            h, w = base_frame.shape[:2]
         ir_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
         ir_gray = CLAHE.apply(ir_gray)
         if USE_BLUR:
             ir_gray = cv2.GaussianBlur(ir_gray, (3, 3), 0)
         t = frame_idx / video_fps
         in_window = inference_start <= frame_idx < inference_end
+
+        dot_points_for_frame = dot_points_by_frame.pop(frame_idx, [])
+        club_center_for_frame = club_centers_by_frame.pop(frame_idx, None)
+        ball_overlay: dict[str, object] | None = None
+        ball_prediction_overlay: dict[str, object] | None = None
+        text_overlays: list[dict[str, object]] = []
+        ball_bbox_for_mask: tuple[float, float, float, float] | None = None
 
         detections: list[dict] = []
         if in_window:
@@ -1861,20 +2029,21 @@ def process_video(
                             }
                         )
                         last_ball_distance = distance
-                        cv2.rectangle(
-                            enhanced, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2
-                        )
-                        cv2.circle(enhanced, (int(cx), int(cy)), int(rad), (0, 255, 0), 2)
-                        cv2.putText(
-                            enhanced,
-                            f"x:{bx:.2f} y:{by:.2f} z:{bz:.2f}",
-                            (int(cx) + 10, int(cy)),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.5,
-                            (0, 255, 0),
-                            1,
-                            cv2.LINE_AA,
-                        )
+                        ball_overlay = {
+                            "bbox": (
+                                int(round(x1)),
+                                int(round(y1)),
+                                int(round(x2)),
+                                int(round(y2)),
+                            ),
+                            "center": (int(round(cx)), int(round(cy))),
+                            "radius": int(round(rad)),
+                            "text": {
+                                "value": f"x:{bx:.2f} y:{by:.2f} z:{bz:.2f}",
+                                "position": (int(round(cx)) + 10, int(round(cy))),
+                            },
+                        }
+                        ball_bbox_for_mask = (x1, y1, x2, y2)
                         if last_ball_center is not None:
                             ball_velocity = center - last_ball_center
                         last_ball_center = center
@@ -1887,7 +2056,17 @@ def process_video(
                 if np.linalg.norm(motion) <= MAX_CENTER_JUMP_PX:
                     cx, cy = last_ball_center + motion
                     radius = last_ball_radius
-                    cv2.circle(enhanced, (int(cx), int(cy)), int(radius), (0, 255, 255), 2)
+                    center_int = (int(round(cx)), int(round(cy)))
+                    ball_prediction_overlay = {
+                        "center": center_int,
+                        "radius": int(round(radius)),
+                    }
+                    ball_bbox_for_mask = (
+                        float(cx - radius),
+                        float(cy - radius),
+                        float(cx + radius),
+                        float(cy + radius),
+                    )
 
         current_mean = float(ir_gray.mean())
         if prev_ir_gray is not None and prev_ir_idx is not None and prev_ir_time is not None:
@@ -1929,6 +2108,9 @@ def process_video(
                     if not (np.isfinite(du) and np.isfinite(dv)):
                         continue
                     dot_centroids.append((du, dv))
+                if dot_centroids and on_idx == frame_idx:
+                    dot_points_for_frame = dot_centroids
+                    dot_points_by_frame[frame_idx + 1] = dot_centroids
                 observation, metrics = clubface_tracker.update(
                     dot_detections,
                     approx_depth_cm=last_ball_distance,
@@ -1969,22 +2151,72 @@ def process_video(
                         sample_entry["center_px"] = (u, v)
                         clubface_samples_by_frame[on_idx].append(sample_entry)
                         if on_idx == frame_idx:
-                            cv2.putText(
-                                enhanced,
-                                f"X:{x_cm:.2f} Y:{y_cm:.2f} Z:{z_cm:.2f}",
-                                (int(u) + 8, int(v) - 8),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.45,
-                                (255, 0, 0),
-                                1,
-                                cv2.LINE_AA,
+                            club_center_for_frame = (u, v)
+                            club_centers_by_frame[frame_idx + 1] = (u, v)
+                            text_overlays.append(
+                                {
+                                    "value": f"X:{x_cm:.2f} Y:{y_cm:.2f} Z:{z_cm:.2f}",
+                                    "position": (int(round(u)) + 8, int(round(v)) - 8),
+                                    "color": (255, 0, 0),
+                                    "scale": 0.45,
+                                    "thickness": 1,
+                                }
                             )
                 elif "dot_centroids" in sample_entry:
                     clubface_samples_by_frame[on_idx].append(sample_entry)
 
+        if frame_idx < inference_start or frame_idx >= inference_end:
+            foreground_extractor.update_background(base_frame)
+
+        mask = None
+        if in_window:
+            mask = foreground_extractor.make_mask(
+                base_frame,
+                ball_bbox=ball_bbox_for_mask,
+                dot_points=dot_points_for_frame,
+                club_center=club_center_for_frame,
+            )
+        if mask is not None:
+            output_frame = cv2.bitwise_and(base_frame, base_frame, mask=mask)
+        else:
+            output_frame = base_frame.copy()
+
+        if ball_overlay is not None:
+            x1, y1, x2, y2 = ball_overlay["bbox"]
+            cx_i, cy_i = ball_overlay["center"]
+            radius_i = ball_overlay["radius"]
+            text_meta = ball_overlay["text"]
+            cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.circle(output_frame, (cx_i, cy_i), radius_i, (0, 255, 0), 2)
+            cv2.putText(
+                output_frame,
+                text_meta["value"],
+                (int(text_meta["position"][0]), int(text_meta["position"][1])),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA,
+            )
+        if ball_prediction_overlay is not None:
+            center_pred = ball_prediction_overlay["center"]
+            radius_pred = ball_prediction_overlay["radius"]
+            cv2.circle(output_frame, center_pred, radius_pred, (0, 255, 255), 2)
+        for text_meta in text_overlays:
+            cv2.putText(
+                output_frame,
+                text_meta["value"],
+                (int(text_meta["position"][0]), int(text_meta["position"][1])),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                float(text_meta.get("scale", 0.45)),
+                text_meta.get("color", (255, 0, 0)),
+                int(text_meta.get("thickness", 1)),
+                cv2.LINE_AA,
+            )
+
         if frames_dir and inference_start <= frame_idx < inference_end:
             cv2.imwrite(
-                os.path.join(frames_dir, f"frame_{frame_idx:04d}.png"), enhanced
+                os.path.join(frames_dir, f"frame_{frame_idx:04d}.png"), output_frame
             )
 
         prev_ir_gray = ir_gray
@@ -2028,7 +2260,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_200exp1.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_200exp.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
