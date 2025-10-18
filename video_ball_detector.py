@@ -122,6 +122,12 @@ CLUBFACE_VERTICAL_SPACING_CM = 2.0
 CLUBFACE_HORIZONTAL_SPACING_CM = 6.5
 CLUBFACE_COLUMN_SPLIT_PX = 10.0
 CLUBFACE_COLUMN_MAX_X_SPREAD_PX = 15.0
+CLUBFACE_MIN_COLUMN_GAP_PX = 36.0
+CLUBFACE_MIN_COLUMN_PAIR_GAP_PX = 24.0
+CLUBFACE_MIN_HULL_AREA_PX = 2200.0
+CLUBFACE_MIN_VERTICAL_SPAN_PX = 55.0
+CLUBFACE_MAX_COLUMN_CURVE_RMSE_PX = 4.0
+CLUBFACE_MAX_COLUMN_CURVE_ABS_PX = 6.5
 CLUBFACE_DEPTH_MIN_CM = 10.0
 CLUBFACE_DEPTH_MAX_CM = 400.0
 CLUBFACE_CENTER_OFFSET_CM = CLUBFACE_HORIZONTAL_SPACING_CM / 2.0
@@ -219,6 +225,49 @@ class ClubfaceCentroidTracker:
             return 0.0
         return float(distances.max())
 
+    @staticmethod
+    def _fit_quadratic_column(points: np.ndarray) -> tuple[np.ndarray, float, float, float]:
+        count = points.shape[0]
+        if count == 0:
+            return np.ones(0, dtype=bool), 0.0, 0.0, 0.0
+        if count <= 2:
+            return np.ones(count, dtype=bool), 0.0, 0.0, float(CLUBFACE_MAX_COLUMN_CURVE_ABS_PX)
+        y = points[:, 1]
+        x = points[:, 0]
+        try:
+            coeffs = np.polyfit(y, x, 2)
+        except Exception:
+            return np.zeros(count, dtype=bool), float("inf"), float("inf"), float("inf")
+        predicted = np.polyval(coeffs, y)
+        residuals = x - predicted
+        abs_residuals = np.abs(residuals)
+        median_residual = float(np.median(residuals)) if residuals.size else 0.0
+        mad = float(np.median(np.abs(residuals - median_residual))) if residuals.size else 0.0
+        robust_sigma = 1.4826 * mad if mad > 1e-6 else 0.0
+        dynamic_thresh = max(
+            CLUBFACE_MAX_COLUMN_CURVE_ABS_PX,
+            3.5 * robust_sigma,
+            8.0,
+        )
+        keep = abs_residuals <= dynamic_thresh
+        min_keep = max(2, int(np.ceil(0.6 * count)))
+        if keep.sum() < min_keep:
+            sorted_indices = np.argsort(abs_residuals)
+            keep = np.zeros(count, dtype=bool)
+            keep[sorted_indices[:min_keep]] = True
+            dynamic_thresh = max(
+                dynamic_thresh,
+                float(abs_residuals[sorted_indices[:min_keep]].max()),
+            )
+        kept_residuals = residuals[keep]
+        kept_abs = abs_residuals[keep]
+        if kept_residuals.size == 0:
+            kept_residuals = residuals
+            kept_abs = abs_residuals
+        rmse = float(np.sqrt(np.mean(kept_residuals ** 2))) if kept_residuals.size else 0.0
+        max_dev = float(kept_abs.max()) if kept_abs.size else 0.0
+        return keep.astype(bool), rmse, max_dev, float(dynamic_thresh)
+
     def _pattern_metrics(self, points: np.ndarray) -> dict[str, object]:
         metrics: dict[str, object] = {
             'pattern_priority': 0,
@@ -233,13 +282,53 @@ class ClubfaceCentroidTracker:
             'left_span_px': None,
             'right_span_px': None,
             'column_gap_px': None,
+            'column_pair_gap_px': None,
+            'hull_area_px': None,
+            'vertical_span_px': None,
+            'curve_left_threshold_px': None,
+            'curve_right_threshold_px': None,
         }
         if points.size == 0:
             return metrics
 
         left_idx, right_idx = self._split_columns(points)
-        left_points = points[left_idx] if left_idx.size else np.empty((0, 2), dtype=np.float32)
-        right_points = points[right_idx] if right_idx.size else np.empty((0, 2), dtype=np.float32)
+        left_points_raw = points[left_idx] if left_idx.size else np.empty((0, 2), dtype=np.float32)
+        right_points_raw = points[right_idx] if right_idx.size else np.empty((0, 2), dtype=np.float32)
+
+        curve_mask = np.ones(points.shape[0], dtype=bool)
+
+        left_keep, left_rmse, left_max_dev, left_threshold = self._fit_quadratic_column(left_points_raw)
+        right_keep, right_rmse, right_max_dev, right_threshold = self._fit_quadratic_column(right_points_raw)
+
+        metrics['curve_left_rmse'] = float(left_rmse)
+        metrics['curve_left_max_dev'] = float(left_max_dev)
+        metrics['curve_right_rmse'] = float(right_rmse)
+        metrics['curve_right_max_dev'] = float(right_max_dev)
+        metrics['curve_left_threshold_px'] = float(left_threshold)
+        metrics['curve_right_threshold_px'] = float(right_threshold)
+
+        left_valid_curve = bool(
+            left_points_raw.shape[0] <= 2
+            or left_keep.sum() >= max(2, int(np.ceil(0.6 * max(1, left_points_raw.shape[0]))))
+        )
+        right_valid_curve = bool(
+            right_points_raw.shape[0] <= 2
+            or right_keep.sum() >= max(2, int(np.ceil(0.6 * max(1, right_points_raw.shape[0]))))
+        )
+        metrics['curve_left_ok'] = left_valid_curve
+        metrics['curve_right_ok'] = right_valid_curve
+
+        if left_idx.size and left_keep.size:
+            for local_idx, keep_val in enumerate(left_keep):
+                if not keep_val:
+                    curve_mask[left_idx[local_idx]] = False
+        if right_idx.size and right_keep.size:
+            for local_idx, keep_val in enumerate(right_keep):
+                if not keep_val:
+                    curve_mask[right_idx[local_idx]] = False
+
+        left_points = left_points_raw[left_keep] if left_keep.size else left_points_raw
+        right_points = right_points_raw[right_keep] if right_keep.size else right_points_raw
 
         left_count = int(left_points.shape[0])
         right_count = int(right_points.shape[0])
@@ -259,9 +348,35 @@ class ClubfaceCentroidTracker:
 
         columns_present = left_count > 0 and right_count > 0
         column_gap = None
+        column_pair_gap = None
+        hull_area = None
+        vertical_span = None
         if columns_present:
-            column_gap = abs(float(left_points[:, 0].mean()) - float(right_points[:, 0].mean()))
+            left_max = float(left_points[:, 0].max())
+            right_min = float(right_points[:, 0].min())
+            column_gap = right_min - left_max
             metrics['column_gap_px'] = column_gap
+            left_sorted = left_points[np.argsort(left_points[:, 1])]
+            right_sorted = right_points[np.argsort(right_points[:, 1])]
+            min_pair_gap = float('inf')
+            for lp in left_sorted:
+                y_diff = np.abs(right_sorted[:, 1] - lp[1])
+                idx = int(np.argmin(y_diff))
+                gap_val = float(right_sorted[idx, 0] - lp[0])
+                if gap_val < min_pair_gap:
+                    min_pair_gap = gap_val
+            if min_pair_gap != float('inf'):
+                column_pair_gap = min_pair_gap
+                metrics['column_pair_gap_px'] = column_pair_gap
+            all_points = np.vstack((left_points, right_points))
+            if all_points.shape[0] >= 3:
+                hull = cv2.convexHull(all_points.astype(np.float32))
+                hull_area = float(cv2.contourArea(hull))
+            elif all_points.size:
+                hull_area = 0.0
+            vertical_span = float(np.ptp(all_points[:, 1])) if all_points.shape[0] else 0.0
+            metrics['hull_area_px'] = hull_area
+            metrics['vertical_span_px'] = vertical_span
 
         metrics['pattern_score'] = min(left_count, 4) + min(right_count, 2)
 
@@ -301,8 +416,23 @@ class ClubfaceCentroidTracker:
             (left_count == 0 or left_span <= CLUBFACE_COLUMN_MAX_X_SPREAD_PX)
             and (right_count == 0 or right_span <= CLUBFACE_COLUMN_MAX_X_SPREAD_PX)
         )
-        gap_ok = column_gap is not None and column_gap >= CLUBFACE_COLUMN_SPLIT_PX
-        metrics['pattern_valid'] = bool(columns_present and allowed_left and allowed_right and span_ok and gap_ok)
+        gap_ok = column_gap is not None and column_gap >= CLUBFACE_MIN_COLUMN_GAP_PX
+        pair_gap_ok = column_pair_gap is not None and column_pair_gap >= CLUBFACE_MIN_COLUMN_PAIR_GAP_PX
+        area_ok = hull_area is not None and hull_area >= CLUBFACE_MIN_HULL_AREA_PX
+        vertical_ok = vertical_span is not None and vertical_span >= CLUBFACE_MIN_VERTICAL_SPAN_PX
+        metrics['pattern_valid'] = bool(
+            columns_present
+            and allowed_left
+            and allowed_right
+            and span_ok
+            and gap_ok
+            and pair_gap_ok
+            and area_ok
+            and vertical_ok
+            and left_valid_curve
+            and right_valid_curve
+        )
+        metrics['curve_mask'] = curve_mask.tolist() if curve_mask.size else []
         return metrics
 
     def _select_cluster_mask(
@@ -330,15 +460,48 @@ class ClubfaceCentroidTracker:
         best_invalid_center: np.ndarray | None = None
 
         for mask_int in range(1, 1 << count_points):
-            used = mask_int.bit_count()
-            if used < self.min_dots:
+            used_bits = mask_int.bit_count()
+            if used_bits < self.min_dots:
                 continue
             mask = np.array([(mask_int >> idx) & 1 for idx in range(count_points)], dtype=bool)
+            subset_indices = np.flatnonzero(mask)
+            subset_points = points[subset_indices]
+            subset_weights = weights[subset_indices]
+            if subset_points.size == 0:
+                continue
+
+            while True:
+                pattern_info = self._pattern_metrics(subset_points)
+                curve_mask_subset = pattern_info.get('curve_mask')
+                if curve_mask_subset is None:
+                    break
+                curve_mask_subset = np.array(curve_mask_subset, dtype=bool)
+                if curve_mask_subset.size == 0 or curve_mask_subset.all():
+                    break
+                if not curve_mask_subset.any():
+                    subset_points = np.empty((0, 2), dtype=np.float32)
+                    break
+                subset_indices = subset_indices[curve_mask_subset]
+                subset_points = subset_points[curve_mask_subset]
+                subset_weights = subset_weights[curve_mask_subset]
+                mask = np.zeros(count_points, dtype=bool)
+                mask[subset_indices] = True
+                if subset_points.shape[0] < self.min_dots:
+                    subset_points = np.empty((0, 2), dtype=np.float32)
+                    break
+
+            if subset_points.size == 0:
+                continue
+
+            used = int(mask.sum())
+            if used < self.min_dots:
+                continue
+
             center_candidate = self._weighted_center(points, weights, mask)
             if center_candidate is None:
                 continue
+
             spread = self._cluster_spread(points, mask, center_candidate)
-            subset_points = points[mask]
             pattern_info = self._pattern_metrics(subset_points)
             pattern_valid = bool(pattern_info.get('pattern_valid'))
             priority = int(pattern_info['pattern_priority'])
@@ -348,7 +511,7 @@ class ClubfaceCentroidTracker:
                 invalid_score = (
                     int(pattern_info.get('pattern_score', 0)),
                     used,
-                    float(weights[mask].sum()),
+                    float(subset_weights.sum()),
                     -float(spread),
                 )
                 if best_invalid_score is None or invalid_score > best_invalid_score:
@@ -359,12 +522,12 @@ class ClubfaceCentroidTracker:
                         **pattern_info,
                         'spread': float(spread),
                         'count': used,
-                        'total_weight': float(weights[mask].sum()),
+                        'total_weight': float(subset_weights.sum()),
                         'pattern_valid': False,
                     }
                 continue
 
-            total_weight = float(weights[mask].sum())
+            total_weight = float(subset_weights.sum())
             pattern_score = int(pattern_info['pattern_score'])
             horizontal_bonus = 1 if pattern_info.get('has_horizontal') else 0
             alignment_val = pattern_info.get('best_alignment')
@@ -481,6 +644,18 @@ class ClubfaceCentroidTracker:
                 'left_dots': int(cluster_info.get('left_count', 0)),
                 'right_dots': int(cluster_info.get('right_count', 0)),
                 'pattern_valid': False,
+                'column_gap_px': (float(cluster_info['column_gap_px']) if cluster_info.get('column_gap_px') is not None else None),
+                'column_pair_gap_px': (float(cluster_info['column_pair_gap_px']) if cluster_info.get('column_pair_gap_px') is not None else None),
+                'hull_area_px': (float(cluster_info['hull_area_px']) if cluster_info.get('hull_area_px') is not None else None),
+                'vertical_span_px': (float(cluster_info['vertical_span_px']) if cluster_info.get('vertical_span_px') is not None else None),
+                'curve_left_rmse': (float(cluster_info['curve_left_rmse']) if cluster_info.get('curve_left_rmse') is not None else None),
+                'curve_right_rmse': (float(cluster_info['curve_right_rmse']) if cluster_info.get('curve_right_rmse') is not None else None),
+                'curve_left_max_dev': (float(cluster_info['curve_left_max_dev']) if cluster_info.get('curve_left_max_dev') is not None else None),
+                'curve_right_max_dev': (float(cluster_info['curve_right_max_dev']) if cluster_info.get('curve_right_max_dev') is not None else None),
+                'curve_left_threshold_px': (float(cluster_info['curve_left_threshold_px']) if cluster_info.get('curve_left_threshold_px') is not None else None),
+                'curve_right_threshold_px': (float(cluster_info['curve_right_threshold_px']) if cluster_info.get('curve_right_threshold_px') is not None else None),
+                'curve_left_ok': bool(cluster_info.get('curve_left_ok', False)),
+                'curve_right_ok': bool(cluster_info.get('curve_right_ok', False)),
             })
             self._register_miss()
             return None, metrics
@@ -517,6 +692,18 @@ class ClubfaceCentroidTracker:
             'left_dots': int(cluster_info.get('left_count', 0)),
             'right_dots': int(cluster_info.get('right_count', 0)),
             'pattern_valid': True,
+            'column_gap_px': (float(cluster_info['column_gap_px']) if cluster_info.get('column_gap_px') is not None else None),
+            'column_pair_gap_px': (float(cluster_info['column_pair_gap_px']) if cluster_info.get('column_pair_gap_px') is not None else None),
+            'hull_area_px': (float(cluster_info['hull_area_px']) if cluster_info.get('hull_area_px') is not None else None),
+            'vertical_span_px': (float(cluster_info['vertical_span_px']) if cluster_info.get('vertical_span_px') is not None else None),
+            'curve_left_rmse': (float(cluster_info['curve_left_rmse']) if cluster_info.get('curve_left_rmse') is not None else None),
+            'curve_right_rmse': (float(cluster_info['curve_right_rmse']) if cluster_info.get('curve_right_rmse') is not None else None),
+            'curve_left_max_dev': (float(cluster_info['curve_left_max_dev']) if cluster_info.get('curve_left_max_dev') is not None else None),
+            'curve_right_max_dev': (float(cluster_info['curve_right_max_dev']) if cluster_info.get('curve_right_max_dev') is not None else None),
+            'curve_left_threshold_px': (float(cluster_info['curve_left_threshold_px']) if cluster_info.get('curve_left_threshold_px') is not None else None),
+            'curve_right_threshold_px': (float(cluster_info['curve_right_threshold_px']) if cluster_info.get('curve_right_threshold_px') is not None else None),
+            'curve_left_ok': bool(cluster_info.get('curve_left_ok', False)),
+            'curve_right_ok': bool(cluster_info.get('curve_right_ok', False)),
         })
 
         if confidence < self.min_confidence:
