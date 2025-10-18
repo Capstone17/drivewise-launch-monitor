@@ -121,6 +121,7 @@ CLUBFACE_MIN_CONFIDENCE = 0.35
 CLUBFACE_VERTICAL_SPACING_CM = 2.0
 CLUBFACE_HORIZONTAL_SPACING_CM = 6.5
 CLUBFACE_COLUMN_SPLIT_PX = 10.0
+CLUBFACE_COLUMN_MAX_X_SPREAD_PX = 15.0
 CLUBFACE_DEPTH_MIN_CM = 10.0
 CLUBFACE_DEPTH_MAX_CM = 400.0
 CLUBFACE_CENTER_OFFSET_CM = CLUBFACE_HORIZONTAL_SPACING_CM / 2.0
@@ -228,6 +229,10 @@ class ClubfaceCentroidTracker:
             'vertical_left_pairs': 0,
             'vertical_right_pairs': 0,
             'best_alignment': None,
+            'pattern_valid': False,
+            'left_span_px': None,
+            'right_span_px': None,
+            'column_gap_px': None,
         }
         if points.size == 0:
             return metrics
@@ -240,6 +245,24 @@ class ClubfaceCentroidTracker:
         right_count = int(right_points.shape[0])
         metrics['left_count'] = left_count
         metrics['right_count'] = right_count
+
+        if left_count:
+            left_span = float(np.ptp(left_points[:, 0])) if left_points.shape[0] > 1 else 0.0
+            metrics['left_span_px'] = left_span
+        else:
+            left_span = 0.0
+        if right_count:
+            right_span = float(np.ptp(right_points[:, 0])) if right_points.shape[0] > 1 else 0.0
+            metrics['right_span_px'] = right_span
+        else:
+            right_span = 0.0
+
+        columns_present = left_count > 0 and right_count > 0
+        column_gap = None
+        if columns_present:
+            column_gap = abs(float(left_points[:, 0].mean()) - float(right_points[:, 0].mean()))
+            metrics['column_gap_px'] = column_gap
+
         metrics['pattern_score'] = min(left_count, 4) + min(right_count, 2)
 
         candidates = self._build_depth_candidates(left_points, right_points)
@@ -272,6 +295,14 @@ class ClubfaceCentroidTracker:
             pattern_priority = 1
 
         metrics['pattern_priority'] = pattern_priority
+        allowed_left = left_count in {2, 3, 4}
+        allowed_right = right_count in {1, 2}
+        span_ok = (
+            (left_count == 0 or left_span <= CLUBFACE_COLUMN_MAX_X_SPREAD_PX)
+            and (right_count == 0 or right_span <= CLUBFACE_COLUMN_MAX_X_SPREAD_PX)
+        )
+        gap_ok = column_gap is not None and column_gap >= CLUBFACE_COLUMN_SPLIT_PX
+        metrics['pattern_valid'] = bool(columns_present and allowed_left and allowed_right and span_ok and gap_ok)
         return metrics
 
     def _select_cluster_mask(
@@ -293,6 +324,10 @@ class ClubfaceCentroidTracker:
         best_mask: np.ndarray | None = None
         best_info: dict[str, object] = {}
         best_center: np.ndarray | None = None
+        best_invalid_score: tuple | None = None
+        best_invalid_mask: np.ndarray | None = None
+        best_invalid_info: dict[str, object] = {}
+        best_invalid_center: np.ndarray | None = None
 
         for mask_int in range(1, 1 << count_points):
             used = mask_int.bit_count()
@@ -305,8 +340,28 @@ class ClubfaceCentroidTracker:
             spread = self._cluster_spread(points, mask, center_candidate)
             subset_points = points[mask]
             pattern_info = self._pattern_metrics(subset_points)
+            pattern_valid = bool(pattern_info.get('pattern_valid'))
             priority = int(pattern_info['pattern_priority'])
             if spread > self.max_spread_px and priority == 0:
+                continue
+            if not pattern_valid:
+                invalid_score = (
+                    int(pattern_info.get('pattern_score', 0)),
+                    used,
+                    float(weights[mask].sum()),
+                    -float(spread),
+                )
+                if best_invalid_score is None or invalid_score > best_invalid_score:
+                    best_invalid_score = invalid_score
+                    best_invalid_mask = mask
+                    best_invalid_center = center_candidate.astype(np.float32, copy=True)
+                    best_invalid_info = {
+                        **pattern_info,
+                        'spread': float(spread),
+                        'count': used,
+                        'total_weight': float(weights[mask].sum()),
+                        'pattern_valid': False,
+                    }
                 continue
 
             total_weight = float(weights[mask].sum())
@@ -333,19 +388,28 @@ class ClubfaceCentroidTracker:
                     'spread': float(spread),
                     'count': used,
                     'total_weight': total_weight,
+                    'pattern_valid': True,
                 }
 
         if best_mask is None:
-            fallback_mask = np.ones(count_points, dtype=bool)
-            center_candidate = self._weighted_center(points, weights, fallback_mask)
-            fallback_spread = self._cluster_spread(points, fallback_mask, center_candidate) if center_candidate is not None else 0.0
-            return fallback_mask, {
+            if best_invalid_mask is not None:
+                return best_invalid_mask, best_invalid_info, best_invalid_center
+            fallback_mask = np.zeros(count_points, dtype=bool)
+            fallback_info = {
                 'pattern_priority': 0,
-                'pattern_score': count_points,
-                'spread': float(fallback_spread),
-                'count': count_points,
-                'total_weight': float(weights.sum()),
-            }, center_candidate
+                'pattern_score': 0,
+                'spread': 0.0,
+                'count': 0,
+                'total_weight': 0.0,
+                'pattern_valid': False,
+                'left_count': 0,
+                'right_count': 0,
+                'has_horizontal': False,
+                'vertical_left_pairs': 0,
+                'vertical_right_pairs': 0,
+                'best_alignment': None,
+            }
+            return fallback_mask, fallback_info, None
 
         return best_mask, best_info, best_center
 
@@ -378,6 +442,7 @@ class ClubfaceCentroidTracker:
             'confidence': 0.0,
             'depth_cm': None,
             'depth_source': None,
+            'pattern_valid': False,
         }
         if not detections:
             self._register_miss()
@@ -405,6 +470,18 @@ class ClubfaceCentroidTracker:
         if used < self.min_dots:
             metrics['status'] = 'insufficient_dots'
             metrics['used_dots'] = used
+            self._register_miss()
+            return None, metrics
+        if not bool(cluster_info.get('pattern_valid', False)):
+            metrics.update({
+                'status': 'pattern_rejected',
+                'used_dots': used,
+                'pattern_priority': int(cluster_info.get('pattern_priority', 0)),
+                'pattern_score': int(cluster_info.get('pattern_score', 0)),
+                'left_dots': int(cluster_info.get('left_count', 0)),
+                'right_dots': int(cluster_info.get('right_count', 0)),
+                'pattern_valid': False,
+            })
             self._register_miss()
             return None, metrics
         if center is None:
@@ -439,6 +516,7 @@ class ClubfaceCentroidTracker:
             'pattern_score': int(cluster_info.get('pattern_score', 0)),
             'left_dots': int(cluster_info.get('left_count', 0)),
             'right_dots': int(cluster_info.get('right_count', 0)),
+            'pattern_valid': True,
         })
 
         if confidence < self.min_confidence:
