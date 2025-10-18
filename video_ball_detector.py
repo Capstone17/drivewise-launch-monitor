@@ -128,6 +128,7 @@ CLUBFACE_MIN_HULL_AREA_PX = 2200.0
 CLUBFACE_MIN_VERTICAL_SPAN_PX = 55.0
 CLUBFACE_MAX_COLUMN_CURVE_RMSE_PX = 4.0
 CLUBFACE_MAX_COLUMN_CURVE_ABS_PX = 6.5
+CLUBFACE_TRAJECTORY_POLY_DEGREE = 2
 CLUBFACE_DEPTH_MIN_CM = 10.0
 CLUBFACE_DEPTH_MAX_CM = 400.0
 CLUBFACE_CENTER_OFFSET_CM = CLUBFACE_HORIZONTAL_SPACING_CM / 2.0
@@ -1290,7 +1291,7 @@ def refine_clubface_trajectory(coords: list[dict[str, float]]) -> RefinedTraject
         dtype=np.float64,
     )
 
-    degree_target = min(5, max(1, times.size - 1))
+    degree_target = min(CLUBFACE_TRAJECTORY_POLY_DEGREE, max(1, times.size - 1))
     coeff_x, _, mask_x = _robust_polyfit(times, xs, degree=degree_target)
     coeff_y, _, mask_y = _robust_polyfit(times, ys, degree=degree_target)
     coeff_z, _, mask_z = _robust_polyfit(times, zs, degree=degree_target)
