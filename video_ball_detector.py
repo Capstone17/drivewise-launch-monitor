@@ -4,7 +4,7 @@ import os
 import sys
 import time
 import warnings
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -1305,19 +1305,30 @@ class MotionForegroundExtractor:
         *,
         min_background_frames: int = 15,
         learning_rate: float = 0.02,
-        min_component_area: int = 25,
+        min_component_area: int = 60,
         max_component_area: int = 150_000,
+        history_length: int = 3,
+        persistence_threshold: int = 2,
+        median_kernel_size: int = 5,
     ) -> None:
         self.min_background_frames = max(1, int(min_background_frames))
         self.learning_rate = float(learning_rate)
         self.min_component_area = max(1, int(min_component_area))
         self.max_component_area = max(self.min_component_area, int(max_component_area))
+        self.history_length = max(1, int(history_length))
+        self.persistence_threshold = max(1, min(self.history_length, int(persistence_threshold)))
+        kernel = max(1, int(median_kernel_size))
+        if kernel % 2 == 0:
+            kernel += 1
+        self.median_kernel_size = kernel
         self._accumulator: np.ndarray | None = None
         self._frames_seen = 0
+        self._history: deque[np.ndarray] = deque(maxlen=self.history_length)
 
     def reset(self) -> None:
         self._accumulator = None
         self._frames_seen = 0
+        self._history.clear()
 
     def update_background(self, frame: np.ndarray) -> None:
         if frame is None or frame.size == 0:
@@ -1339,15 +1350,9 @@ class MotionForegroundExtractor:
         ball_bbox: tuple[float, float, float, float] | None,
         dot_points: Sequence[tuple[float, float]] | None,
         club_center: tuple[float, float] | None,
-    ) -> np.ndarray:
-        mask = np.zeros(shape, dtype=np.uint8)
-        if ball_bbox is not None:
-            x1, y1, x2, y2 = ball_bbox
-            cx = int(round((x1 + x2) / 2.0))
-            cy = int(round((y1 + y2) / 2.0))
-            radius = int(round(max(x2 - x1, y2 - y1) * 0.6))
-            radius = max(radius, 6)
-            cv2.circle(mask, (cx, cy), radius, 255, -1, lineType=cv2.LINE_AA)
+    ) -> tuple[np.ndarray, np.ndarray]:
+        support = np.zeros(shape, dtype=np.uint8)
+        ball_mask = np.zeros(shape, dtype=np.uint8)
         if dot_points:
             for point in dot_points:
                 try:
@@ -1355,7 +1360,7 @@ class MotionForegroundExtractor:
                     v = int(round(float(point[1])))
                 except (TypeError, ValueError):
                     continue
-                cv2.circle(mask, (u, v), 12, 255, -1, lineType=cv2.LINE_AA)
+                cv2.circle(support, (u, v), 12, 255, -1, lineType=cv2.LINE_AA)
         if club_center is not None:
             try:
                 u = int(round(float(club_center[0])))
@@ -1363,11 +1368,21 @@ class MotionForegroundExtractor:
             except (TypeError, ValueError):
                 pass
             else:
-                cv2.circle(mask, (u, v), 18, 255, -1, lineType=cv2.LINE_AA)
-        if np.count_nonzero(mask):
+                cv2.circle(support, (u, v), 18, 255, -1, lineType=cv2.LINE_AA)
+        if ball_bbox is not None:
+            x1, y1, x2, y2 = ball_bbox
+            cx = int(round((x1 + x2) / 2.0))
+            cy = int(round((y1 + y2) / 2.0))
+            radius = int(round(max(x2 - x1, y2 - y1) * 0.65))
+            radius = max(radius, 6)
+            cv2.circle(ball_mask, (cx, cy), radius, 255, -1, lineType=cv2.LINE_AA)
+        if np.count_nonzero(support):
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-            mask = cv2.dilate(mask, kernel, iterations=1)
-        return mask
+            support = cv2.dilate(support, kernel, iterations=1)
+        if np.count_nonzero(ball_mask):
+            kernel_ball = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+            ball_mask = cv2.dilate(ball_mask, kernel_ball, iterations=1)
+        return support, ball_mask
 
     def make_mask(
         self,
@@ -1378,14 +1393,25 @@ class MotionForegroundExtractor:
         club_center: tuple[float, float] | None = None,
     ) -> np.ndarray | None:
         height, width = frame.shape[:2]
-        support = self._build_support_mask((height, width), ball_bbox, dot_points, club_center)
+        support, ball_support = self._build_support_mask((height, width), ball_bbox, dot_points, club_center)
         support_pixels = int(np.count_nonzero(support))
+        ball_pixels = int(np.count_nonzero(ball_support))
         if not self.ready:
-            return support if support_pixels else None
+            if support_pixels or ball_pixels:
+                preliminary = cv2.bitwise_or(support, ball_support)
+                if ball_pixels:
+                    preliminary = cv2.bitwise_and(preliminary, cv2.bitwise_not(ball_support))
+                return preliminary if int(np.count_nonzero(preliminary)) else None
+            return None
 
         if self._accumulator is None or self._accumulator.shape != frame.shape:
             self.reset()
-            return support if support_pixels else None
+            if support_pixels or ball_pixels:
+                preliminary = cv2.bitwise_or(support, ball_support)
+                if ball_pixels:
+                    preliminary = cv2.bitwise_and(preliminary, cv2.bitwise_not(ball_support))
+                return preliminary if int(np.count_nonzero(preliminary)) else None
+            return None
 
         background = cv2.convertScaleAbs(self._accumulator)
         diff = cv2.absdiff(frame, background)
@@ -1405,6 +1431,8 @@ class MotionForegroundExtractor:
             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
             iterations=2,
         )
+        if self.median_kernel_size > 1:
+            motion_mask = cv2.medianBlur(motion_mask, self.median_kernel_size)
 
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray_blur = cv2.GaussianBlur(gray_frame, (5, 5), 0)
@@ -1423,11 +1451,26 @@ class MotionForegroundExtractor:
         combined = cv2.bitwise_or(motion_mask, bright_mask)
         if support_pixels:
             combined = cv2.bitwise_or(combined, support)
+        if ball_pixels:
+            combined = cv2.bitwise_or(combined, ball_support)
         if int(np.count_nonzero(combined)) == 0:
-            return support if support_pixels else None
+            return None
 
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(combined)
-        filtered = np.zeros_like(combined)
+        if self.history_length > 1:
+            current_binary = (combined > 0).astype(np.uint8)
+            if self._history and self._history[0].shape != current_binary.shape:
+                self._history.clear()
+            self._history.append(current_binary)
+            accum = np.zeros_like(current_binary, dtype=np.uint16)
+            for past in self._history:
+                accum += past
+            stable = np.where(accum >= self.persistence_threshold, 255, 0).astype(np.uint8)
+        else:
+            stable = combined
+
+        bright_bool = bright_mask.astype(bool)
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(stable)
+        filtered = np.zeros_like(stable)
         support_bool = support.astype(bool)
         support_has_pixels = bool(support_pixels)
         for label in range(1, num_labels):
@@ -1437,13 +1480,23 @@ class MotionForegroundExtractor:
             component_mask = labels == label
             if support_has_pixels and not np.any(component_mask & support_bool):
                 continue
+            if not np.any(component_mask & bright_bool):
+                continue
             filtered[component_mask] = 255
 
-        if int(np.count_nonzero(filtered)) == 0:
+        if int(np.count_nonzero(filtered)) == 0 and support_has_pixels:
             filtered = support.copy()
         else:
             filtered = cv2.bitwise_or(filtered, support)
 
+        if ball_pixels:
+            filtered = cv2.bitwise_and(filtered, cv2.bitwise_not(ball_support))
+
+        filtered = cv2.morphologyEx(
+            filtered,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+        )
         closing_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
         filtered = cv2.morphologyEx(filtered, cv2.MORPH_CLOSE, closing_kernel, iterations=1)
         filtered = cv2.dilate(
@@ -1451,7 +1504,21 @@ class MotionForegroundExtractor:
             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
             iterations=1,
         )
-        return filtered if int(np.count_nonzero(filtered)) else None
+        nonzero = int(np.count_nonzero(filtered))
+        if nonzero == 0:
+            return None
+
+        num_labels_final, labels_final, stats_final, _ = cv2.connectedComponentsWithStats(filtered)
+        if num_labels_final <= 1:
+            return filtered
+        areas_final = stats_final[1:, cv2.CC_STAT_AREA]
+        if areas_final.size == 0:
+            return None
+        largest_label = 1 + int(np.argmax(areas_final))
+        largest_mask = np.where(labels_final == largest_label, 255, 0).astype(np.uint8)
+        if not np.any((labels_final == largest_label) & bright_bool):
+            return None
+        return largest_mask if int(np.count_nonzero(largest_mask)) else None
 
 
 class TFLiteBallDetector:
@@ -2030,19 +2097,18 @@ def process_video(
                         )
                         last_ball_distance = distance
                         ball_overlay = {
-                            "bbox": (
-                                int(round(x1)),
-                                int(round(y1)),
-                                int(round(x2)),
-                                int(round(y2)),
-                            ),
                             "center": (int(round(cx)), int(round(cy))),
                             "radius": int(round(rad)),
-                            "text": {
+                        }
+                        text_overlays.append(
+                            {
                                 "value": f"x:{bx:.2f} y:{by:.2f} z:{bz:.2f}",
                                 "position": (int(round(cx)) + 10, int(round(cy))),
-                            },
-                        }
+                                "color": (0, 255, 0),
+                                "scale": 0.5,
+                                "thickness": 1,
+                            }
+                        )
                         ball_bbox_for_mask = (x1, y1, x2, y2)
                         if last_ball_center is not None:
                             ball_velocity = center - last_ball_center
@@ -2182,26 +2248,14 @@ def process_video(
             output_frame = base_frame.copy()
 
         if ball_overlay is not None:
-            x1, y1, x2, y2 = ball_overlay["bbox"]
             cx_i, cy_i = ball_overlay["center"]
-            radius_i = ball_overlay["radius"]
-            text_meta = ball_overlay["text"]
-            cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.circle(output_frame, (cx_i, cy_i), radius_i, (0, 255, 0), 2)
-            cv2.putText(
-                output_frame,
-                text_meta["value"],
-                (int(text_meta["position"][0]), int(text_meta["position"][1])),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (0, 255, 0),
-                1,
-                cv2.LINE_AA,
-            )
+            radius_i = max(int(ball_overlay["radius"]), 1)
+            cv2.circle(output_frame, (cx_i, cy_i), radius_i + 3, (0, 0, 0), -1, cv2.LINE_AA)
         if ball_prediction_overlay is not None:
             center_pred = ball_prediction_overlay["center"]
-            radius_pred = ball_prediction_overlay["radius"]
-            cv2.circle(output_frame, center_pred, radius_pred, (0, 255, 255), 2)
+            radius_pred = max(int(ball_prediction_overlay["radius"]), 1)
+            cv2.circle(output_frame, center_pred, radius_pred + 3, (0, 0, 0), -1, cv2.LINE_AA)
+            cv2.circle(output_frame, center_pred, radius_pred + 5, (0, 255, 255), 1, cv2.LINE_AA)
         for text_meta in text_overlays:
             cv2.putText(
                 output_frame,
