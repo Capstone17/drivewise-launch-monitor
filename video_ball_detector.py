@@ -1375,6 +1375,20 @@ def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return enhanced, gray
 
 
+def blackout_green_pixels(image: np.ndarray) -> np.ndarray:
+    if image is None or image.size == 0:
+        return image
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lower = np.array([35, 40, 40], dtype=np.uint8)
+    upper = np.array([90, 255, 255], dtype=np.uint8)
+    green_mask = cv2.inRange(hsv, lower, upper)
+    if int(np.count_nonzero(green_mask)) == 0:
+        return image
+    result = image.copy()
+    result[green_mask > 0] = 0
+    return result
+
+
 class MotionForegroundExtractor:
     """Build a background model and extract foreground masks around the club and ball."""
 
@@ -1461,6 +1475,75 @@ class MotionForegroundExtractor:
             kernel_ball = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
             ball_mask = cv2.dilate(ball_mask, kernel_ball, iterations=1)
         return support, ball_mask
+
+    def _smooth_primary_region(
+        self,
+        mask: np.ndarray,
+        brightness: np.ndarray | None,
+    ) -> np.ndarray | None:
+        if mask is None or mask.size == 0:
+            return None
+        binary = (mask > 0).astype(np.uint8)
+        binary = cv2.morphologyEx(
+            binary,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+            iterations=2,
+        )
+        binary = cv2.morphologyEx(
+            binary,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+            iterations=1,
+        )
+
+        dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+        core = None
+        for radius in (10.0, 8.0, 6.0, 4.0):
+            candidate = (dist >= radius).astype(np.uint8)
+            if int(candidate.sum()) > 0:
+                core = candidate
+                break
+        if core is None:
+            core = binary.copy()
+
+        core = cv2.morphologyEx(
+            core,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+            iterations=1,
+        )
+        core = cv2.dilate(
+            core,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17)),
+            iterations=1,
+        )
+
+        soft = cv2.GaussianBlur(core.astype(np.float32), (0, 0), sigmaX=8.0, sigmaY=8.0)
+        if soft.max() > 0:
+            soft = cv2.normalize(soft, None, 0.0, 255.0, cv2.NORM_MINMAX)
+        soft = soft.astype(np.uint8)
+        _, refined = cv2.threshold(soft, 120, 255, cv2.THRESH_BINARY)
+        refined = cv2.morphologyEx(
+            refined,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
+            iterations=1,
+        )
+        refined = cv2.GaussianBlur(refined, (9, 9), 0)
+        _, refined = cv2.threshold(refined, 1, 255, cv2.THRESH_BINARY)
+
+        dilated_original = cv2.dilate(
+            mask,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (23, 23)),
+            iterations=1,
+        )
+        refined = cv2.bitwise_and(refined, dilated_original)
+
+        if brightness is not None and brightness.size:
+            if not np.any((refined > 0) & brightness):
+                return None
+        return refined if int(np.count_nonzero(refined)) else None
 
     def make_mask(
         self,
@@ -1596,7 +1679,10 @@ class MotionForegroundExtractor:
         largest_mask = np.where(labels_final == largest_label, 255, 0).astype(np.uint8)
         if not np.any((labels_final == largest_label) & bright_bool):
             return None
-        return largest_mask if int(np.count_nonzero(largest_mask)) else None
+        smoothed = self._smooth_primary_region(largest_mask, bright_bool)
+        if smoothed is None:
+            return None
+        return smoothed
 
 
 class TFLiteBallDetector:
@@ -2230,6 +2316,8 @@ def process_video(
         else:
             output_frame = base_frame.copy()
         mask_ready_for_detection = mask is not None
+        masked_color_current = blackout_green_pixels(masked_color_current)
+        output_frame = blackout_green_pixels(output_frame)
 
         current_mean = float(ir_gray.mean())
         if prev_ir_gray is not None and prev_ir_idx is not None and prev_ir_time is not None:
