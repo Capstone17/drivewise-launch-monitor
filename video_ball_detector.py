@@ -129,6 +129,11 @@ CLUBFACE_MIN_VERTICAL_SPAN_PX = 55.0
 CLUBFACE_MAX_COLUMN_CURVE_RMSE_PX = 4.0
 CLUBFACE_MAX_COLUMN_CURVE_ABS_PX = 6.5
 CLUBFACE_TRAJECTORY_POLY_DEGREE = 2
+CLUB_TEMPLATE_MIN_AREA_PX = 1500
+CLUB_TEMPLATE_UPDATE_MARGIN = 1.12
+CLUB_TEMPLATE_RECOVERY_RATIO = 0.82
+CLUB_TEMPLATE_MIN_EXTENSION_PX = 4.0
+CLUB_TEMPLATE_MAX_EXTENSION_PX = 42.0
 CLUBFACE_DEPTH_MIN_CM = 10.0
 CLUBFACE_DEPTH_MAX_CM = 400.0
 CLUBFACE_CENTER_OFFSET_CM = CLUBFACE_HORIZONTAL_SPACING_CM / 2.0
@@ -1604,11 +1609,155 @@ class MotionForegroundExtractor:
         self._accumulator: np.ndarray | None = None
         self._frames_seen = 0
         self._history: deque[np.ndarray] = deque(maxlen=self.history_length)
+        self._prev_mask: np.ndarray | None = None
+        self._prev_centroid: tuple[float, float] | None = None
+        self._prev_motion_vec: tuple[float, float] | None = None
+        self._template_contour: np.ndarray | None = None
+        self._template_area: float = 0.0
+        self._template_size: tuple[int, int] = (0, 0)
 
     def reset(self) -> None:
         self._accumulator = None
         self._frames_seen = 0
         self._history.clear()
+        self._prev_mask = None
+        self._prev_centroid = None
+        self._prev_motion_vec = None
+        self._template_contour = None
+        self._template_area = 0.0
+        self._template_size = (0, 0)
+
+    @staticmethod
+    def _compute_centroid(mask: np.ndarray | None) -> tuple[float, float] | None:
+        if mask is None or mask.size == 0:
+            return None
+        moments = cv2.moments(mask, binaryImage=True)
+        area = moments["m00"]
+        if area <= 1e-6:
+            return None
+        cx = float(moments["m10"] / area)
+        cy = float(moments["m01"] / area)
+        return cx, cy
+
+    @staticmethod
+    def _extract_primary_contour(mask: np.ndarray | None) -> np.ndarray | None:
+        if mask is None or mask.size == 0:
+            return None
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+        return max(contours, key=cv2.contourArea)
+
+    def _maybe_update_template(
+        self,
+        mask: np.ndarray,
+        centroid: tuple[float, float],
+        area: float,
+    ) -> None:
+        if area < CLUB_TEMPLATE_MIN_AREA_PX:
+            return
+        contour = self._extract_primary_contour(mask)
+        if contour is None:
+            return
+        update_required = self._template_contour is None or area > self._template_area * CLUB_TEMPLATE_UPDATE_MARGIN
+        if not update_required:
+            return
+        contour_f = contour.reshape(-1, 2).astype(np.float32)
+        centered = contour_f - np.array([[centroid[0], centroid[1]]], dtype=np.float32)
+        self._template_contour = centered
+        self._template_area = float(area)
+        x, y, w, h = cv2.boundingRect(contour)
+        self._template_size = (int(w), int(h))
+
+    def _render_template(
+        self,
+        frame_shape: tuple[int, int],
+        centroid: tuple[float, float] | None,
+    ) -> np.ndarray | None:
+        if self._template_contour is None or centroid is None:
+            return None
+        h, w = frame_shape
+        mask = np.zeros((h, w), dtype=np.uint8)
+        contour_shifted = np.round(
+            self._template_contour + np.array([[centroid[0], centroid[1]]], dtype=np.float32)
+        ).astype(np.int32)
+        cv2.fillPoly(mask, [contour_shifted.reshape(-1, 1, 2)], 255)
+        return mask
+
+    def _augment_with_motion_template(
+        self,
+        base_mask: np.ndarray,
+        centroid: tuple[float, float] | None,
+        movement_vec: tuple[float, float] | None,
+    ) -> np.ndarray:
+        if self._template_contour is None or self._template_area <= 0.0:
+            return base_mask
+
+        frame_shape = base_mask.shape
+        anchor = centroid or self._prev_centroid
+        if anchor is None:
+            return base_mask
+
+        template_masks: list[np.ndarray] = []
+        anchor_template = self._render_template(frame_shape, anchor)
+        if anchor_template is not None:
+            template_masks.append(anchor_template)
+
+        if (
+            movement_vec is not None
+            and self._template_size != (0, 0)
+            and self._template_area > 0.0
+        ):
+            current_area = float(np.count_nonzero(base_mask))
+            ratio = current_area / float(self._template_area)
+            if ratio < CLUB_TEMPLATE_RECOVERY_RATIO:
+                dx, dy = movement_vec
+                magnitude = math.hypot(dx, dy)
+                if magnitude > 1e-3:
+                    deficit = max(0.0, CLUB_TEMPLATE_RECOVERY_RATIO - ratio)
+                    scale = deficit / CLUB_TEMPLATE_RECOVERY_RATIO
+                    max_dim = float(max(self._template_size))
+                    extent = scale * max_dim
+                    extent = max(extent, CLUB_TEMPLATE_MIN_EXTENSION_PX)
+                    extent = min(extent, CLUB_TEMPLATE_MAX_EXTENSION_PX)
+                    if extent > 0.5:
+                        ux = dx / magnitude
+                        uy = dy / magnitude
+                        lead_centroid = (
+                            anchor[0] + ux * extent,
+                            anchor[1] + uy * extent,
+                        )
+                        lead_template = self._render_template(frame_shape, lead_centroid)
+                        if lead_template is not None:
+                            template_masks.append(lead_template)
+
+        if not template_masks:
+            return base_mask
+
+        template_union = template_masks[0].copy()
+        for extra in template_masks[1:]:
+            template_union = cv2.bitwise_or(template_union, extra)
+
+        combined = cv2.bitwise_or(base_mask, template_union)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel)
+        return combined
+
+    def _predict_from_template(self, frame_shape: tuple[int, int]) -> np.ndarray | None:
+        if self._template_contour is None or self._prev_centroid is None:
+            return None
+        target = self._prev_centroid
+        if self._prev_motion_vec is not None:
+            target = (
+                target[0] + self._prev_motion_vec[0],
+                target[1] + self._prev_motion_vec[1],
+            )
+        predicted = self._render_template(frame_shape, target)
+        if predicted is None:
+            return None
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        predicted = cv2.morphologyEx(predicted, cv2.MORPH_CLOSE, kernel)
+        return predicted
 
     def update_background(self, frame: np.ndarray) -> None:
         if frame is None or frame.size == 0:
@@ -1867,10 +2016,56 @@ class MotionForegroundExtractor:
         largest_mask = np.where(labels_final == largest_label, 255, 0).astype(np.uint8)
         if not np.any((labels_final == largest_label) & bright_bool):
             return None
+        frame_shape = (height, width)
         smoothed = self._smooth_primary_region(largest_mask, bright_bool)
         if smoothed is None:
+            fallback = self._predict_from_template(frame_shape)
+            if fallback is not None:
+                fallback_centroid = self._compute_centroid(fallback)
+                prev_centroid = self._prev_centroid
+                if fallback_centroid is not None and prev_centroid is not None:
+                    self._prev_motion_vec = (
+                        fallback_centroid[0] - prev_centroid[0],
+                        fallback_centroid[1] - prev_centroid[1],
+                    )
+                elif fallback_centroid is not None:
+                    self._prev_motion_vec = None
+                self._prev_mask = fallback.copy()
+                self._prev_centroid = fallback_centroid
+                return fallback
+            self._prev_mask = None
+            self._prev_centroid = None
+            self._prev_motion_vec = None
             return None
-        return smoothed
+
+        area_est = float(np.count_nonzero(smoothed))
+        centroid = self._compute_centroid(smoothed)
+        movement_vec: tuple[float, float] | None = None
+        if centroid is not None:
+            if self._prev_centroid is not None:
+                movement_vec = (
+                    centroid[0] - self._prev_centroid[0],
+                    centroid[1] - self._prev_centroid[1],
+                )
+            self._maybe_update_template(smoothed, centroid, area_est)
+        elif self._prev_motion_vec is not None:
+            movement_vec = self._prev_motion_vec
+
+        enforced = self._augment_with_motion_template(smoothed, centroid, movement_vec)
+        final_centroid = self._compute_centroid(enforced)
+        if final_centroid is not None and self._prev_centroid is not None:
+            self._prev_motion_vec = (
+                final_centroid[0] - self._prev_centroid[0],
+                final_centroid[1] - self._prev_centroid[1],
+            )
+        elif final_centroid is not None:
+            self._prev_motion_vec = None
+        else:
+            self._prev_motion_vec = movement_vec
+
+        self._prev_mask = enforced.copy()
+        self._prev_centroid = final_centroid
+        return enforced
 
 
 class TFLiteBallDetector:
@@ -2672,7 +2867,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_200exp.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_200exp1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
