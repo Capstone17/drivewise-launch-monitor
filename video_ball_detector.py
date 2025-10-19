@@ -240,11 +240,24 @@ class ClubfaceCentroidTracker:
             return np.ones(count, dtype=bool), 0.0, 0.0, float(CLUBFACE_MAX_COLUMN_CURVE_ABS_PX)
         y = points[:, 1]
         x = points[:, 0]
+        y_spread = float(np.ptp(y)) if y.size else 0.0
         try:
-            coeffs = np.polyfit(y, x, 2)
+            if y_spread < 1e-3:
+                coeffs = np.array([0.0, 0.0, float(np.mean(x))], dtype=np.float64)
+                predicted = np.full_like(x, coeffs[-1], dtype=np.float64)
+            else:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error", np.RankWarning)
+                    coeffs = np.polyfit(y, x, 2)
+                predicted = np.polyval(coeffs, y)
+        except np.RankWarning:
+            try:
+                coeffs = np.polyfit(y, x, 1)
+            except Exception:
+                return np.zeros(count, dtype=bool), float("inf"), float("inf"), float("inf")
+            predicted = np.polyval(coeffs, y)
         except Exception:
             return np.zeros(count, dtype=bool), float("inf"), float("inf"), float("inf")
-        predicted = np.polyval(coeffs, y)
         residuals = x - predicted
         abs_residuals = np.abs(residuals)
         median_residual = float(np.median(residuals)) if residuals.size else 0.0
@@ -1935,7 +1948,9 @@ class MotionForegroundExtractor:
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray_blur = cv2.GaussianBlur(gray_frame, (5, 5), 0)
         mean_val, std_val = cv2.meanStdDev(gray_blur)
-        bright_thresh = float(mean_val) + 1.5 * float(std_val)
+        mean_scalar = float(mean_val[0, 0]) if mean_val.size else 0.0
+        std_scalar = float(std_val[0, 0]) if std_val.size else 0.0
+        bright_thresh = mean_scalar + 1.5 * std_scalar
         bright_thresh = max(0.0, min(255.0, bright_thresh))
         if bright_thresh < 180.0:
             bright_thresh = 180.0
