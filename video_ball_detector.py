@@ -2675,6 +2675,15 @@ def process_video(
     MAX_TELEPORT_JUMP_PX = CLUBFACE_MAX_JUMP_PX
     club_pixels: list[dict[str, float]] = []  # {'time': t, 'u': u, 'v': v}
     path_points: list[tuple[int, int]] = []   # for per-frame overlay
+    # Shape-consistency state
+    prev_club_mask: np.ndarray | None = None
+    prev_centroid: tuple[float, float] | None = None
+    prev_motion: tuple[float, float] | None = None
+    # Tunables for shape consistency
+    IOU_SELECT_THRESHOLD = 0.15
+    OVERLAP_REQUIRED_FRAC = 0.25
+    DILATE_FOR_OVERLAP = 7
+    MAX_SPILLOVER_RATIO = 1.6
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -2817,14 +2826,77 @@ def process_video(
                     cv2.circle(nb, (int((x1+x2)/2), int((y1+y2)/2)), int(max(x2-x1,y2-y1)/2)+2, 0, -1, cv2.LINE_AA)
             nb = cv2.morphologyEx(nb, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3)))
             nb = cv2.morphologyEx(nb, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7)))
+            club_mask = None
             if int(np.count_nonzero(nb)):
                 num, labels, stats, _ = cv2.connectedComponentsWithStats(nb)
-                if num > 1:
+                # Predict where the shape should be based on previous motion
+                predicted: np.ndarray | None = None
+                if prev_club_mask is not None and prev_centroid is not None:
+                    dx, dy = (0.0, 0.0)
+                    if prev_motion is not None:
+                        dx, dy = prev_motion
+                    M = np.float32([[1, 0, dx], [0, 1, dy]])
+                    predicted = cv2.warpAffine(
+                        prev_club_mask,
+                        M,
+                        (int(w), int(h)),
+                        flags=cv2.INTER_NEAREST,
+                        borderMode=cv2.BORDER_CONSTANT,
+                        borderValue=0,
+                    )
+                    if DILATE_FOR_OVERLAP > 0:
+                        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (DILATE_FOR_OVERLAP, DILATE_FOR_OVERLAP))
+                        predicted = cv2.dilate(predicted, kernel, iterations=1)
+
+                best_label = None
+                best_score = -1.0
+                best_mask_local = None
+                prev_area = float(np.count_nonzero(prev_club_mask)) if prev_club_mask is not None else 0.0
+                for lbl in range(1, num):
+                    region = (labels == lbl)
+                    reg_mask = np.where(region, 255, 0).astype(np.uint8)
+                    score = float(stats[lbl, cv2.CC_STAT_AREA])
+                    if predicted is not None:
+                        inter = int(np.count_nonzero(cv2.bitwise_and(predicted, reg_mask)))
+                        union = int(np.count_nonzero(cv2.bitwise_or(predicted, reg_mask)))
+                        iou = (inter / union) if union > 0 else 0.0
+                        overlap_frac = (inter / max(1.0, float(np.count_nonzero(reg_mask))))
+                        # Prefer overlap with prediction; penalize huge spillover vs last area
+                        area = float(stats[lbl, cv2.CC_STAT_AREA])
+                        spill_penalty = 0.0
+                        if prev_area > 0.0 and area > prev_area * MAX_SPILLOVER_RATIO:
+                            spill_penalty = 0.25
+                        score = 2.0 * iou + 0.5 * overlap_frac - spill_penalty
+                    if score > best_score:
+                        best_score = score
+                        best_label = lbl
+                        best_mask_local = reg_mask
+
+                # If we had a prediction, enforce consistency constraints
+                if predicted is not None and best_mask_local is not None:
+                    inter = int(np.count_nonzero(cv2.bitwise_and(predicted, best_mask_local)))
+                    sel_area = int(np.count_nonzero(best_mask_local))
+                    pred_area = int(np.count_nonzero(predicted))
+                    iou = inter / float(max(1, sel_area + pred_area - inter))
+                    overlap_frac = inter / float(max(1, sel_area))
+                    if iou < IOU_SELECT_THRESHOLD or overlap_frac < OVERLAP_REQUIRED_FRAC:
+                        # Too different from expected; stick to predicted region
+                        best_mask_local = predicted.copy()
+
+                    # Trim spillover to predicted support
+                    best_mask_local = cv2.bitwise_and(best_mask_local, predicted)
+
+                club_mask = best_mask_local
+
+                if club_mask is None and num > 1:
+                    # Fallback to largest area if no predictor
                     areas = stats[1:, cv2.CC_STAT_AREA]
                     largest = 1 + int(np.argmax(areas))
                     club_mask = np.where(labels == largest, 255, 0).astype(np.uint8)
-                else:
+                elif club_mask is None:
                     club_mask = nb
+
+                # Compute centroid and update motion
                 m = cv2.moments(club_mask, binaryImage=True)
                 if m['m00'] > 1e-6:
                     u = float(m['m10']/m['m00'])
@@ -2837,6 +2909,10 @@ def process_video(
                     if accept:
                         club_pixels.append({"time": round(t,3), "u": round(u,2), "v": round(v,2)})
                         path_points.append((int(round(u)), int(round(v))))
+                        if prev_centroid is not None:
+                            prev_motion = (u - prev_centroid[0], v - prev_centroid[1])
+                        prev_centroid = (u, v)
+                        prev_club_mask = club_mask.copy()
                 output_frame = cv2.bitwise_and(output_frame, output_frame, mask=club_mask)
         # Draw trajectory so far
         if len(path_points) >= 2:
