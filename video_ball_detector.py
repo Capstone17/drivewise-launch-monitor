@@ -315,6 +315,18 @@ class ClubfaceCentroidTracker:
         right_points_raw = points[right_idx] if right_idx.size else np.empty((0, 2), dtype=np.float32)
 
         curve_mask = np.ones(points.shape[0], dtype=bool)
+        if left_idx.size:
+            left_core_mask = self._column_core_mask(left_points_raw)
+            if not left_core_mask.all():
+                curve_mask[left_idx[~left_core_mask]] = False
+                left_idx = left_idx[left_core_mask]
+                left_points_raw = left_points_raw[left_core_mask]
+        if right_idx.size:
+            right_core_mask = self._column_core_mask(right_points_raw)
+            if not right_core_mask.all():
+                curve_mask[right_idx[~right_core_mask]] = False
+                right_idx = right_idx[right_core_mask]
+                right_points_raw = right_points_raw[right_core_mask]
 
         left_keep, left_rmse, left_max_dev, left_threshold = self._fit_quadratic_column(left_points_raw)
         right_keep, right_rmse, right_max_dev, right_threshold = self._fit_quadratic_column(right_points_raw)
@@ -849,6 +861,26 @@ class ClubfaceCentroidTracker:
             left = sorted_idx
             right = np.empty(0, dtype=int)
         return left, right
+
+    @staticmethod
+    def _column_core_mask(points: np.ndarray) -> np.ndarray:
+        count = points.shape[0]
+        if count == 0:
+            return np.zeros(0, dtype=bool)
+        if count <= 2:
+            return np.ones(count, dtype=bool)
+        x_vals = points[:, 0]
+        center = float(np.median(x_vals))
+        deviations = np.abs(x_vals - center)
+        mad = float(np.median(deviations))
+        robust_sigma = 1.4826 * mad if mad > 1e-6 else float(np.std(x_vals))
+        base_tol = max(4.0, min(CLUBFACE_COLUMN_MAX_X_SPREAD_PX, 3.5 * robust_sigma))
+        mask = deviations <= base_tol
+        if not mask.any():
+            keep_idx = np.argsort(deviations)[:2]
+            mask = np.zeros(count, dtype=bool)
+            mask[keep_idx] = True
+        return mask
 
     def _build_depth_candidates(
         self,
