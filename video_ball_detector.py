@@ -129,6 +129,9 @@ CLUBFACE_MIN_VERTICAL_SPAN_PX = 55.0
 CLUBFACE_MAX_COLUMN_CURVE_RMSE_PX = 4.0
 CLUBFACE_MAX_COLUMN_CURVE_ABS_PX = 6.5
 CLUBFACE_TRAJECTORY_POLY_DEGREE = 2
+CLUBFACE_LEFT_COLUMN_MAX_POINTS = 4
+CLUBFACE_RIGHT_COLUMN_MAX_POINTS = 2
+CLUBFACE_COLUMN_CLUSTER_MAX_ITER = 8
 CLUB_TEMPLATE_MIN_AREA_PX = 1500
 CLUB_TEMPLATE_UPDATE_MARGIN = 1.12
 CLUB_TEMPLATE_RECOVERY_RATIO = 0.82
@@ -310,26 +313,25 @@ class ClubfaceCentroidTracker:
         if points.size == 0:
             return metrics
 
-        left_idx, right_idx = self._split_columns(points)
-        left_points_raw = points[left_idx] if left_idx.size else np.empty((0, 2), dtype=np.float32)
-        right_points_raw = points[right_idx] if right_idx.size else np.empty((0, 2), dtype=np.float32)
+        column_mask, labels, _ = self._cluster_two_columns(points)
+        if column_mask.size == 0:
+            metrics['curve_mask'] = []
+            return metrics
+        curve_mask = column_mask.copy()
 
-        curve_mask = np.ones(points.shape[0], dtype=bool)
-        if left_idx.size:
-            left_core_mask = self._column_core_mask(left_points_raw)
-            if not left_core_mask.all():
-                curve_mask[left_idx[~left_core_mask]] = False
-                left_idx = left_idx[left_core_mask]
-                left_points_raw = left_points_raw[left_core_mask]
-        if right_idx.size:
-            right_core_mask = self._column_core_mask(right_points_raw)
-            if not right_core_mask.all():
-                curve_mask[right_idx[~right_core_mask]] = False
-                right_idx = right_idx[right_core_mask]
-                right_points_raw = right_points_raw[right_core_mask]
+        left_idx = np.where((labels == 0) & column_mask)[0]
+        right_idx = np.where((labels == 1) & column_mask)[0]
+        left_points = points[left_idx] if left_idx.size else np.empty((0, 2), dtype=np.float32)
+        right_points = points[right_idx] if right_idx.size else np.empty((0, 2), dtype=np.float32)
 
-        left_keep, left_rmse, left_max_dev, left_threshold = self._fit_quadratic_column(left_points_raw)
-        right_keep, right_rmse, right_max_dev, right_threshold = self._fit_quadratic_column(right_points_raw)
+        if left_points.size:
+            _, left_rmse, left_max_dev, left_threshold = self._fit_quadratic_column(left_points)
+        else:
+            left_rmse = left_max_dev = left_threshold = 0.0
+        if right_points.size:
+            _, right_rmse, right_max_dev, right_threshold = self._fit_quadratic_column(right_points)
+        else:
+            right_rmse = right_max_dev = right_threshold = 0.0
 
         metrics['curve_left_rmse'] = float(left_rmse)
         metrics['curve_left_max_dev'] = float(left_max_dev)
@@ -337,45 +339,18 @@ class ClubfaceCentroidTracker:
         metrics['curve_right_max_dev'] = float(right_max_dev)
         metrics['curve_left_threshold_px'] = float(left_threshold)
         metrics['curve_right_threshold_px'] = float(right_threshold)
-
-        left_valid_curve = bool(
-            left_points_raw.shape[0] <= 2
-            or left_keep.sum() >= max(2, int(np.ceil(0.6 * max(1, left_points_raw.shape[0]))))
-        )
-        right_valid_curve = bool(
-            right_points_raw.shape[0] <= 2
-            or right_keep.sum() >= max(2, int(np.ceil(0.6 * max(1, right_points_raw.shape[0]))))
-        )
-        metrics['curve_left_ok'] = left_valid_curve
-        metrics['curve_right_ok'] = right_valid_curve
-
-        if left_idx.size and left_keep.size:
-            for local_idx, keep_val in enumerate(left_keep):
-                if not keep_val:
-                    curve_mask[left_idx[local_idx]] = False
-        if right_idx.size and right_keep.size:
-            for local_idx, keep_val in enumerate(right_keep):
-                if not keep_val:
-                    curve_mask[right_idx[local_idx]] = False
-
-        left_points = left_points_raw[left_keep] if left_keep.size else left_points_raw
-        right_points = right_points_raw[right_keep] if right_keep.size else right_points_raw
+        metrics['curve_left_ok'] = bool(left_points.size)
+        metrics['curve_right_ok'] = bool(right_points.size)
 
         left_count = int(left_points.shape[0])
         right_count = int(right_points.shape[0])
         metrics['left_count'] = left_count
         metrics['right_count'] = right_count
 
-        if left_count:
-            left_span = float(np.ptp(left_points[:, 0])) if left_points.shape[0] > 1 else 0.0
-            metrics['left_span_px'] = left_span
-        else:
-            left_span = 0.0
-        if right_count:
-            right_span = float(np.ptp(right_points[:, 0])) if right_points.shape[0] > 1 else 0.0
-            metrics['right_span_px'] = right_span
-        else:
-            right_span = 0.0
+        left_span = float(np.ptp(left_points[:, 0])) if left_points.shape[0] > 1 else 0.0
+        right_span = float(np.ptp(right_points[:, 0])) if right_points.shape[0] > 1 else 0.0
+        metrics['left_span_px'] = left_span if left_points.size else 0.0
+        metrics['right_span_px'] = right_span if right_points.size else 0.0
 
         columns_present = left_count > 0 and right_count > 0
         column_gap = None
@@ -460,8 +435,8 @@ class ClubfaceCentroidTracker:
             and pair_gap_ok
             and area_ok
             and vertical_ok
-            and left_valid_curve
-            and right_valid_curve
+            and metrics['curve_left_ok']
+            and metrics['curve_right_ok']
         )
         metrics['curve_mask'] = curve_mask.tolist() if curve_mask.size else []
         return metrics
@@ -785,9 +760,9 @@ class ClubfaceCentroidTracker:
                 'best_pair': None,
             }
 
-        left_idx, right_idx = self._split_columns(points)
-        left_points = points[left_idx] if left_idx.size else np.empty((0, 2), dtype=np.float32)
-        right_points = points[right_idx] if right_idx.size else np.empty((0, 2), dtype=np.float32)
+        column_mask, labels, _ = self._cluster_two_columns(points)
+        left_points = points[np.where((labels == 0) & column_mask)[0]] if column_mask.size else np.empty((0, 2), dtype=np.float32)
+        right_points = points[np.where((labels == 1) & column_mask)[0]] if column_mask.size else np.empty((0, 2), dtype=np.float32)
 
         candidates = self._build_depth_candidates(left_points, right_points)
         best_pair: dict[str, object] | None = None
@@ -843,44 +818,100 @@ class ClubfaceCentroidTracker:
         }
 
     @staticmethod
-    def _split_columns(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        if points.shape[0] <= 1:
-            idx = np.arange(points.shape[0])
-            return idx, np.empty(0, dtype=int)
-        sorted_idx = np.argsort(points[:, 0])
-        x_sorted = points[sorted_idx, 0]
-        gaps = np.diff(x_sorted)
-        if gaps.size == 0:
-            return sorted_idx, np.empty(0, dtype=int)
-        max_gap_idx = int(np.argmax(gaps))
-        if gaps[max_gap_idx] >= CLUBFACE_COLUMN_SPLIT_PX:
-            split = max_gap_idx + 1
-            left = sorted_idx[:split]
-            right = sorted_idx[split:]
-        else:
-            left = sorted_idx
-            right = np.empty(0, dtype=int)
-        return left, right
-
-    @staticmethod
-    def _column_core_mask(points: np.ndarray) -> np.ndarray:
+    def _cluster_two_columns(
+        points: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         count = points.shape[0]
+        labels = np.full(count, -1, dtype=np.int8)
+        centers = np.zeros(2, dtype=np.float32)
         if count == 0:
-            return np.zeros(0, dtype=bool)
-        if count <= 2:
-            return np.ones(count, dtype=bool)
-        x_vals = points[:, 0]
-        center = float(np.median(x_vals))
-        deviations = np.abs(x_vals - center)
-        mad = float(np.median(deviations))
-        robust_sigma = 1.4826 * mad if mad > 1e-6 else float(np.std(x_vals))
-        base_tol = max(4.0, min(CLUBFACE_COLUMN_MAX_X_SPREAD_PX, 3.5 * robust_sigma))
-        mask = deviations <= base_tol
-        if not mask.any():
-            keep_idx = np.argsort(deviations)[:2]
-            mask = np.zeros(count, dtype=bool)
-            mask[keep_idx] = True
-        return mask
+            return np.zeros(0, dtype=bool), labels, centers
+        if count == 1:
+            labels[0] = 0
+            centers[:] = float(points[0, 0])
+            return np.ones(1, dtype=bool), labels, centers
+
+        x_vals = points[:, 0].astype(np.float32)
+        sorted_idx = np.argsort(x_vals)
+        half = max(1, count // 2)
+        initial_left = x_vals[sorted_idx[:half]].mean()
+        initial_right = x_vals[sorted_idx[half:]].mean()
+        if not np.isfinite(initial_left) or not np.isfinite(initial_right):
+            initial_left = float(x_vals.min())
+            initial_right = float(x_vals.max())
+        centers = np.array([initial_left, initial_right], dtype=np.float32)
+        if centers[0] == centers[1]:
+            centers[0] -= 0.5
+            centers[1] += 0.5
+
+        for _ in range(CLUBFACE_COLUMN_CLUSTER_MAX_ITER):
+            distances = np.abs(x_vals[:, None] - centers[None, :])
+            new_labels = distances.argmin(axis=1).astype(np.int8)
+            if not (new_labels == 0).any() or not (new_labels == 1).any():
+                median_x = float(np.median(x_vals))
+                new_labels = (x_vals >= median_x).astype(np.int8)
+                if not (new_labels == 0).any() or not (new_labels == 1).any():
+                    new_labels = np.zeros(count, dtype=np.int8)
+                    new_labels[sorted_idx[-1]] = 1
+            if np.array_equal(new_labels, labels):
+                break
+            labels = new_labels
+            for column in (0, 1):
+                column_mask = labels == column
+                if column_mask.any():
+                    centers[column] = float(x_vals[column_mask].mean())
+        else:
+            labels = distances.argmin(axis=1).astype(np.int8)
+
+        if centers[0] > centers[1]:
+            centers = centers[::-1]
+            labels = 1 - labels
+
+        mask = np.zeros(count, dtype=bool)
+        max_points_per_column = (CLUBFACE_LEFT_COLUMN_MAX_POINTS, CLUBFACE_RIGHT_COLUMN_MAX_POINTS)
+        for column in (0, 1):
+            column_idx = np.where(labels == column)[0]
+            if column_idx.size == 0:
+                continue
+            x_column = x_vals[column_idx]
+            center = centers[column]
+            deviations = np.abs(x_column - center)
+            mad = float(np.median(deviations))
+            if not np.isfinite(mad):
+                mad = 0.0
+            robust_scale = 1.4826 * mad if mad > 1e-3 else float(np.std(x_column))
+            if not np.isfinite(robust_scale) or robust_scale < 1e-3:
+                robust_scale = float(np.max(deviations))
+            tolerance = max(
+                3.0,
+                min(CLUBFACE_COLUMN_MAX_X_SPREAD_PX, 3.0 * robust_scale + 2.0),
+            )
+            keep_local = deviations <= tolerance
+            if not keep_local.any():
+                keep_local = np.zeros(column_idx.size, dtype=bool)
+                keep_local[np.argmin(deviations)] = True
+            kept_idx = column_idx[keep_local]
+            if kept_idx.size > max_points_per_column[column]:
+                y_vals = points[kept_idx, 1]
+                sorted_order = np.argsort(y_vals)
+                sorted_idx_by_y = kept_idx[sorted_order]
+                if max_points_per_column[column] == 1:
+                    kept_idx = np.array([sorted_idx_by_y[len(sorted_idx_by_y) // 2]], dtype=int)
+                else:
+                    y_min = float(points[sorted_idx_by_y[0], 1])
+                    y_max = float(points[sorted_idx_by_y[-1], 1])
+                    targets = np.linspace(y_min, y_max, max_points_per_column[column])
+                    remaining = sorted_idx_by_y.tolist()
+                    selected: list[int] = []
+                    for target in targets:
+                        distances_y = [abs(float(points[idx, 1]) - target) for idx in remaining]
+                        pick_pos = int(np.argmin(distances_y))
+                        selected.append(remaining.pop(pick_pos))
+                        if not remaining:
+                            break
+                    kept_idx = np.array(selected, dtype=int)
+            mask[kept_idx] = True
+        return mask, labels, centers
 
     def _build_depth_candidates(
         self,
