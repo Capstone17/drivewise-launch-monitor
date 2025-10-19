@@ -1205,24 +1205,66 @@ def detect_reflective_dots(
             )
         )
 
-    if len(detections) < DOT_MIN_LEFT_COLUMN + DOT_MIN_RIGHT_COLUMN:
-        return []
+    # Column alignment filter: keep blobs that align into one or two
+    # tight vertical columns; drop strays. This is intentionally simple
+    # and robust: cluster by x using a spread threshold and refine with
+    # a robust deviation check around the cluster median.
 
-    coords_for_columns = np.array([d.centroid for d in detections], dtype=np.float32)
-    sorted_x_idx = np.argsort(coords_for_columns[:, 0])
-    sorted_x = coords_for_columns[sorted_x_idx, 0]
-    gaps = np.diff(sorted_x)
-    if gaps.size == 0:
-        return []
-    max_gap = float(gaps.max())
-    if max_gap < CLUBFACE_COLUMN_SPLIT_PX:
-        return []
-    split = int(np.argmax(gaps) + 1)
-    left_count = split
-    right_count = coords_for_columns.shape[0] - split
-    if left_count < DOT_MIN_LEFT_COLUMN or right_count < DOT_MIN_RIGHT_COLUMN:
-        return []
+    def _filter_to_column_aligned(dets: list[DotDetection]) -> list[DotDetection]:
+        if len(dets) <= 1:
+            return dets
+        pts = np.array([d.centroid for d in dets], dtype=np.float32)
+        xs = pts[:, 0]
+        order = np.argsort(xs)
+        xs_sorted = xs[order]
+        idx_sorted = order
 
+        # Group into provisional columns by x proximity/spread.
+        groups: list[list[int]] = []
+        current: list[int] = []
+        current_min = None
+        for idx, x in zip(idx_sorted, xs_sorted):
+            if not current:
+                current = [int(idx)]
+                current_min = float(x)
+                continue
+            # Extend group while total x-span stays tight.
+            if float(x) - float(current_min) <= float(CLUBFACE_COLUMN_MAX_X_SPREAD_PX):
+                current.append(int(idx))
+            else:
+                groups.append(current)
+                current = [int(idx)]
+                current_min = float(x)
+        if current:
+            groups.append(current)
+
+        if not groups:
+            return dets
+
+        # Keep up to two largest groups and trim each to inliers near its median x.
+        groups.sort(key=len, reverse=True)
+        keep_idx: set[int] = set()
+        for g in groups[:2]:
+            xs_g = xs[g]
+            med = float(np.median(xs_g))
+            dev = np.abs(xs_g - med)
+            mad = float(np.median(dev)) if dev.size else 0.0
+            robust_sigma = 1.4826 * mad if mad > 1e-6 else float(np.std(xs_g)) if xs_g.size > 1 else 0.0
+            tol = max(3.0, min(float(CLUBFACE_COLUMN_MAX_X_SPREAD_PX), 3.5 * robust_sigma + 2.0))
+            for local_i, idx in enumerate(g):
+                if abs(float(xs_g[local_i]) - med) <= tol:
+                    keep_idx.add(int(idx))
+
+        # Fallback: if trimming removed everything, keep the single largest group untrimmed.
+        if not keep_idx:
+            for idx in groups[0]:
+                keep_idx.add(int(idx))
+
+        return [d for i, d in enumerate(dets) if i in keep_idx]
+
+    detections = _filter_to_column_aligned(detections)
+
+    # Rank by brightness and cap count for downstream usage/overlay.
     detections.sort(key=lambda d: d.brightness, reverse=True)
     if len(detections) > DOT_MAX_DETECTIONS:
         detections = detections[:DOT_MAX_DETECTIONS]
@@ -2589,7 +2631,13 @@ def process_video(
     sticker_path: str,
     frames_dir: str = "ball_frames",
 ) -> str:
-    """Process video_path saving ball trajectory and clubface center coordinates to JSON."""
+    """Process video_path saving ball trajectory and a simple club path from non-green islands.
+
+    Club detection is simplified: blackout green pixels and use the largest
+    remaining non-black connected component as the club "island". Its centroid
+    per frame defines a trajectory. Teleporting points (large inter-frame jumps)
+    are rejected.
+    """
 
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -2623,10 +2671,10 @@ def process_video(
         f"{start_frame}-{end_frame} (" + ", ".join(parts) + ")"
     )
 
-    clubface_tracker = ClubfaceCentroidTracker()
-    foreground_extractor = MotionForegroundExtractor()
-    dot_points_by_frame: dict[int, list[tuple[float, float]]] = {}
-    club_centers_by_frame: dict[int, tuple[float, float]] = {}
+    # Simplified club tracking via non-green islands (no dot/column logic)
+    MAX_TELEPORT_JUMP_PX = CLUBFACE_MAX_JUMP_PX
+    club_pixels: list[dict[str, float]] = []  # {'time': t, 'u': u, 'v': v}
+    path_points: list[tuple[int, int]] = []   # for per-frame overlay
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -2671,19 +2719,13 @@ def process_video(
         orig = frame
         enhanced, _ = preprocess_frame(frame)
         base_frame = enhanced.copy()
-        if frame_idx < inference_start or frame_idx >= inference_end:
-            foreground_extractor.update_background(base_frame)
+        # No background modeling for club; we work off blackout-only
         if h is None:
             h, w = base_frame.shape[:2]
-        ir_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
-        ir_gray = CLAHE.apply(ir_gray)
-        if USE_BLUR:
-            ir_gray = cv2.GaussianBlur(ir_gray, (3, 3), 0)
+        # No IR toggling; use color frames only for club path
         t = frame_idx / video_fps
         in_window = inference_start <= frame_idx < inference_end
 
-        dot_points_for_frame = dot_points_by_frame.pop(frame_idx, [])
-        club_center_for_frame = club_centers_by_frame.pop(frame_idx, None)
         ball_overlay: dict[str, object] | None = None
         ball_prediction_overlay: dict[str, object] | None = None
         text_overlays: list[dict[str, object]] = []
@@ -2762,120 +2804,45 @@ def process_video(
                         float(cy + radius),
                     )
 
-        mask = None
-        masked_color_current = orig
+        # Build a simplified club mask: blackout green, then take the largest
+        # non-black connected component as the "club" island. Exclude the ball bbox.
+        output_frame = blackout_green_pixels(base_frame.copy())
         if in_window:
-            mask = foreground_extractor.make_mask(
-                base_frame,
-                ball_bbox=ball_bbox_for_mask,
-                dot_points=dot_points_for_frame,
-                club_center=club_center_for_frame,
-            )
-        if mask is not None:
-            masked_color_current = cv2.bitwise_and(orig, orig, mask=mask)
-            output_frame = cv2.bitwise_and(base_frame, base_frame, mask=mask)
-        else:
-            output_frame = base_frame.copy()
-        mask_ready_for_detection = mask is not None
-        masked_color_current = blackout_green_pixels(masked_color_current)
-        output_frame = blackout_green_pixels(output_frame)
-
-        current_mean = float(ir_gray.mean())
-        if prev_ir_gray is not None and prev_ir_idx is not None and prev_ir_time is not None:
-            prev_mean = prev_ir_mean if prev_ir_mean is not None else float(prev_ir_gray.mean())
-            on_color: np.ndarray | None = None
-            off_color: np.ndarray | None = None
-            if current_mean >= prev_mean:
-                on_idx = frame_idx
-                on_time = t
-                on_gray = ir_gray
-                off_gray = prev_ir_gray
-                on_color = masked_color_current if mask_ready_for_detection else None
-                off_color = prev_color if prev_mask_ready else None
-            else:
-                on_idx = prev_ir_idx
-                on_time = prev_ir_time
-                on_gray = prev_ir_gray
-                off_gray = ir_gray
-                on_color = prev_color if prev_mask_ready else None
-                off_color = masked_color_current if mask_ready_for_detection else None
-            if (
-                on_idx not in processed_dot_frames
-                and inference_start <= on_idx < inference_end
-                and on_color is not None
-                and off_color is not None
-            ):
-                start_clubface = time.perf_counter()
-                dot_detections = detect_reflective_dots(off_color, on_color)
-                dot_centroids: list[tuple[float, float]] = []
-                for det in dot_detections:
-                    centroid = getattr(det, "centroid", None)
-                    if centroid is None or len(centroid) < 2:
-                        continue
-                    try:
-                        du = float(centroid[0])
-                        dv = float(centroid[1])
-                    except (TypeError, ValueError):
-                        continue
-                    if not (np.isfinite(du) and np.isfinite(dv)):
-                        continue
-                    dot_centroids.append((du, dv))
-                if dot_centroids and on_idx == frame_idx:
-                    dot_points_for_frame = dot_centroids
-                    dot_points_by_frame[frame_idx + 1] = dot_centroids
-                observation, metrics = clubface_tracker.update(
-                    dot_detections,
-                    approx_depth_cm=last_ball_distance,
-                )
-                clubface_time += time.perf_counter() - start_clubface
-                raw_center_metric = metrics.get("raw_center")
-                if isinstance(raw_center_metric, np.ndarray):
-                    metrics["raw_center"] = [
-                        float(raw_center_metric[0]),
-                        float(raw_center_metric[1]),
-                    ]
-                metrics["frame"] = int(on_idx)
-                metrics["time"] = round(on_time, 3)
-                metrics["distance_ref"] = last_ball_distance
-                clubface_debug.append(metrics)
-                time_rounded = round(on_time, 3)
-                sample_entry: dict[str, object] = {"time": time_rounded}
-                if dot_centroids:
-                    sample_entry["dot_centroids"] = dot_centroids
-                if observation is not None:
-                    processed_dot_frames.add(on_idx)
-                    center_px = observation.get("center_px")
-                    depth_cm = observation.get("depth_cm")
-                    if depth_cm is not None and center_px is not None:
-                        u = float(center_px[0])
-                        v = float(center_px[1])
-                        x_cm = (u - CX) * depth_cm / FX
-                        y_cm = (v - CY) * depth_cm / FY
-                        z_cm = depth_cm - CLUBFACE_Z_OFFSET_CM
-                        clubface_coords.append(
-                            {
-                                "time": time_rounded,
-                                "x": round(float(x_cm), 2),
-                                "y": round(float(y_cm), 2),
-                                "z": round(float(z_cm), 2),
-                            }
-                        )
-                        sample_entry["center_px"] = (u, v)
-                        clubface_samples_by_frame[on_idx].append(sample_entry)
-                        if on_idx == frame_idx:
-                            club_center_for_frame = (u, v)
-                            club_centers_by_frame[frame_idx + 1] = (u, v)
-                            text_overlays.append(
-                                {
-                                    "value": f"X:{x_cm:.2f} Y:{y_cm:.2f} Z:{z_cm:.2f}",
-                                    "position": (int(round(u)) + 8, int(round(v)) - 8),
-                                    "color": (255, 0, 0),
-                                    "scale": 0.45,
-                                    "thickness": 1,
-                                }
-                            )
-                elif "dot_centroids" in sample_entry:
-                    clubface_samples_by_frame[on_idx].append(sample_entry)
+            gray_blk = cv2.cvtColor(output_frame, cv2.COLOR_BGR2GRAY)
+            _, nb = cv2.threshold(gray_blk, 10, 255, cv2.THRESH_BINARY)
+            if ball_bbox_for_mask is not None:
+                x1, y1, x2, y2 = map(int, map(round, ball_bbox_for_mask))
+                x1 = max(0, x1); y1 = max(0, y1); x2 = min(w-1, x2); y2 = min(h-1, y2)
+                if x2 > x1 and y2 > y1:
+                    cv2.circle(nb, (int((x1+x2)/2), int((y1+y2)/2)), int(max(x2-x1,y2-y1)/2)+2, 0, -1, cv2.LINE_AA)
+            nb = cv2.morphologyEx(nb, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3)))
+            nb = cv2.morphologyEx(nb, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7)))
+            if int(np.count_nonzero(nb)):
+                num, labels, stats, _ = cv2.connectedComponentsWithStats(nb)
+                if num > 1:
+                    areas = stats[1:, cv2.CC_STAT_AREA]
+                    largest = 1 + int(np.argmax(areas))
+                    club_mask = np.where(labels == largest, 255, 0).astype(np.uint8)
+                else:
+                    club_mask = nb
+                m = cv2.moments(club_mask, binaryImage=True)
+                if m['m00'] > 1e-6:
+                    u = float(m['m10']/m['m00'])
+                    v = float(m['m01']/m['m00'])
+                    accept = True
+                    if path_points:
+                        pu, pv = path_points[-1]
+                        if math.hypot(u - pu, v - pv) > MAX_TELEPORT_JUMP_PX:
+                            accept = False
+                    if accept:
+                        club_pixels.append({"time": round(t,3), "u": round(u,2), "v": round(v,2)})
+                        path_points.append((int(round(u)), int(round(v))))
+                output_frame = cv2.bitwise_and(output_frame, output_frame, mask=club_mask)
+        # Draw trajectory so far
+        if len(path_points) >= 2:
+            cv2.polylines(output_frame, [np.array(path_points, dtype=np.int32)], False, (0,255,0), 2, cv2.LINE_AA)
+        elif len(path_points) == 1:
+            cv2.circle(output_frame, path_points[0], 3, (0,255,0), -1, cv2.LINE_AA)
 
         if ball_overlay is not None:
             cx_i, cy_i = ball_overlay["center"]
@@ -2903,40 +2870,25 @@ def process_video(
                 os.path.join(frames_dir, f"frame_{frame_idx:04d}.png"), output_frame
             )
 
-        prev_ir_gray = ir_gray
-        prev_ir_idx = frame_idx
-        prev_ir_time = t
-        prev_ir_mean = current_mean
-        prev_color = masked_color_current
-        prev_mask_ready = mask_ready_for_detection
+        # No IR state to carry across frames
         frame_idx += 1
 
     cap.release()
 
     ball_coords.sort(key=lambda c: c["time"])
-    clubface_coords.sort(key=lambda c: c["time"])
-    refined_trajectory: RefinedTrajectory | None = None
-    if clubface_coords:
-        refined_trajectory = refine_clubface_trajectory(clubface_coords)
-        clubface_coords = refined_trajectory.coords
-        if frames_dir:
-            _annotate_clubface_frames(frames_dir, clubface_samples_by_frame, refined_trajectory)
+    # Persist simple pixel-space club trajectory
+    club_pixels.sort(key=lambda c: c["time"]) 
 
     with open(ball_path, "w", encoding="utf-8") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w", encoding="utf-8") as f:
-        json.dump(clubface_coords, f, indent=2)
+        json.dump(club_pixels, f, indent=2)
 
     print(f"Saved {len(ball_coords)} ball points to {ball_path}")
-    if clubface_coords:
-        print(f"Saved {len(clubface_coords)} clubface points to {sticker_path}")
+    if club_pixels:
+        print(f"Saved {len(club_pixels)} club path points to {sticker_path}")
     else:
-        print("Warning: No reflective dots detected; sticker file left empty")
-    if clubface_debug:
-        depth_ready = len(clubface_coords)
-        print(
-            f"Clubface frames processed: {len(clubface_debug)} | frames with depth: {depth_ready}"
-        )
+        print("Warning: No club path points detected; sticker file left empty")
     print(f"Ball detection compile time: {ball_compile_time:.2f}s")
     print(f"Ball detection time: {ball_time:.2f}s")
     print(f"Clubface tracking time: {clubface_time:.2f}s")
@@ -2945,7 +2897,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_200exp1.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_200exp.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
