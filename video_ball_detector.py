@@ -2679,6 +2679,15 @@ def process_video(
     prev_club_mask: np.ndarray | None = None
     prev_centroid: tuple[float, float] | None = None
     prev_motion: tuple[float, float] | None = None
+    # Stationary blackout line (ball midpoint Y), set once when first available
+    fixed_blackout_y: int | None = None
+    # Stop collecting club points once ball starts moving
+    BALL_MOVE_THRESHOLD_PX = 3.0
+    club_recording_enabled = True
+    ball_has_started_moving = False
+    prev_club_depth: float | None = None
+    # Stationary blackout line (ball midpoint Y), set once when first available
+    fixed_blackout_y: int | None = None
     # Tunables for shape consistency
     IOU_SELECT_THRESHOLD = 0.15
     OVERLAP_REQUIRED_FRAC = 0.25
@@ -2794,6 +2803,21 @@ def process_video(
                         last_ball_center = center
                         last_ball_radius = rad
                         detected = True
+                        # If the ball started moving, stop recording club points
+                        try:
+                            move_mag = float(np.linalg.norm(ball_velocity)) if 'ball_velocity' in locals() else 0.0
+                        except Exception:
+                            move_mag = 0.0
+                        if club_recording_enabled and move_mag > BALL_MOVE_THRESHOLD_PX:
+                            club_recording_enabled = False
+                            # Trim the last 3 club points so recording effectively
+                            # starts 3 frames before motion
+                            trim_n = min(3, len(club_pixels))
+                            if trim_n:
+                                del club_pixels[-trim_n:]
+                            trim_n_path = min(3, len(path_points))
+                            if trim_n_path:
+                                del path_points[-trim_n_path:]
 
         if not detected and last_ball_center is not None and in_window:
             if last_ball_radius is not None:
@@ -2816,9 +2840,23 @@ def process_video(
         # Build a simplified club mask: blackout green, then take the largest
         # non-black connected component as the "club" island. Exclude the ball bbox.
         output_frame = blackout_green_pixels(base_frame.copy())
+        # Establish a fixed blackout line at ball midpoint the first time we see the ball
+        if fixed_blackout_y is None and ball_bbox_for_mask is not None and h is not None:
+            try:
+                _, _y1_fix, _, _y2_fix = ball_bbox_for_mask
+                fixed_blackout_y = int(round((float(_y1_fix) + float(_y2_fix)) / 2.0))
+                fixed_blackout_y = int(np.clip(fixed_blackout_y, 0, h - 1))
+            except Exception:
+                fixed_blackout_y = None
+        # Apply stationary blackout below that line every frame (does not move with ball)
+        if fixed_blackout_y is not None:
+            output_frame[fixed_blackout_y + 1 :, :, :] = 0
         if in_window:
             gray_blk = cv2.cvtColor(output_frame, cv2.COLOR_BGR2GRAY)
             _, nb = cv2.threshold(gray_blk, 10, 255, cv2.THRESH_BINARY)
+            # Apply the same stationary cutoff on the binary mask
+            if fixed_blackout_y is not None:
+                nb[fixed_blackout_y + 1 :, :] = 0
             if ball_bbox_for_mask is not None:
                 x1, y1, x2, y2 = map(int, map(round, ball_bbox_for_mask))
                 x1 = max(0, x1); y1 = max(0, y1); x2 = min(w-1, x2); y2 = min(h-1, y2)
@@ -2907,8 +2945,28 @@ def process_video(
                         if math.hypot(u - pu, v - pv) > MAX_TELEPORT_JUMP_PX:
                             accept = False
                     if accept:
-                        club_pixels.append({"time": round(t,3), "u": round(u,2), "v": round(v,2)})
-                        path_points.append((int(round(u)), int(round(v))))
+                        # Estimate depth from leftmost edge of the selected island
+                        depth_cm: float | None = None
+                        try:
+                            nz = np.column_stack(np.where(club_mask > 0))
+                            if nz.size:
+                                leftmost_x = float(nz[:, 1].min())
+                                baseline_px = max(1e-3, float(u) - leftmost_x)
+                                depth_cm = float(FOCAL_LENGTH * ACTUAL_BALL_RADIUS / baseline_px)
+                        except Exception:
+                            depth_cm = None
+                        if depth_cm is None and prev_club_depth is not None:
+                            depth_cm = prev_club_depth
+                        if depth_cm is not None:
+                            prev_club_depth = depth_cm
+                        if club_recording_enabled:
+                            club_pixels.append({
+                                "time": round(t, 3),
+                                "x": round(float(u), 2),
+                                "y": round(float(v), 2),
+                                "z": (round(float(depth_cm), 2) if depth_cm is not None else None),
+                            })
+                            path_points.append((int(round(u)), int(round(v))))
                         if prev_centroid is not None:
                             prev_motion = (u - prev_centroid[0], v - prev_centroid[1])
                         prev_centroid = (u, v)
@@ -2973,7 +3031,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_100exp.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_50exp.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
