@@ -1700,6 +1700,262 @@ def blackout_green_pixels(image: np.ndarray) -> np.ndarray:
     return result
 
 
+class AdaptiveAlphaMapper:
+    """Adaptive chroma black-out using a dominant background color in Lab space.
+
+    Steps:
+    1) Use a calibration frame (ideally 20 frames before motion start).
+    2) Black out below the ball midline to avoid the tee/club area.
+    3) Cluster the remaining pixels in a/b space to find the dominant background color.
+    4) Choose a tolerance so that applying this background key blacks out most of the
+       calibration frame above the ball midline.
+    5) During motion, if the key removes too much (club not visible), reduce tolerance.
+    """
+
+    def __init__(
+        self,
+        *,
+        target_coverage: float = 0.85,
+        k_clusters: int = 3,
+        max_samples: int = 250_000,
+        min_radius: float = 6.0,
+        max_radius: float = 28.0,
+        initial_quantile: float = 0.95,
+        min_visible_fraction: float = 0.01,
+    ) -> None:
+        self.target_coverage = float(max(0.5, min(0.98, target_coverage)))
+        self.k_clusters = int(max(2, k_clusters))
+        self.max_samples = int(max(10_000, max_samples))
+        self.min_radius = float(max(1.0, min_radius))
+        self.max_radius = float(max(self.min_radius, max_radius))
+        self.initial_quantile = float(max(0.8, min(0.995, initial_quantile)))
+        self.min_visible_fraction = float(max(0.002, min(0.1, min_visible_fraction)))
+
+        self.bg_center_ab: np.ndarray | None = None
+        self.bg_radius: float | None = None
+        self.ball_mid_y: int | None = None
+        self.calib_frame_index: int | None = None
+        self.meta: dict[str, object] = {}
+
+    @staticmethod
+    def _to_lab_ab(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        a = lab[:, :, 1].astype(np.float32)
+        b = lab[:, :, 2].astype(np.float32)
+        return a, b
+
+    @staticmethod
+    def _sample_ab(a: np.ndarray, b: np.ndarray, mask: np.ndarray, max_samples: int) -> np.ndarray:
+        ys, xs = np.where(mask)
+        if ys.size == 0:
+            return np.empty((0, 2), dtype=np.float32)
+        if ys.size > max_samples:
+            idx = np.random.choice(ys.size, size=max_samples, replace=False)
+            ys = ys[idx]
+            xs = xs[idx]
+        samples = np.column_stack((a[ys, xs], b[ys, xs])).astype(np.float32)
+        return samples
+
+    @staticmethod
+    def _kmeans_centroid_ab(samples: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+        if samples.size == 0:
+            return np.zeros((0, 2), dtype=np.float32), np.zeros(0, dtype=np.int32)
+        Z = samples.astype(np.float32)
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 12, 1.0)
+        attempts = 2
+        flags = cv2.KMEANS_PP_CENTERS
+        compactness, labels, centers = cv2.kmeans(Z, k, None, criteria, attempts, flags)
+        labels = labels.flatten().astype(np.int32)
+        centers = centers.astype(np.float32)
+        return centers, labels
+
+    @staticmethod
+    def _quantile_radius(center: np.ndarray, samples: np.ndarray, q: float) -> float:
+        if samples.size == 0:
+            return 0.0
+        diffs = samples - center[None, :]
+        d = np.linalg.norm(diffs, axis=1)
+        q = float(np.clip(q, 0.5, 0.999))
+        return float(np.quantile(d, q))
+
+    def calibrate(
+        self,
+        frame: np.ndarray,
+        *,
+        ball_bbox: tuple[float, float, float, float] | None,
+        frame_index: int | None = None,
+        save_dir: str | None = None,
+    ) -> None:
+        if frame is None or frame.size == 0:
+            return
+        h, w = frame.shape[:2]
+        # Determine the ball mid Y for the line to blackout below
+        mid_y: int | None = None
+        if ball_bbox is not None:
+            try:
+                _, y1, _, y2 = ball_bbox
+                mid_y = int(np.clip(round((float(y1) + float(y2)) / 2.0), 0, h - 1))
+            except Exception:
+                mid_y = None
+        if mid_y is None:
+            mid_y = int(h * 0.6)
+        self.ball_mid_y = mid_y
+        self.calib_frame_index = frame_index
+
+        # Build mask for the region above ball midline
+        region_mask = np.zeros((h, w), dtype=np.uint8)
+        region_mask[: mid_y + 1, :] = 1
+        a, b = self._to_lab_ab(frame)
+        samples = self._sample_ab(a, b, region_mask.astype(bool), self.max_samples)
+        if samples.size == 0:
+            return
+
+        # Cluster in a/b space to find dominant color (background)
+        k = min(self.k_clusters, max(1, samples.shape[0]))
+        centers, labels = self._kmeans_centroid_ab(samples, k)
+        if centers.size == 0:
+            return
+        # Choose the largest cluster as background candidate
+        counts = np.bincount(labels, minlength=k)
+        bg_idx = int(np.argmax(counts))
+        bg_center = centers[bg_idx]
+        # Estimate radius from quantile distance within that cluster
+        cluster_samples = samples[labels == bg_idx]
+        radius_q = self._quantile_radius(bg_center, cluster_samples, self.initial_quantile)
+        radius = float(np.clip(radius_q, self.min_radius, self.max_radius))
+
+        # Validate coverage on calibration frame
+        # Only consider region above midline (same as sampling)
+        ab_all = np.dstack((a, b)).astype(np.float32)
+        diffs = ab_all - bg_center.reshape(1, 1, 2)
+        dist = np.linalg.norm(diffs, axis=2)
+        mask_bg = (dist <= radius) & (np.arange(h)[:, None] <= mid_y)
+        coverage = float(np.count_nonzero(mask_bg)) / float((mid_y + 1) * max(1, w))
+        # If coverage is low, relax radius up to max_radius to hit target
+        if coverage < self.target_coverage:
+            # Increase radius towards max until target or cap
+            for q_try in (0.97, 0.98, 0.99):
+                r_try = self._quantile_radius(bg_center, cluster_samples, q_try)
+                r_try = float(np.clip(r_try, self.min_radius, self.max_radius))
+                mask_try = (dist <= r_try) & (np.arange(h)[:, None] <= mid_y)
+                cov_try = float(np.count_nonzero(mask_try)) / float((mid_y + 1) * max(1, w))
+                radius = r_try
+                coverage = cov_try
+                if cov_try >= self.target_coverage:
+                    break
+
+        self.bg_center_ab = bg_center.astype(np.float32)
+        self.bg_radius = float(radius)
+        self.meta = {
+            "center_ab": [float(bg_center[0]), float(bg_center[1])],
+            "radius_ab": float(radius),
+            "coverage": float(coverage),
+            "clusters": int(k),
+            "ball_mid_y": int(mid_y),
+            "frame_index": (int(frame_index) if frame_index is not None else None),
+        }
+
+        # Persist calibration frame and metadata for debugging
+        if save_dir:
+            try:
+                os.makedirs(save_dir, exist_ok=True)
+                if frame_index is None:
+                    fname = os.path.join(save_dir, f"calibration.png")
+                else:
+                    fname = os.path.join(save_dir, f"calibration_{int(frame_index):06d}.png")
+                cv2.imwrite(fname, frame)
+                with open(os.path.join(save_dir, "alpha_meta.json"), "w", encoding="utf-8") as f:
+                    json.dump(self.meta, f, indent=2)
+            except Exception:
+                pass
+
+    def apply(self, image: np.ndarray, *, min_visible_fraction: float | None = None) -> np.ndarray:
+        """Apply adaptive background black-out to ``image``.
+
+        Behavior:
+        - Black out background pixels close to the calibrated a/b center within radius.
+        - Also black out everything below the calibration ball midpoint, if available.
+        - If output has too few visible pixels, gradually shrink radius to reveal more.
+        """
+        if image is None or image.size == 0:
+            return image
+        if self.bg_center_ab is None or self.bg_radius is None:
+            # No calibration, fallback to green-only
+            return blackout_green_pixels(image)
+
+        h, w = image.shape[:2]
+        a, b = self._to_lab_ab(image)
+        ab_all = np.dstack((a, b)).astype(np.float32)
+        diffs = ab_all - self.bg_center_ab.reshape(1, 1, 2)
+        dist = np.linalg.norm(diffs, axis=2)
+        radius = float(self.bg_radius)
+
+        # Background mask from color
+        bg_mask = (dist <= radius)
+        # Enforce permanent blackout below midline if known
+        if self.ball_mid_y is not None:
+            y = np.arange(h)[:, None]
+            below = y > int(self.ball_mid_y)
+            bg_mask = np.logical_or(bg_mask, below)
+
+        result = image.copy()
+        result[bg_mask] = 0
+
+        # Ensure some visible fraction remains; otherwise, shrink radius
+        visible_frac_target = float(self.min_visible_fraction if min_visible_fraction is None else min_visible_fraction)
+        for _ in range(3):
+            non_black = int(np.count_nonzero(cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)))
+            total = int(h * w)
+            if total <= 0:
+                break
+            visible_frac = non_black / float(total)
+            if visible_frac >= visible_frac_target:
+                break
+            radius = max(self.min_radius, radius * 0.8)
+            bg_mask = (dist <= radius)
+            if self.ball_mid_y is not None:
+                y = np.arange(h)[:, None]
+                below = y > int(self.ball_mid_y)
+                bg_mask = np.logical_or(bg_mask, below)
+            result = image.copy()
+            result[bg_mask] = 0
+
+        # If still too aggressive, recenter from current frame region above the midline
+        try:
+            non_black = int(np.count_nonzero(cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)))
+            total = int(h * w)
+            if total > 0 and (non_black / float(total)) < visible_frac_target:
+                # Recompute mean a/b above the midline and use a smaller radius
+                a2, b2 = self._to_lab_ab(image)
+                region_mask = np.ones((h, w), dtype=bool)
+                if self.ball_mid_y is not None:
+                    region_mask[(np.arange(h)[:, None] > int(self.ball_mid_y))] = False
+                samples2 = self._sample_ab(a2, b2, region_mask, min(self.max_samples, 150_000))
+                if samples2.size:
+                    # Mean of samples and tight radius (e.g. p90 of distances)
+                    new_center = samples2.mean(axis=0)
+                    diffs2 = samples2 - new_center[None, :]
+                    d2 = np.linalg.norm(diffs2, axis=1)
+                    r2 = float(np.quantile(d2, 0.90))
+                    r2 = float(np.clip(r2, self.min_radius, max(self.min_radius, radius)))
+                    self.bg_center_ab = new_center.astype(np.float32)
+                    self.bg_radius = r2
+                    # Re-apply
+                    ab2 = np.dstack((a2, b2)).astype(np.float32)
+                    dist2 = np.linalg.norm(ab2 - self.bg_center_ab.reshape(1, 1, 2), axis=2)
+                    bg_mask2 = (dist2 <= self.bg_radius)
+                    if self.ball_mid_y is not None:
+                        y = np.arange(h)[:, None]
+                        below = y > int(self.ball_mid_y)
+                        bg_mask2 = np.logical_or(bg_mask2, below)
+                    result = image.copy()
+                    result[bg_mask2] = 0
+        except Exception:
+            pass
+
+        return result
+
+
 class MotionForegroundExtractor:
     """Build a background model and extract foreground masks around the club and ball."""
 
@@ -2671,6 +2927,38 @@ def process_video(
         f"{start_frame}-{end_frame} (" + ", ".join(parts) + ")"
     )
 
+    # Calibrate adaptive alpha mapping 20 frames before motion window start
+    alpha_mapper = AdaptiveAlphaMapper()
+    calib_dir = "alphamapping"
+    try:
+        cap_cal = cv2.VideoCapture(video_path)
+        if not cap_cal.isOpened():
+            raise RuntimeError("Unable to open video for alpha calibration")
+        calib_idx = max(0, int(start_frame) - 20)
+        cap_cal.set(cv2.CAP_PROP_POS_FRAMES, calib_idx)
+        ok_cal, calib_frame = cap_cal.read()
+        if ok_cal and calib_frame is not None:
+            enh_cal, _ = preprocess_frame(calib_frame)
+            dets_cal = detector.detect(enh_cal)
+            ball_bbox_cal: tuple[float, float, float, float] | None = None
+            if dets_cal:
+                # choose best detection by score within reasonable size
+                best_det_cal = max(dets_cal, key=lambda d: d.get("score", 0.0))
+                if best_det_cal.get("score", 0.0) >= 0.01:
+                    bb = best_det_cal.get("bbox")
+                    if bb and all(np.isfinite(bb)):
+                        ball_bbox_cal = (float(bb[0]), float(bb[1]), float(bb[2]), float(bb[3]))
+            alpha_mapper.calibrate(
+                enh_cal,
+                ball_bbox=ball_bbox_cal,
+                frame_index=calib_idx,
+                save_dir=calib_dir,
+            )
+        cap_cal.release()
+    except Exception:
+        # Non-fatal; we will fall back to green-only if calibration didn't initialize
+        pass
+
     # Simplified club tracking via non-green islands (no dot/column logic)
     MAX_TELEPORT_JUMP_PX = CLUBFACE_MAX_JUMP_PX
     club_pixels: list[dict[str, float]] = []  # {'time': t, 'u': u, 'v': v}
@@ -2680,7 +2968,7 @@ def process_video(
     prev_centroid: tuple[float, float] | None = None
     prev_motion: tuple[float, float] | None = None
     # Stationary blackout line (ball midpoint Y), set once when first available
-    fixed_blackout_y: int | None = None
+    fixed_blackout_y: int | None = alpha_mapper.ball_mid_y if hasattr(alpha_mapper, "ball_mid_y") else None
     # Stop collecting club points once ball starts moving
     BALL_MOVE_THRESHOLD_PX = 3.0
     club_recording_enabled = True
@@ -2837,9 +3125,10 @@ def process_video(
                         float(cy + radius),
                     )
 
-        # Build a simplified club mask: blackout green, then take the largest
-        # non-black connected component as the "club" island. Exclude the ball bbox.
-        output_frame = blackout_green_pixels(base_frame.copy())
+        # Build a simplified club mask: adaptive alpha mapping (dominant background),
+        # then take the largest non-black connected component as the "club" island.
+        # Exclude the ball bbox.
+        output_frame = alpha_mapper.apply(base_frame.copy())
         # Establish a fixed blackout line at ball midpoint the first time we see the ball
         if fixed_blackout_y is None and ball_bbox_for_mask is not None and h is not None:
             try:
@@ -3031,7 +3320,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_50exp.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_200exp.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
