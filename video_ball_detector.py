@@ -1701,38 +1701,65 @@ def blackout_green_pixels(image: np.ndarray) -> np.ndarray:
 
 
 class AdaptiveAlphaMapper:
-    """Adaptive chroma black-out using a dominant background color in Lab space.
+    """Adaptive, multi-cluster chroma keyer with temporal stabilization.
 
-    Steps:
-    1) Use a calibration frame (ideally 20 frames before motion start).
-    2) Black out below the ball midline to avoid the tee/club area.
-    3) Cluster the remaining pixels in a/b space to find the dominant background color.
-    4) Choose a tolerance so that applying this background key blacks out most of the
-       calibration frame above the ball midline.
-    5) During motion, if the key removes too much (club not visible), reduce tolerance.
+    Features:
+    - Lab a/b modeling with up to K clusters; Mahalanobis thresholds calibrated by
+      chi-square coverage for crisp, color-consistent keys.
+    - Shadow-aware: uses a/b only; allows large L deviations so shadows/highlights
+      don't break the key.
+    - Ball midline hard cutoff to avoid club/tee zone during calibration and runtime.
+    - Temporal adaptation: softly updates cluster means from background-labeled pixels.
+    - Self-correcting tolerance: expands/contracts threshold to maintain background
+      coverage and keep foreground visibility.
+    - Safety fallbacks: re-center on current frame if key over-suppresses; green key
+      fallback if calibration missing.
     """
 
     def __init__(
         self,
         *,
-        target_coverage: float = 0.85,
+        target_coverage: float = 0.94,
         k_clusters: int = 3,
+        k_max: int = 5,
+        silhouette_min: float = 0.10,
+        k_penalty: float = 0.08,
         max_samples: int = 250_000,
         min_radius: float = 6.0,
         max_radius: float = 28.0,
-        initial_quantile: float = 0.95,
-        min_visible_fraction: float = 0.01,
+        initial_quantile: float = 0.975,
+        min_visible_fraction: float = 0.0125,
+        temporal_alpha: float = 0.02,
+        morph_soften: bool = True,
+        guard_chroma_thresh: float = 12.0,
+        guard_margin: float = 2.0,
     ) -> None:
         self.target_coverage = float(max(0.5, min(0.98, target_coverage)))
         self.k_clusters = int(max(2, k_clusters))
+        self.k_max = int(max(self.k_clusters, k_max))
+        self.silhouette_min = float(max(0.0, min(0.6, silhouette_min)))
+        self.k_penalty = float(max(0.0, min(0.5, k_penalty)))
         self.max_samples = int(max(10_000, max_samples))
         self.min_radius = float(max(1.0, min_radius))
         self.max_radius = float(max(self.min_radius, max_radius))
         self.initial_quantile = float(max(0.8, min(0.995, initial_quantile)))
         self.min_visible_fraction = float(max(0.002, min(0.1, min_visible_fraction)))
+        self.temporal_alpha = float(max(0.0, min(0.25, temporal_alpha)))
+        self.morph_soften = bool(morph_soften)
+        self.guard_chroma_thresh = float(max(0.0, guard_chroma_thresh))
+        self.guard_margin = float(max(0.0, guard_margin))
 
+        # Single-cluster fallback (compatibility)
         self.bg_center_ab: np.ndarray | None = None
         self.bg_radius: float | None = None
+        # Multi-cluster parameters (preferred)
+        self.centers_ab: np.ndarray | None = None      # (k,2)
+        self.cov_inv: list[np.ndarray] | None = None   # k x (2,2)
+        self.cov_det: np.ndarray | None = None         # (k,)
+        self.threshold_mah2: float | None = None       # chi-square threshold (squared)
+        self.threshold_scale: float = 1.0
+        self.cluster_weights: np.ndarray | None = None # (k,)
+        self.guarded_indices: list[int] = []
         self.ball_mid_y: int | None = None
         self.calib_frame_index: int | None = None
         self.meta: dict[str, object] = {}
@@ -1757,6 +1784,51 @@ class AdaptiveAlphaMapper:
         return samples
 
     @staticmethod
+    def _calc_cov_inv(samples: np.ndarray, center: np.ndarray, eps: float = 1.5) -> tuple[np.ndarray, float]:
+        if samples.size == 0:
+            return np.eye(2, dtype=np.float32), 1.0
+        diffs = samples - center[None, :]
+        cov = np.cov(diffs.T)
+        if cov.shape != (2, 2):
+            cov = np.eye(2, dtype=np.float32)
+        cov = cov.astype(np.float32)
+        cov += np.eye(2, dtype=np.float32) * float(eps)
+        try:
+            cov_inv = np.linalg.inv(cov).astype(np.float32)
+            det = float(max(1e-12, np.linalg.det(cov)))
+        except Exception:
+            cov_inv = np.linalg.pinv(cov).astype(np.float32)
+            det = 1.0
+        return cov_inv, det
+
+    @staticmethod
+    def _mah2_grid(ab: np.ndarray, center: np.ndarray, cov_inv: np.ndarray) -> np.ndarray:
+        dif = ab - center.reshape(1, 1, 2)
+        left = np.einsum('ijk,kl->ijl', dif, cov_inv)
+        d2 = np.einsum('ijk,ijk->ij', left, dif)
+        return d2
+
+    @staticmethod
+    def _chi2_quantile_2df(p: float) -> float:
+        table = [
+            (0.90, 4.605),
+            (0.95, 5.991),
+            (0.975, 7.378),
+            (0.98, 7.824),
+            (0.99, 9.210),
+            (0.995, 10.597),
+            (0.999, 13.816),
+        ]
+        p = float(np.clip(p, 0.90, 0.999))
+        for i in range(len(table) - 1):
+            p0, x0 = table[i]
+            p1, x1 = table[i + 1]
+            if p0 <= p <= p1:
+                t = (p - p0) / max(1e-9, (p1 - p0))
+                return x0 + t * (x1 - x0)
+        return table[-1][1]
+
+    @staticmethod
     def _kmeans_centroid_ab(samples: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
         if samples.size == 0:
             return np.zeros((0, 2), dtype=np.float32), np.zeros(0, dtype=np.int32)
@@ -1768,6 +1840,102 @@ class AdaptiveAlphaMapper:
         labels = labels.flatten().astype(np.int32)
         centers = centers.astype(np.float32)
         return centers, labels
+
+    @staticmethod
+    def _kmeans_run(samples: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray, float, np.ndarray]:
+        if samples.size == 0:
+            return np.zeros((0, 2), dtype=np.float32), np.zeros(0, dtype=np.int32), 0.0, np.zeros(0)
+        Z = samples.astype(np.float32)
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 1.0)
+        attempts = 3
+        flags = cv2.KMEANS_PP_CENTERS
+        compactness, labels, centers = cv2.kmeans(Z, k, None, criteria, attempts, flags)
+        labels = labels.flatten().astype(np.int32)
+        centers = centers.astype(np.float32)
+        return centers, labels, float(compactness), Z
+
+    def _select_k(self, samples: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        N = samples.shape[0]
+        if N < 400 or self.k_max <= 1:
+            centers, labels, _, _ = self._kmeans_run(samples, 1)
+            return centers, labels
+        best_idx = 1
+        best_centers = None
+        best_labels = None
+        best_j = float('inf')
+        sse1 = None
+        silhouettes: dict[int, float] = {}
+        js: dict[int, float] = {}
+        centers_cache: dict[int, np.ndarray] = {}
+        labels_cache: dict[int, np.ndarray] = {}
+        sse_cache: dict[int, float] = {}
+        for k in range(1, self.k_max + 1):
+            centers, labels, compactness, Z = self._kmeans_run(samples, k)
+            centers_cache[k] = centers
+            labels_cache[k] = labels
+            # OpenCV returns sum of squared distances (SSE)
+            sse_cache[k] = float(compactness)
+            if k == 1:
+                sse1 = float(compactness) if compactness > 0 else 1.0
+                silhouettes[k] = -1.0
+            else:
+                # Cluster-level silhouette using centroid spacing and intra-cluster mean distance
+                # Compute mean intra distance per cluster
+                intra = []
+                counts = []
+                for ci in range(k):
+                    sel = labels == ci
+                    cnt = int(np.count_nonzero(sel))
+                    counts.append(cnt)
+                    if cnt == 0:
+                        intra.append(0.0)
+                        continue
+                    pts = Z[sel]
+                    d = np.linalg.norm(pts - centers[ci:ci+1, :], axis=1)
+                    intra.append(float(np.mean(d)))
+                counts = np.array(counts, dtype=np.float32)
+                # Distances between centers
+                if k > 1:
+                    cen_diff = centers[:, None, :] - centers[None, :, :]
+                    cen_dist = np.linalg.norm(cen_diff, axis=2) + np.eye(k, dtype=np.float32) * 1e9
+                    nearest = np.min(cen_dist, axis=1)
+                else:
+                    nearest = np.zeros(1, dtype=np.float32)
+                sil = []
+                for ci in range(k):
+                    a = float(intra[ci])
+                    b = float(nearest[ci]) if k > 1 else 0.0
+                    if (a <= 1e-6 and b <= 1e-6) or max(a, b) <= 1e-6:
+                        s = 0.0
+                    else:
+                        s = (b - a) / max(a, b)
+                    sil.append(s)
+                if counts.sum() > 0:
+                    silhouettes[k] = float(np.sum((counts / counts.sum()) * np.array(sil, dtype=np.float32)))
+                else:
+                    silhouettes[k] = 0.0
+
+        # Normalize SSE by K=1 and add small penalty per extra cluster
+        for k in range(1, self.k_max + 1):
+            sse = sse_cache[k]
+            sse_norm = (sse / sse1) if sse1 and sse1 > 0 else 1.0
+            js[k] = sse_norm + self.k_penalty * (k - 1)
+
+        # Choose smallest K close to the best j and with silhouette >= min
+        best_k = min(js, key=lambda kk: js[kk])
+        best_j = js[best_k]
+        candidate_ks = [k for k in range(1, self.k_max + 1) if js[k] <= best_j * 1.06]
+        # Prefer smallest with acceptable silhouette
+        chosen = None
+        for k in sorted(candidate_ks):
+            if k == 1 or silhouettes.get(k, -1.0) >= self.silhouette_min:
+                chosen = k
+                break
+        if chosen is None:
+            chosen = best_k
+        best_centers = centers_cache[chosen]
+        best_labels = labels_cache[chosen]
+        return best_centers, best_labels
 
     @staticmethod
     def _quantile_radius(center: np.ndarray, samples: np.ndarray, q: float) -> float:
@@ -1810,47 +1978,77 @@ class AdaptiveAlphaMapper:
         if samples.size == 0:
             return
 
-        # Cluster in a/b space to find dominant color (background)
-        k = min(self.k_clusters, max(1, samples.shape[0]))
-        centers, labels = self._kmeans_centroid_ab(samples, k)
+        # Cluster in a/b space to find background; prefer multi-cluster w/ Mahalanobis
+        # Determine K automatically (prefers fewer clusters)
+        centers, labels = self._select_k(samples)
+        k = max(1, centers.shape[0])
         if centers.size == 0:
             return
-        # Choose the largest cluster as background candidate
-        counts = np.bincount(labels, minlength=k)
-        bg_idx = int(np.argmax(counts))
-        bg_center = centers[bg_idx]
-        # Estimate radius from quantile distance within that cluster
-        cluster_samples = samples[labels == bg_idx]
-        radius_q = self._quantile_radius(bg_center, cluster_samples, self.initial_quantile)
-        radius = float(np.clip(radius_q, self.min_radius, self.max_radius))
 
-        # Validate coverage on calibration frame
-        # Only consider region above midline (same as sampling)
+        # Guard clusters near neutral chroma (likely metallic grey club)
+        chroma = np.linalg.norm(centers, axis=1)
+        guarded = chroma <= (self.guard_chroma_thresh)
+        self.guarded_indices = [int(i) for i in np.where(guarded)[0].tolist()]
+
+        cov_inv_list: list[np.ndarray] = []
+        cov_det_list: list[float] = []
+        weights = []
+        for c in range(k):
+            samp_c = samples[labels == c]
+            cov_inv_c, det_c = self._calc_cov_inv(samp_c, centers[c])
+            cov_inv_list.append(cov_inv_c)
+            cov_det_list.append(det_c)
+            weights.append(float(samp_c.shape[0]))
+        weights_arr = np.array(weights, dtype=np.float32)
+        if weights_arr.sum() > 0:
+            weights_arr /= float(weights_arr.sum())
+
+        mah2_thresh = self._chi2_quantile_2df(self.target_coverage)
+
         ab_all = np.dstack((a, b)).astype(np.float32)
-        diffs = ab_all - bg_center.reshape(1, 1, 2)
-        dist = np.linalg.norm(diffs, axis=2)
-        mask_bg = (dist <= radius) & (np.arange(h)[:, None] <= mid_y)
-        coverage = float(np.count_nonzero(mask_bg)) / float((mid_y + 1) * max(1, w))
-        # If coverage is low, relax radius up to max_radius to hit target
-        if coverage < self.target_coverage:
-            # Increase radius towards max until target or cap
-            for q_try in (0.97, 0.98, 0.99):
-                r_try = self._quantile_radius(bg_center, cluster_samples, q_try)
-                r_try = float(np.clip(r_try, self.min_radius, self.max_radius))
-                mask_try = (dist <= r_try) & (np.arange(h)[:, None] <= mid_y)
-                cov_try = float(np.count_nonzero(mask_try)) / float((mid_y + 1) * max(1, w))
-                radius = r_try
-                coverage = cov_try
-                if cov_try >= self.target_coverage:
-                    break
+        y_coords = np.arange(h)[:, None]
+        mask_union = np.zeros((h, w), dtype=bool)
+        for c in range(k):
+            # Skip guarded clusters when forming background mask
+            if c in self.guarded_indices:
+                continue
+            d2 = self._mah2_grid(ab_all, centers[c], cov_inv_list[c])
+            mask_union |= (d2 <= mah2_thresh)
+        mask_union &= (y_coords <= mid_y)
+        coverage = float(np.count_nonzero(mask_union)) / float((mid_y + 1) * max(1, w))
 
-        self.bg_center_ab = bg_center.astype(np.float32)
+        # Persist multi-cluster model
+        self.centers_ab = centers.astype(np.float32)
+        self.cov_inv = [c.copy() for c in cov_inv_list]
+        self.cov_det = np.array(cov_det_list, dtype=np.float32)
+        self.cluster_weights = weights_arr
+        self.threshold_mah2 = float(mah2_thresh)
+        self.threshold_scale = 1.0
+
+        # Single-cluster fallback parameters
+        # Prefer dominant non-guarded cluster
+        if weights_arr.size:
+            order = np.argsort(weights_arr)[::-1]
+            dom_idx = int(next((int(i) for i in order if int(i) not in self.guarded_indices), int(order[0])))
+        else:
+            dom_idx = 0
+        dom_samples = samples[labels == dom_idx]
+        dom_center = centers[dom_idx]
+        radius_q = self._quantile_radius(dom_center, dom_samples, self.initial_quantile)
+        radius = float(np.clip(radius_q, self.min_radius, self.max_radius))
+        self.bg_center_ab = dom_center.astype(np.float32)
         self.bg_radius = float(radius)
+
         self.meta = {
-            "center_ab": [float(bg_center[0]), float(bg_center[1])],
-            "radius_ab": float(radius),
+            "centers_ab": self.centers_ab.tolist() if self.centers_ab is not None else None,
+            "cov_det": self.cov_det.tolist() if self.cov_det is not None else None,
+            "weights": self.cluster_weights.tolist() if self.cluster_weights is not None else None,
+            "mah2_threshold": float(self.threshold_mah2) if self.threshold_mah2 is not None else None,
+            "fallback_center_ab": [float(self.bg_center_ab[0]), float(self.bg_center_ab[1])] if self.bg_center_ab is not None else None,
+            "fallback_radius_ab": float(self.bg_radius) if self.bg_radius is not None else None,
             "coverage": float(coverage),
             "clusters": int(k),
+            "guarded_indices": self.guarded_indices,
             "ball_mid_y": int(mid_y),
             "frame_index": (int(frame_index) if frame_index is not None else None),
         }
@@ -1869,39 +2067,151 @@ class AdaptiveAlphaMapper:
             except Exception:
                 pass
 
-    def apply(self, image: np.ndarray, *, min_visible_fraction: float | None = None) -> np.ndarray:
-        """Apply adaptive background black-out to ``image``.
+    def apply(
+        self,
+        image: np.ndarray,
+        *,
+        motion_guard: dict[str, object] | None = None,
+        min_visible_fraction: float | None = None,
+    ) -> np.ndarray:
+        """Apply adaptive background black-out to image with optional motion guard.
 
         Behavior:
         - Black out background pixels close to the calibrated a/b center within radius.
         - Also black out everything below the calibration ball midpoint, if available.
         - If output has too few visible pixels, gradually shrink radius to reveal more.
+        - Protects motion-guarded regions/colors from black-out when provided.
         """
         if image is None or image.size == 0:
             return image
-        if self.bg_center_ab is None or self.bg_radius is None:
-            # No calibration, fallback to green-only
+        if (self.centers_ab is None or self.cov_inv is None or self.threshold_mah2 is None):
             return blackout_green_pixels(image)
 
         h, w = image.shape[:2]
         a, b = self._to_lab_ab(image)
         ab_all = np.dstack((a, b)).astype(np.float32)
-        diffs = ab_all - self.bg_center_ab.reshape(1, 1, 2)
-        dist = np.linalg.norm(diffs, axis=2)
-        radius = float(self.bg_radius)
+        y_coords = np.arange(h)[:, None]
 
-        # Background mask from color
-        bg_mask = (dist <= radius)
-        # Enforce permanent blackout below midline if known
         if self.ball_mid_y is not None:
-            y = np.arange(h)[:, None]
-            below = y > int(self.ball_mid_y)
-            bg_mask = np.logical_or(bg_mask, below)
+            mid_y = int(self.ball_mid_y)
+            below = y_coords > mid_y
+            above = y_coords <= mid_y
+            area_above = max(1, int(np.count_nonzero(above)))
+        else:
+            mid_y = None
+            below = None
+            above = np.ones((h, w), dtype=bool)
+            area_above = max(1, h * w)
 
+        guard_total: np.ndarray | None = None
+        guard_neighbors: np.ndarray | None = None
+        motion_mean_ab: np.ndarray | None = None
+        color_tol: float | None = None
+        if motion_guard:
+            guard_masks: list[np.ndarray] = []
+            guard_mask_val = motion_guard.get("mask")
+            if guard_mask_val is not None:
+                mask_bool = np.asarray(guard_mask_val, dtype=bool)
+                if mask_bool.shape == (h, w):
+                    guard_masks.append(mask_bool)
+                    guard_neighbors = mask_bool
+            neighbor_mask_val = motion_guard.get("neighbor_mask")
+            if neighbor_mask_val is not None:
+                neighbor_bool = np.asarray(neighbor_mask_val, dtype=bool)
+                if neighbor_bool.shape == (h, w):
+                    guard_neighbors = neighbor_bool
+                    guard_masks.append(neighbor_bool)
+            fast_mask_val = motion_guard.get("fast_mask")
+            if fast_mask_val is not None:
+                fast_bool = np.asarray(fast_mask_val, dtype=bool)
+                if fast_bool.shape == (h, w):
+                    guard_masks.append(fast_bool)
+            mean_ab_val = motion_guard.get("mean_ab")
+            if mean_ab_val is not None:
+                motion_mean_ab = np.array(mean_ab_val, dtype=np.float32).reshape(2)
+                color_tol = motion_guard.get("color_radius")
+            if guard_neighbors is None and guard_masks:
+                guard_neighbors = guard_masks[0]
+            if motion_mean_ab is not None:
+                try:
+                    color_dist = np.sqrt(
+                        (ab_all[:, :, 0] - motion_mean_ab[0]) ** 2
+                        + (ab_all[:, :, 1] - motion_mean_ab[1]) ** 2
+                    )
+                    tol = float(color_tol) if color_tol is not None else (self.guard_chroma_thresh + self.guard_margin * 2.0)
+                    color_guard = color_dist <= (tol + self.guard_margin)
+                    if guard_neighbors is not None:
+                        color_guard = np.logical_and(color_guard, guard_neighbors)
+                    guard_masks.append(color_guard)
+                except Exception:
+                    pass
+            if guard_masks:
+                guard_total = guard_masks[0].astype(bool)
+                for extra in guard_masks[1:]:
+                    guard_total = np.logical_or(guard_total, np.asarray(extra, dtype=bool))
+
+        global_guard: np.ndarray | None = None
+        try:
+            chroma = np.sqrt(ab_all[:, :, 0] ** 2 + ab_all[:, :, 1] ** 2)
+            global_guard = chroma <= (self.guard_chroma_thresh + self.guard_margin)
+            if mid_y is not None:
+                global_guard = np.logical_and(global_guard, above)
+        except Exception:
+            global_guard = None
+
+        def enforce_guards(mask: np.ndarray) -> np.ndarray:
+            guarded = mask
+            if global_guard is not None:
+                guarded = np.logical_and(guarded, np.logical_not(global_guard))
+            if guard_total is not None:
+                guarded = np.logical_and(guarded, np.logical_not(guard_total))
+            return guarded
+
+        def compute_background_mask(scale: float) -> tuple[np.ndarray, np.ndarray]:
+            thresh_val = float(self.threshold_mah2) * float(scale)
+            mask = np.zeros((h, w), dtype=bool)
+            for i, center in enumerate(self.centers_ab):
+                if i in self.guarded_indices:
+                    continue
+                d2 = self._mah2_grid(ab_all, center, self.cov_inv[i])
+                mask |= (d2 <= thresh_val)
+            base_mask = mask.copy()
+            if below is not None:
+                mask = np.logical_or(mask, below)
+            mask = enforce_guards(mask)
+            return mask, base_mask
+
+        bg_mask, base_mask = compute_background_mask(self.threshold_scale)
         result = image.copy()
         result[bg_mask] = 0
 
-        # Ensure some visible fraction remains; otherwise, shrink radius
+        if self.morph_soften:
+            gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+            _, hard = cv2.threshold(gray, 1, 255, cv2.THRESH_BINARY)
+            hard = cv2.morphologyEx(
+                hard,
+                cv2.MORPH_OPEN,
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+            )
+            hard = cv2.morphologyEx(
+                hard,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+            )
+            soft = cv2.GaussianBlur(hard, (0, 0), 1.2)
+            _, hard = cv2.threshold(soft, 40, 255, cv2.THRESH_BINARY)
+            result = cv2.bitwise_and(image, image, mask=hard)
+
+        try:
+            coverage_now = float(np.count_nonzero(base_mask & above)) / float(area_above)
+            if coverage_now < self.target_coverage * 0.85:
+                self.threshold_scale = min(1.8, self.threshold_scale * 1.06)
+                bg_mask, base_mask = compute_background_mask(self.threshold_scale)
+                result = image.copy()
+                result[bg_mask] = 0
+        except Exception:
+            pass
+
         visible_frac_target = float(self.min_visible_fraction if min_visible_fraction is None else min_visible_fraction)
         for _ in range(3):
             non_black = int(np.count_nonzero(cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)))
@@ -1911,49 +2221,317 @@ class AdaptiveAlphaMapper:
             visible_frac = non_black / float(total)
             if visible_frac >= visible_frac_target:
                 break
-            radius = max(self.min_radius, radius * 0.8)
-            bg_mask = (dist <= radius)
-            if self.ball_mid_y is not None:
-                y = np.arange(h)[:, None]
-                below = y > int(self.ball_mid_y)
-                bg_mask = np.logical_or(bg_mask, below)
+            self.threshold_scale = max(0.55, self.threshold_scale * 0.88)
+            bg_mask, base_mask = compute_background_mask(self.threshold_scale)
             result = image.copy()
             result[bg_mask] = 0
 
-        # If still too aggressive, recenter from current frame region above the midline
         try:
             non_black = int(np.count_nonzero(cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)))
             total = int(h * w)
             if total > 0 and (non_black / float(total)) < visible_frac_target:
-                # Recompute mean a/b above the midline and use a smaller radius
-                a2, b2 = self._to_lab_ab(image)
                 region_mask = np.ones((h, w), dtype=bool)
-                if self.ball_mid_y is not None:
-                    region_mask[(np.arange(h)[:, None] > int(self.ball_mid_y))] = False
-                samples2 = self._sample_ab(a2, b2, region_mask, min(self.max_samples, 150_000))
-                if samples2.size:
-                    # Mean of samples and tight radius (e.g. p90 of distances)
+                if mid_y is not None:
+                    region_mask[y_coords > mid_y] = False
+                samples2 = self._sample_ab(a, b, region_mask, min(self.max_samples, 150_000))
+                if samples2.size >= 2000:
                     new_center = samples2.mean(axis=0)
                     diffs2 = samples2 - new_center[None, :]
                     d2 = np.linalg.norm(diffs2, axis=1)
                     r2 = float(np.quantile(d2, 0.90))
-                    r2 = float(np.clip(r2, self.min_radius, max(self.min_radius, radius)))
+                    r2 = float(np.clip(r2, self.min_radius, self.max_radius))
                     self.bg_center_ab = new_center.astype(np.float32)
                     self.bg_radius = r2
-                    # Re-apply
-                    ab2 = np.dstack((a2, b2)).astype(np.float32)
-                    dist2 = np.linalg.norm(ab2 - self.bg_center_ab.reshape(1, 1, 2), axis=2)
-                    bg_mask2 = (dist2 <= self.bg_radius)
-                    if self.ball_mid_y is not None:
-                        y = np.arange(h)[:, None]
-                        below = y > int(self.ball_mid_y)
-                        bg_mask2 = np.logical_or(bg_mask2, below)
+                    dist2 = np.linalg.norm(ab_all - self.bg_center_ab.reshape(1, 1, 2), axis=2)
+                    mask2 = dist2 <= self.bg_radius
+                    base_mask = mask2.copy()
+                    if below is not None:
+                        mask2 = np.logical_or(mask2, below)
+                    mask2 = enforce_guards(mask2)
+                    bg_mask = mask2
                     result = image.copy()
-                    result[bg_mask2] = 0
+                    result[bg_mask] = 0
+        except Exception:
+            pass
+
+        try:
+            if self.temporal_alpha > 1e-6 and self.centers_ab is not None and self.cov_inv is not None:
+                d2_stack = []
+                for i, center in enumerate(self.centers_ab):
+                    d2_stack.append(self._mah2_grid(ab_all, center, self.cov_inv[i]))
+                d2_stack = np.stack(d2_stack, axis=-1)
+                assign = np.argmin(d2_stack, axis=-1)
+
+                yx_bg = np.where(bg_mask)
+                if yx_bg[0].size > 0:
+                    if yx_bg[0].size > 20000:
+                        idx = np.random.choice(yx_bg[0].size, size=20000, replace=False)
+                        ys = yx_bg[0][idx]
+                        xs = yx_bg[1][idx]
+                    else:
+                        ys, xs = yx_bg
+                    ab_bg = ab_all[ys, xs, :]
+                    asg = assign[ys, xs]
+                    for i in range(self.centers_ab.shape[0]):
+                        sel = (asg == i)
+                        if int(np.count_nonzero(sel)) < 50:
+                            continue
+                        mean_i = ab_bg[sel].mean(axis=0)
+                        self.centers_ab[i] = (1.0 - self.temporal_alpha) * self.centers_ab[i] + self.temporal_alpha * mean_i
         except Exception:
             pass
 
         return result
+
+
+class MotionGuardTracker:
+    """Track motion during the swing to guard club pixels from alpha mapping."""
+
+    def __init__(
+        self,
+        *,
+        history: int = 150,
+        var_threshold: float = 18.0,
+        min_area: int = 600,
+        neighbor_dilate: int = 6,
+        color_quantile: float = 0.90,
+        fast_percentile: float = 85.0,
+        flow_downscale: float = 0.6,
+    ) -> None:
+        self.history = max(30, int(history))
+        self.var_threshold = float(max(4.0, var_threshold))
+        self.min_area = max(120, int(min_area))
+        self.neighbor_dilate = max(1, int(neighbor_dilate))
+        self.color_quantile = float(max(0.5, min(0.99, color_quantile)))
+        self.fast_percentile = float(max(60.0, min(99.0, fast_percentile)))
+        self.flow_downscale = float(np.clip(flow_downscale, 0.3, 1.0))
+
+        self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(
+            history=self.history,
+            varThreshold=self.var_threshold,
+            detectShadows=False,
+        )
+        self._prev_gray: np.ndarray | None = None
+        self._prev_flow_gray: np.ndarray | None = None
+        self._prev_centroid: tuple[float, float] | None = None
+        self._prev_velocity: tuple[float, float] | None = None
+        self._last_guard: dict[str, object] | None = None
+
+    def reset(self) -> None:
+        self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(
+            history=self.history,
+            varThreshold=self.var_threshold,
+            detectShadows=False,
+        )
+        self._prev_gray = None
+        self._prev_flow_gray = None
+        self._prev_centroid = None
+        self._prev_velocity = None
+        self._last_guard = None
+
+    def _predict_guard_from_history(self, shape: tuple[int, int]) -> dict[str, object] | None:
+        if self._last_guard is None or self._prev_velocity is None:
+            return None
+        mask_prev = self._last_guard.get("mask")
+        if mask_prev is None:
+            return None
+        dx, dy = self._prev_velocity
+        if abs(dx) < 0.3 and abs(dy) < 0.3:
+            return None
+        h, w = shape
+        M = np.float32([[1, 0, dx], [0, 1, dy]])
+
+        def _warp(src: np.ndarray | None) -> np.ndarray | None:
+            if src is None:
+                return None
+            warped = cv2.warpAffine(
+                src.astype(np.uint8),
+                M,
+                (w, h),
+                flags=cv2.INTER_NEAREST,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            )
+            return warped.astype(bool)
+
+        guard_mask = _warp(mask_prev)
+        if guard_mask is None or not np.any(guard_mask):
+            return None
+        neighbor_mask = _warp(self._last_guard.get("neighbor_mask"))
+        core_mask = _warp(self._last_guard.get("core_mask"))
+        fast_mask = _warp(self._last_guard.get("fast_mask"))
+        guard = {
+            "mask": guard_mask,
+            "core_mask": core_mask if core_mask is not None else guard_mask,
+            "neighbor_mask": neighbor_mask if neighbor_mask is not None else guard_mask,
+            "fast_mask": fast_mask,
+            "mean_ab": self._last_guard.get("mean_ab"),
+            "color_radius": self._last_guard.get("color_radius"),
+            "centroid": self._last_guard.get("centroid"),
+            "area": self._last_guard.get("area"),
+        }
+        self._last_guard = guard
+        return guard
+
+    def _compute_flow(
+        self,
+        prev_gray: np.ndarray,
+        curr_gray: np.ndarray,
+        mask: np.ndarray,
+    ) -> np.ndarray | None:
+        if prev_gray is None or curr_gray is None:
+            return None
+        h, w = curr_gray.shape
+        if self.flow_downscale < 0.99:
+            dw = max(8, int(round(w * self.flow_downscale)))
+            dh = max(8, int(round(h * self.flow_downscale)))
+            prev_small = cv2.resize(prev_gray, (dw, dh), interpolation=cv2.INTER_AREA)
+            curr_small = cv2.resize(curr_gray, (dw, dh), interpolation=cv2.INTER_AREA)
+            flow = cv2.calcOpticalFlowFarneback(
+                prev_small,
+                curr_small,
+                None,
+                pyr_scale=0.5,
+                levels=3,
+                winsize=21,
+                iterations=3,
+                poly_n=5,
+                poly_sigma=1.2,
+                flags=0,
+            )
+            flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR) / max(1e-3, self.flow_downscale)
+        else:
+            flow = cv2.calcOpticalFlowFarneback(
+                prev_gray,
+                curr_gray,
+                None,
+                pyr_scale=0.5,
+                levels=3,
+                winsize=21,
+                iterations=3,
+                poly_n=5,
+                poly_sigma=1.2,
+                flags=0,
+            )
+        mag = np.sqrt(flow[..., 0] ** 2 + flow[..., 1] ** 2)
+        mag_masked = mag[mask]
+        if mag_masked.size == 0:
+            return None
+        thresh = float(np.percentile(mag_masked, self.fast_percentile))
+        thresh = max(thresh, 0.6)
+        fast = np.zeros_like(mag, dtype=bool)
+        fast[mask] = mag_masked >= thresh
+        return fast
+
+    def update(self, frame: np.ndarray, *, in_window: bool) -> dict[str, object] | None:
+        if frame is None or frame.size == 0:
+            return None
+        frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(frame_gray, (5, 5), 0)
+        fg_mask = self._bg_subtractor.apply(frame)
+        fg_mask = cv2.medianBlur(fg_mask, 5)
+        _, fg_mask = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)
+
+        if self._prev_gray is not None:
+            diff = cv2.absdiff(blurred, self._prev_gray)
+            diff = cv2.GaussianBlur(diff, (5, 5), 0)
+            _, diff_mask = cv2.threshold(diff, 20, 255, cv2.THRESH_BINARY)
+            fg_mask = cv2.bitwise_or(fg_mask, diff_mask)
+
+        kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel_open, iterations=1)
+        fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel_close, iterations=2)
+
+        self._prev_gray = blurred
+
+        if not in_window:
+            self._prev_flow_gray = blurred
+            self._last_guard = None
+            self._prev_velocity = None
+            self._prev_centroid = None
+            return None
+
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(fg_mask)
+        if num_labels <= 1:
+            guard = self._predict_guard_from_history(frame.shape[:2])
+            self._prev_flow_gray = blurred
+            return guard
+
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        idx_rel = int(np.argmax(areas))
+        area = float(areas[idx_rel])
+        if area < self.min_area:
+            guard = self._predict_guard_from_history(frame.shape[:2])
+            self._prev_flow_gray = blurred
+            return guard
+        idx = idx_rel + 1
+
+        component_mask = (labels == idx).astype(np.uint8)
+        component_mask = cv2.morphologyEx(component_mask, cv2.MORPH_CLOSE, kernel_close, iterations=1)
+        guard_mask = cv2.dilate(
+            component_mask,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (self.neighbor_dilate, self.neighbor_dilate)),
+            iterations=1,
+        )
+        neighbor_mask = cv2.dilate(
+            guard_mask,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (self.neighbor_dilate, self.neighbor_dilate)),
+            iterations=1,
+        )
+
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        a_chan = lab[:, :, 1].astype(np.float32)
+        b_chan = lab[:, :, 2].astype(np.float32)
+        guard_bool = guard_mask.astype(bool)
+        if not np.any(guard_bool):
+            self._prev_flow_gray = blurred
+            self._last_guard = None
+            return None
+
+        mean_a = float(a_chan[guard_bool].mean())
+        mean_b = float(b_chan[guard_bool].mean())
+        motion_mean_ab = np.array([mean_a, mean_b], dtype=np.float32)
+        diffs = np.sqrt((a_chan[guard_bool] - mean_a) ** 2 + (b_chan[guard_bool] - mean_b) ** 2)
+        if diffs.size:
+            color_radius = float(np.quantile(diffs, self.color_quantile))
+        else:
+            color_radius = 15.0
+        color_radius = max(6.0, color_radius)
+
+        fast_mask = None
+        if self._prev_flow_gray is not None:
+            fast_mask = self._compute_flow(self._prev_flow_gray, blurred, guard_bool)
+
+        centroid = centroids[idx]
+        centroid_xy = (float(centroid[0]), float(centroid[1]))
+        velocity = None
+        if self._prev_centroid is not None:
+            velocity = (
+                centroid_xy[0] - self._prev_centroid[0],
+                centroid_xy[1] - self._prev_centroid[1],
+            )
+        self._prev_centroid = centroid_xy
+        if velocity is not None:
+            self._prev_velocity = velocity
+
+        self._prev_flow_gray = blurred
+
+        guard_info: dict[str, object] = {
+            "mask": guard_bool,
+            "core_mask": component_mask.astype(bool),
+            "neighbor_mask": neighbor_mask.astype(bool),
+            "fast_mask": fast_mask.astype(bool) if isinstance(fast_mask, np.ndarray) else None,
+            "mean_ab": motion_mean_ab.tolist(),
+            "color_radius": float(color_radius),
+            "centroid": (centroid_xy[0], centroid_xy[1]),
+            "area": area,
+        }
+
+        self._last_guard = guard_info
+        return guard_info
+
+
 
 
 class MotionForegroundExtractor:
@@ -2929,6 +3507,7 @@ def process_video(
 
     # Calibrate adaptive alpha mapping 20 frames before motion window start
     alpha_mapper = AdaptiveAlphaMapper()
+    motion_guard_tracker = MotionGuardTracker()
     calib_dir = "alphamapping"
     try:
         cap_cal = cv2.VideoCapture(video_path)
@@ -2974,8 +3553,6 @@ def process_video(
     club_recording_enabled = True
     ball_has_started_moving = False
     prev_club_depth: float | None = None
-    # Stationary blackout line (ball midpoint Y), set once when first available
-    fixed_blackout_y: int | None = None
     # Tunables for shape consistency
     IOU_SELECT_THRESHOLD = 0.15
     OVERLAP_REQUIRED_FRAC = 0.25
@@ -3125,10 +3702,11 @@ def process_video(
                         float(cy + radius),
                     )
 
+        guard_info = motion_guard_tracker.update(base_frame, in_window=in_window)
         # Build a simplified club mask: adaptive alpha mapping (dominant background),
         # then take the largest non-black connected component as the "club" island.
         # Exclude the ball bbox.
-        output_frame = alpha_mapper.apply(base_frame.copy())
+        output_frame = alpha_mapper.apply(base_frame.copy(), motion_guard=guard_info)
         # Establish a fixed blackout line at ball midpoint the first time we see the ball
         if fixed_blackout_y is None and ball_bbox_for_mask is not None and h is not None:
             try:
@@ -3320,7 +3898,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_200exp.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "CEsticker_white_50exp.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
