@@ -1929,3 +1929,21 @@
 2025-10-16 02:00:57,280 - __main__ - INFO - GATT application registered
 2025-10-16 02:00:57,282 - __main__ - INFO - Advertisement registered
 2025-10-16 02:34:43,986 - __main__ - DEBUG - Hostname found: '172.16.179.60 \n'
+2025-10-16 02:56:00,369 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-16 02:56:00,371 - __main__ - INFO - Registering GATT application...
+2025-10-16 02:56:00,389 - __main__ - INFO - GATT application registered
+2025-10-16 02:56:00,392 - __main__ - INFO - Advertisement registered
+2025-10-21 00:11:51,103 - __main__ - DEBUG - Hostname found: '172.16.179.60 \n'
+2025-10-21 00:12:30,902 - __main__ - DEBUG - StartNotify called
+2025-10-21 00:13:22,102 - __main__ - DEBUG - received write command
+2025-10-21 00:13:22,102 - __main__ - DEBUG - Began calibration function
+2025-10-21 00:13:37,607 - __main__ - INFO - Exposure from calibration: 750
+2025-10-21 00:13:37,607 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-21 00:13:37,616 - __main__ - DEBUG - Calibration and GS_Crop successful
+2025-10-21 00:13:37,617 - __main__ - DEBUG - Notifying values changed
+2025-10-21 00:14:03,051 - __main__ - DEBUG - received write command
+2025-10-21 00:14:03,052 - __main__ - DEBUG - Began calibration function
+2025-10-21 00:14:17,642 - __main__ - INFO - Exposure from calibration: 750
+2025-10-21 00:14:17,642 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-21 00:14:17,647 - __main__ - DEBUG - Calibration and GS_Crop successful
+2025-10-21 00:14:17,647 - __main__ - DEBUG - Notifying values changed
