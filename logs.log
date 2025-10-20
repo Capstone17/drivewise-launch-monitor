@@ -1953,3 +1953,9 @@
 2025-10-21 00:17:34,945 - __main__ - DEBUG - Calibration successful. Now running GS_config
 2025-10-21 00:17:34,950 - __main__ - DEBUG - Calibration and GS_Crop successful
 2025-10-21 00:17:34,950 - __main__ - DEBUG - Notifying values changed
+2025-10-21 00:19:37,795 - __main__ - DEBUG - received write command
+2025-10-21 00:19:37,796 - __main__ - DEBUG - Began calibration function
+2025-10-21 00:19:52,494 - __main__ - INFO - Exposure from calibration: 750
+2025-10-21 00:19:52,494 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-21 00:19:52,499 - __main__ - DEBUG - Calibration and GS_Crop successful
+2025-10-21 00:19:52,499 - __main__ - DEBUG - Notifying values changed
