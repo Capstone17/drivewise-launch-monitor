@@ -384,8 +384,11 @@ class BatteryMonitorCharacteristic(Characteristic):
         )
 
     def check_battery(self):
+        logger.debug("check battery called")
         while(1):
             self.value = return_battery_power()
+            logger.debug("return_battery_power function called")
+            logger.debug("battery values" + self.value)
             self.notify_client()
             # ADD SLEEP HERE
 
