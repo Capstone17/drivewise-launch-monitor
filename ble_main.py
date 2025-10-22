@@ -367,8 +367,9 @@ class BatteryMonitorCharacteristic(Characteristic):
             return
         logger.debug("StartNotify called")
         self.notifying = True
-        self.check_battery()
-        # self.notify_client()
+        
+        # start periodic updates every 5 seconds
+        self.notify_timer = GLib.timeout_add_seconds(5, self.check_battery)
 
     def StopNotify(self):
         if not self.notifying:
@@ -376,6 +377,11 @@ class BatteryMonitorCharacteristic(Characteristic):
             return
         logger.debug("StopNotify called")
         self.notifying = False
+
+        # stop the periodic update
+        if self.notify_timer:
+            GLib.source_remove(self.notify_timer)
+            self.notify_timer = None
 
     def notify_client(self):
         if not self.notifying:
@@ -391,13 +397,14 @@ class BatteryMonitorCharacteristic(Characteristic):
         )
 
     def check_battery(self):
-        logger.debug("check battery called")
-        while(1):
-            self.value = return_battery_power()
-            logger.debug("return_battery_power function called")
-            logger.debug("battery values" + self.value)
-            self.notify_client()
-            # ADD SLEEP HERE
+        if not self.notifying:
+            return False  # stops the GLib timer
+
+        self.value = return_battery_power()
+        logger.debug("Battery updated: %s", self.value)
+        self.notify_client()
+
+        return True  # continue calling periodically
 
 
 # class PowerOffCharacteristic(Characteristic):
