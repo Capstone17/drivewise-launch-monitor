@@ -1,129 +1,146 @@
+# Notes:
+# - Improvements to be made: Consider more frames than just two, in case of error.
+# - Could combine swing path and attack angle since calculation is very similar
+# - Side angle and launch angle are essentially the same calculations as swing path and attack angle, could be modularized more
+
 import numpy as np
+import math
 from scipy.spatial.transform import Rotation as R
 
 
-# FACE ANGLE
-def face_angle_calc(pose1: dict, yaw_ideal=0) -> float:
+# FACE ANGLE WITHOUT YAW
+def face_angle_calc(swing_path, side_angle) -> float:
     """
-    Compute the yaw of the club face (in degrees) upon impact.
+    Estimate the face angle using the swing path and the side angle.
+    The formula used is from https://www.researchgate.net/publication/323373897_The_Influence_of_Face_Angle_and_Club_Path_on_the_Resultant_Launch_Angle_of_a_Golf_Ball.
+    For 7-iron:
+        Horizontal launch = Side angle = H, Face angle = F, Swing path = P
+        H =~ 0.7F + 0.3P - 0.013
+        F = (H - 0.3P) / 0.7 + 0.019
+    I have done some testing on this based on videos such as this one: https://youtu.be/sOlladSBOak.
+        We should be within a degree of accuracy for face angle.
+    Currently I only use path and face angle, not considering gear effect or any other factor.
 
     Args:
-        yaw_current (float): The current yaw angle in degrees.
-        yaw_ideal (float): The ideal/reference yaw angle in degrees.
+        swing_path (float): The angular path of the club in the XZ plane.
+        side_angle (float): The angular path of the ball in the XZ plane.
 
     Returns:
-        float: The yaw angle difference in degrees, wrapped to [-180, 180).
+        float: The angle of the club face in degrees.
     """
-    yaw_current = pose1['yaw']
-    yaw_error = (yaw_current - yaw_ideal + 180) % 360 - 180
-    return yaw_error
+    
+    face_angle = (side_angle - 0.3 * swing_path) / 0.7 + 0.019
+    return face_angle
 
 
-# SWING PATH
-def swing_path_calc(pose1: dict, pose2: dict, reference_vector):
+
+
+# SWING PATH & SIDE ANGLE
+# - Uses velocity components to calculate side angle
+def horizontal_movement_angle_from_rates(dx: float, dz: float, reference_vector=[0, -1]) -> float:
     """
-    Analyze horizontal motion and orientation change between two poses.
+    Calculate the horizontal angular path in the XZ plane using velocity components.
 
     Args:
-        pose1 (dict): First marker pose with x, y, z, roll, pitch, yaw.
-        pose2 (dict): Second marker pose with same format.
-        reference_vector (list or np.ndarray): Direction of reference (default [0, 1] = +Z forward).
+        dx (float): Rate of change in X (units/sec).
+        dz (float): Rate of change in Z (units/sec).
+        reference_vector (list or np.ndarray): Reference direction (default [0, -1] = -Z forward).
 
     Returns:
-        dict: {
-            "horizontal_displacement": np.ndarray [dx, dz],
-            "distance": float,
-            "motion_angle_deg": float
-        }
+        side_angle (float): Signed angle in degrees between movement vector and reference.
     """
-    # Extract horizontal positions (X, Z)
-    p1 = np.array([pose1["x"], pose1["z"]], dtype=float)  # Convert the dict into an array
-    p2 = np.array([pose2["x"], pose2["z"]], dtype=float)  # Convert the dict into an array
+    movement_vector = np.array([dx, dz], dtype=float)
+    ref = np.array(reference_vector, dtype=float)
 
-    # Compute displacement vector and distance
-    # The Euclidean norm (length) of this vector gives total horizontal distance moved
-    delta_xz = p2 - p1
+    # Guard against zero-length vectors
+    if np.linalg.norm(movement_vector) == 0 or np.linalg.norm(ref) == 0:
+        return 0.0
 
-    # Check for the [0, 0] case
-    # This would mean that there is no movement in the xz plane
-    #   I.e. there is only vertical (y) movement, or no movement at all
-    if np.linalg.norm(delta_xz) == 0:
-        return {
-            "horizontal_displacement": delta_xz,
-            "distance": 0.0,
-            "motion_angle_deg": 0.0
-        }
-    distance = np.linalg.norm(delta_xz)
+    # Normalize vectors
+    movement_vector /= np.linalg.norm(movement_vector)
+    ref /= np.linalg.norm(ref)
 
-    # Compute motion direction angle relative to reference vector
-    v_move = delta_xz / np.linalg.norm(delta_xz)
-    v_ref = np.array(reference_vector, dtype=float)
-    v_ref /= np.linalg.norm(v_ref)
+    # Signed angle using atan2
+    horizontal_movement_angle = np.degrees(
+        np.arctan2(
+            movement_vector[0] * ref[1] - movement_vector[1] * ref[0],
+            np.dot(movement_vector, ref)
+        )
+    )
 
-    cross = v_ref[0]*v_move[1] - v_ref[1]*v_move[0]
-    dot = np.dot(v_ref, v_move)
-    motion_angle_deg = np.degrees(np.arctan2(cross, dot))  # signed angle
-
-    return {
-        "horizontal_displacement": delta_xz,
-        "distance": distance,
-        "motion_angle_deg": motion_angle_deg
-    }
+    return horizontal_movement_angle  # Negate the angle due to mirroring
 
 
 # ATTACK ANGLE
-# This function assumes that the camera is perfectly level (flat)
-# This means that movement in the "y" direction represents true vertical displacement 
-def attack_angle_calc(pose1: dict, pose2: dict) -> float:
+def vertical_movement_angle_from_rates(dy: float, dz: float, reference_vector=[0, -1]) -> float:
     """
-    Calculate the vertical (Y-axis) displacement of the club.
+    Calculate the vertical angular path in the YZ plane using velocity components.
 
     Args:
-        pose1 (dict): First pose with key "y".
-        pose2 (dict): Second pose with key "y".
+        dy (float): Rate of change in Y (vertical, units/sec).
+        dz (float): Rate of change in Z (units/sec).
+        reference_vector (list or np.ndarray): Reference direction (default [0, -1] = -Z forward).
 
     Returns:
-        float: Vertical displacement (positive = upward, negative = downward).
+        vertical_angle (float): Signed angle in degrees between movement vector and reference.
     """
-    return pose2["y"] - pose1["y"]
+    movement_vector = np.array([dy, dz], dtype=float)
+    ref = np.array(reference_vector, dtype=float)
+
+    # Guard against zero-length vectors
+    if np.linalg.norm(movement_vector) == 0 or np.linalg.norm(ref) == 0:
+        return 0.0
+
+    # Normalize vectors
+    movement_vector /= np.linalg.norm(movement_vector)
+    ref /= np.linalg.norm(ref)
+
+    # Signed angle using atan2
+    vertical_angle = np.degrees(
+        np.arctan2(
+            movement_vector[0] * ref[1] - movement_vector[1] * ref[0],
+            np.dot(movement_vector, ref)
+        )
+    )
+
+    return vertical_angle
 
 
-
-# SIDE ANGLE
-def side_angle_calc(pos1_dict, pos2_dict, reference_vector):
+# SPEED
+def cmps_to_speed_kmh(x_rate_cmps, y_rate_cmps, z_rate_cmps):
     """
-    Computes horizontal angle of movement (in XZ plane) relative to a reference direction.
+    Convert velocity components from cm/s to total speed in km/h.
+    """
+    factor = 0.036  # 1 cm/s = 0.036 km/h
+    speed_cmps = math.sqrt(x_rate_cmps**2 + y_rate_cmps**2 + z_rate_cmps**2)
+    return speed_cmps * factor
 
-    Parameters:
-    - pos1_dict: Dictionary with keys 'x', 'y', 'z' (e.g., first ball position)
-    - pos2_dict: Dictionary with keys 'x', 'y', 'z' (e.g., second ball position)
-    - reference_vector: 2D reference direction in XZ plane (e.g., [0, 1] for forward)
+
+
+# ----------------------------------
+# NO BALL FOUND
+# ----------------------------------
+
+# SIDE ANGLE WITHOUT BALL
+def side_angle_without_ball(swing_path, face_angle) -> float:
+    """
+    Estimate the face angle using the swing path and the side angle.
+    The formula used is from https://www.researchgate.net/publication/323373897_The_Influence_of_Face_Angle_and_Club_Path_on_the_Resultant_Launch_Angle_of_a_Golf_Ball.
+    For 7-iron:
+        Horizontal launch = Side angle = H, Face angle = F, Swing path = P
+        H =~ 0.7F + 0.3P - 0.013
+        F = (H - 0.3P) / 0.7 + 0.019
+    I have done some testing on this based on videos such as this one: https://youtu.be/sOlladSBOak.
+        We should be within a degree of accuracy for face angle.
+    Currently I only use path and face angle, not considering gear effect or any other factor.
+
+    Args:
+        swing_path (float): The angular path of the club in the XZ plane.
+        face_angle (float): The angular direction of the club face in the XZ plane.
 
     Returns:
-    Dictionary with:
-      - delta_xz: XZ movement vector
-      - distance_xz: distance in XZ plane
-      - angle_deg: signed angle to reference vector
+        float: The horizontal launch angle in degrees
     """
-    p1_xz = np.array([pos1_dict["x"], pos1_dict["z"]], dtype=float)
-    p2_xz = np.array([pos2_dict["x"], pos2_dict["z"]], dtype=float)
-
-    delta_xz = p2_xz - p1_xz
-    distance_xz = np.linalg.norm(delta_xz)
-
-    move_vec = delta_xz / distance_xz if distance_xz != 0 else np.zeros(2)
-    ref_vec = np.array(reference_vector, dtype=float)
-    ref_vec /= np.linalg.norm(ref_vec)
-
-    cross = ref_vec[0] * move_vec[1] - ref_vec[1] * move_vec[0]
-    dot = np.dot(ref_vec, move_vec)
-    angle_rad = np.arctan2(cross, dot)
-    angle_deg = np.degrees(angle_rad)
-
-    return {
-        "delta_xz": delta_xz,
-        "distance_xz": distance_xz,
-        "angle_deg": angle_deg
-    }
-
-
+    
+    side_angle = 0.7 * face_angle + 0.3 * swing_path - 0.013
+    return side_angle

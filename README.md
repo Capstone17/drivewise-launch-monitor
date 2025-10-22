@@ -13,49 +13,6 @@ Install the required Python packages with:
 pip install imageio opencv-python ultralytics
 ```
 
-## Usage
-
-1. Place your `golf_ball_detector.onnx` file in the repository root and your
-   MP4 video (e.g. `video.mp4`).
-2. Run the detection script:
-
-```bash
-python video_ball_detector.py video.mp4 \
-    ball_coords.json sticker_coords.json \
-    ball_frames
-```
-
-The optional fourth argument specifies the directory where extracted frames are
-written.
-
-The first JSON file will contain ball coordinates. The second stores the
-position and orientation of the moving sticker, for example:
-
-```json
-[
-  {"time": 1.72, "x": 0.66, "y": 6.17, "z": 11.66},
-  {"time": 1.76, "x": 0.59, "y": 5.75, "z": 11.26}
-]
-```
-
-The club's ArUco sticker must use ID 0. The marker comes from the 4x4 dictionary
-(`DICT_4X4_1000`). Any other detected IDs will be ignored.
-
-## Go Implementation
-
-For better performance a Go version of the detector is included. It
-relies on `gocv` for video capture and `onnxruntime-go` for inference.
-
-### Additional Requirements
-
-* Go 1.18+
-* `gocv` and `onnxruntime-go` libraries
-
-### Run the Go detector
-
-```bash
-go run golf_ball_detector.go
-```
-
-The Go application mirrors the Python features, estimating distance and
-3‑D velocity of the detected golf ball.
+## To-Do
+At some point, let's rewrite this README to be more complete and relevant, and rename/organize our repository main branch.
+We will all most likely have this in our resume for a while after 440 ends, and it would be good for our code to look professional.
