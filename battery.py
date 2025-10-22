@@ -96,7 +96,7 @@ class INA219:
         return None
 
 
-def return_battery_power(bus_voltage, current, power, percent, remaining_time):
+def return_battery_power():
     """
     Displays a formatted summary of key metrics with color highlights for easy readability.
 
