@@ -129,7 +129,7 @@ def return_battery_power():
         else:
             remaining_time_display = f"{remaining_time:.2f} min" if remaining_time else "Calculating..."
 
-        print("'Load Voltage': bus_voltage, 'Current': current, 'Power': power, 'Percent': percent, 'Time': remaining_time_display")
+        print("'Load Voltage':" + bus_voltage + "Current':" + current + 'Power:' + power + 'Percent:' + percent, 'Time' + remaining_time_display)
     
     except IOError as e:
         print("I2C communication error:", e)
