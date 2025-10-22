@@ -138,11 +138,7 @@ def return_battery_power():
         )
 
         return {
-            'Load Voltage': bus_voltage,
-            'Current': current,
-            'Power': power,
             'Percent': percent,
-            'Time': remaining_time_display
         }
     
     except IOError as e:

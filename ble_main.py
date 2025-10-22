@@ -349,10 +349,17 @@ class BatteryMonitorCharacteristic(Characteristic):
 
     def __init__(self, bus, index, service):
         Characteristic.__init__(
-            self, bus, index, self.uuid, ["notify"], service,
+            self, bus, index, self.uuid, ["read","notify"], service,
         )
         self.notifying = False
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 4, self))
+
+    def ReadValue(self, options):
+        # 
+        self.value = return_battery_power()
+        logger.debug("reading battery power: " + repr(self.value))
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        return [dbus.Byte(b) for b in result_bytes]
 
     def StartNotify(self):
         if self.notifying:
