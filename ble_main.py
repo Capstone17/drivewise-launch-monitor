@@ -344,7 +344,7 @@ class CalibrationCharacteristic(Characteristic):
         )
 
 class BatteryMonitorCharacteristic(Characteristic):
-    uuid = ""
+    uuid = "a834f0f7-89cc-453b-8be4-2905d27344bf"
     description = b"Regularly send the battery status to the app!"
 
     def __init__(self, bus, index, service):
@@ -360,6 +360,7 @@ class BatteryMonitorCharacteristic(Characteristic):
             return
         logger.debug("StartNotify called")
         self.notifying = True
+        self.check_battery()
         # self.notify_client()
 
     def StopNotify(self):
