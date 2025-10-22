@@ -32,6 +32,7 @@ import glob
 from video_ball_detector import process_video
 from metrics.ruleBasedSystem import rule_based_system
 from embedded.exposure_calibration import calibrate_exposure
+from battery.py import return_battery_power
 
 MainLoop = None
 try:
@@ -112,6 +113,7 @@ class rpiService(Service):
         self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
         self.add_characteristic(FindIPCharacteristic(bus, 2, self))
         self.add_characteristic(CalibrationCharacteristic(bus, 3, self))
+        self.add_characteristic(BatteryMonitorCharacteristic(bus, 4, self))
         # self.add_characteristic(PowerOffCharacteristic(bus, 3, self))
 
 
@@ -341,6 +343,50 @@ class CalibrationCharacteristic(Characteristic):
         []
         )
 
+class BatteryMonitorCharacteristic(Characteristic):
+    uuid = ""
+    description = b"Regularly send the battery status to the app!"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["notify"], service,
+        )
+        self.notifying = False
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 4, self))
+
+    def StartNotify(self):
+        if self.notifying:
+            logger.debug("Already notifying")
+            return
+        logger.debug("StartNotify called")
+        self.notifying = True
+        # self.notify_client()
+
+    def StopNotify(self):
+        if not self.notifying:
+            logger.debug("Not currently notifying")
+            return
+        logger.debug("StopNotify called")
+        self.notifying = False
+
+    def notify_client(self):
+        if not self.notifying:
+            logger.debug("Not notifying, skipping notify_client")
+            return
+
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        logger.debug("Notifying values changed")
+        self.PropertiesChanged(
+        GATT_CHRC_IFACE,
+        {"Value": [dbus.Byte(b) for b in result_bytes]},
+        []
+        )
+
+    def check_battery(self):
+        while(1):
+            self.value = return_battery_power()
+            self.notify_client()
+            # ADD SLEEP HERE
 
 
 # class PowerOffCharacteristic(Characteristic):
