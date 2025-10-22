@@ -32,7 +32,7 @@ import glob
 from video_ball_detector import process_video
 from metrics.ruleBasedSystem import rule_based_system
 from embedded.exposure_calibration import calibrate_exposure
-from battery.py import return_battery_power
+from battery import return_battery_power
 
 MainLoop = None
 try:
