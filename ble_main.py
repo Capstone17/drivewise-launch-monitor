@@ -367,9 +367,12 @@ class BatteryMonitorCharacteristic(Characteristic):
             return
         logger.debug("StartNotify called")
         self.notifying = True
-        
+
+        self.value = return_battery_power()
+        self.notify_client()
+
         # start periodic updates every 5 seconds
-        self.notify_timer = GLib.timeout_add_seconds(5, self.check_battery)
+        self.notify_timer = GLib.timeout_add_seconds(60, self.check_battery)
 
     def StopNotify(self):
         if not self.notifying:
