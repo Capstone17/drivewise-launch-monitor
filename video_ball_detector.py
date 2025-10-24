@@ -1499,6 +1499,153 @@ def refine_clubface_trajectory(coords: list[dict[str, float]]) -> RefinedTraject
     return RefinedTrajectory(refined_coords, inlier_times, original_times, pixel_points)
 
 
+def smooth_sticker_pixels(
+    pixels: list[dict[str, float]],
+    *,
+    degree: int = 2,
+) -> tuple[list[dict[str, float]], dict[str, int]]:
+    """Fit a quadratic curve to sticker pixel samples and return a smoothed copy."""
+    if degree < 1:
+        degree = 1
+    valid_indices: list[int] = []
+    times: list[float] = []
+    xs: list[float] = []
+    ys: list[float] = []
+    zs: list[float] = []
+    for idx, entry in enumerate(pixels):
+        try:
+            t = float(entry["time"])
+            x_val = float(entry["x"])
+            y_val = float(entry["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        times.append(t)
+        xs.append(x_val)
+        ys.append(y_val)
+        z_val = entry.get("z")
+        if z_val is None:
+            zs.append(np.nan)
+        else:
+            try:
+                zs.append(float(z_val))
+            except (TypeError, ValueError):
+                zs.append(np.nan)
+        valid_indices.append(idx)
+
+    total_valid = len(valid_indices)
+    if total_valid < 3:
+        return pixels, {"applied": False, "total": total_valid, "inliers": total_valid, "outliers": 0}
+
+    times_arr = np.array(times, dtype=np.float64)
+    xs_arr = np.array(xs, dtype=np.float64)
+    ys_arr = np.array(ys, dtype=np.float64)
+    zs_arr = np.array(zs, dtype=np.float64)
+
+    degree_use = int(min(degree, max(1, times_arr.size - 1)))
+    coeff_x, _, mask_x = _robust_polyfit(times_arr, xs_arr, degree=degree_use)
+    coeff_y, _, mask_y = _robust_polyfit(times_arr, ys_arr, degree=degree_use)
+    if coeff_x is None or coeff_y is None:
+        return pixels, {"applied": False, "total": total_valid, "inliers": total_valid, "outliers": 0}
+
+    combined_mask = mask_x & mask_y
+    if int(combined_mask.sum()) < 3:
+        combined_mask = mask_x | mask_y
+    inliers = int(combined_mask.sum())
+    if inliers < 2:
+        return pixels, {"applied": False, "total": total_valid, "inliers": total_valid, "outliers": 0}
+
+    coeff_x_final = _polyfit_with_mask(times_arr, xs_arr, combined_mask, degree_use)
+    coeff_y_final = _polyfit_with_mask(times_arr, ys_arr, combined_mask, degree_use)
+    if coeff_x_final is None or coeff_y_final is None:
+        return pixels, {"applied": False, "total": total_valid, "inliers": total_valid, "outliers": 0}
+
+    fitted_x = np.polyval(coeff_x_final, times_arr)
+    fitted_y = np.polyval(coeff_y_final, times_arr)
+
+    coeff_z_final: np.ndarray | None = None
+    if np.isfinite(zs_arr).sum() >= 3:
+        coeff_z, _, mask_z = _robust_polyfit(times_arr, zs_arr, degree=degree_use)
+        if coeff_z is not None:
+            combined_z_mask = mask_z & np.isfinite(zs_arr)
+            if int(combined_z_mask.sum()) >= 2:
+                coeff_z_final = _polyfit_with_mask(times_arr, zs_arr, combined_z_mask, degree_use)
+    fitted_z = (
+        np.polyval(coeff_z_final, times_arr) if coeff_z_final is not None else zs_arr
+    )
+
+    smoothed = [dict(entry) for entry in pixels]
+    for idx_local, (x_fit, y_fit, z_fit) in enumerate(zip(fitted_x, fitted_y, fitted_z)):
+        target_idx = valid_indices[idx_local]
+        entry = smoothed[target_idx]
+        if np.isfinite(x_fit):
+            entry["x"] = round(float(x_fit), 2)
+        if np.isfinite(y_fit):
+            entry["y"] = round(float(y_fit), 2)
+        if entry.get("z") is not None and np.isfinite(z_fit):
+            entry["z"] = round(float(z_fit), 2)
+
+    outliers = total_valid - inliers
+    summary = {"applied": True, "total": total_valid, "inliers": inliers, "outliers": outliers}
+    return smoothed, summary
+
+
+def _annotate_sticker_frames(
+    frames_dir: str,
+    pixels: Sequence[dict[str, float]],
+) -> None:
+    """Overlay the (potentially smoothed) sticker trajectory onto saved frames."""
+    if not frames_dir or not os.path.isdir(frames_dir):
+        return
+    try:
+        entries = [
+            (int(name[6:-4]), os.path.join(frames_dir, name))
+            for name in os.listdir(frames_dir)
+            if name.startswith("frame_") and name.endswith(".png")
+        ]
+    except Exception:
+        return
+    if not entries:
+        return
+
+    raw_points: list[tuple[float, float]] = []
+    for entry in pixels:
+        try:
+            x_val = float(entry["x"])
+            y_val = float(entry["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (np.isfinite(x_val) and np.isfinite(y_val)):
+            continue
+        raw_points.append((x_val, y_val))
+    if not raw_points:
+        return
+
+    for _, frame_path in sorted(entries):
+        image = cv2.imread(frame_path)
+        if image is None:
+            continue
+        height, width = image.shape[:2]
+        path_points = [
+            (int(round(x)), int(round(y)))
+            for x, y in raw_points
+            if 0 <= x < width and 0 <= y < height
+        ]
+        if not path_points:
+            continue
+        if len(path_points) >= 2:
+            cv2.polylines(
+                image,
+                [np.array(path_points, dtype=np.int32)],
+                isClosed=False,
+                color=(0, 255, 0),
+                thickness=2,
+                lineType=cv2.LINE_AA,
+            )
+        else:
+            cv2.circle(image, path_points[0], 3, (0, 255, 0), -1, cv2.LINE_AA)
+        cv2.imwrite(frame_path, image)
+
+
 def _annotate_clubface_frames(
     frames_dir: str,
     samples_by_frame: dict[int, list[dict[str, object]]],
@@ -3839,12 +3986,6 @@ def process_video(
                         prev_centroid = (u, v)
                         prev_club_mask = club_mask.copy()
                 output_frame = cv2.bitwise_and(output_frame, output_frame, mask=club_mask)
-        # Draw trajectory so far
-        if len(path_points) >= 2:
-            cv2.polylines(output_frame, [np.array(path_points, dtype=np.int32)], False, (0,255,0), 2, cv2.LINE_AA)
-        elif len(path_points) == 1:
-            cv2.circle(output_frame, path_points[0], 3, (0,255,0), -1, cv2.LINE_AA)
-
         if ball_overlay is not None:
             cx_i, cy_i = ball_overlay["center"]
             radius_i = max(int(ball_overlay["radius"]), 1)
@@ -3879,6 +4020,16 @@ def process_video(
     ball_coords.sort(key=lambda c: c["time"])
     # Persist simple pixel-space club trajectory
     club_pixels.sort(key=lambda c: c["time"]) 
+
+    smoothed_club_pixels, smoothing_info = smooth_sticker_pixels(club_pixels)
+    if smoothing_info.get("applied"):
+        club_pixels = smoothed_club_pixels
+        print(
+            "Smoothed sticker trajectory: "
+            f"{smoothing_info['inliers']} inliers of {smoothing_info['total']} samples"
+        )
+    if frames_dir:
+        _annotate_sticker_frames(frames_dir, club_pixels)
 
     with open(ball_path, "w", encoding="utf-8") as f:
         json.dump(ball_coords, f, indent=2)
