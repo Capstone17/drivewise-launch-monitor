@@ -23,11 +23,8 @@ from ble import (
 )
 
 import array
-import sys
 import subprocess
 import json
-import os
-import glob
 
 from auto_capture import (
     AutoCaptureManager,
@@ -145,26 +142,100 @@ class SwingAnalysisCharacteristic(Characteristic):
         
     def WriteValue(self, value, options):
         logger.debug("Received write command")
-        
-        # Create a config and manager classes necessary for auto capture
-        low_config = LowRateDetectionConfig(
-            low_fps=5.0,
-            max_wait_seconds=120.0,
-            score_threshold=0.20,
-            min_consecutive_hits=2,
-        )
 
-        logger.debug("High speed capture config setup")
-        high_config = HighSpeedCaptureConfig(
-            duration_seconds=5.0,
-            shutter_speed=200,
-            width=196,
-            height=128,
-            framerate=550,
-            camera_index=0,
-        )
+        def set_failure(message: str) -> None:
+            self.service.shared_data["metrics"] = {
+                "face angle": 0,
+                "swing path": 0,
+                "attack angle": 0,
+                "side angle": 0,
+            }
+            self.service.shared_data["feedback"] = message
+            self.value = self.service.shared_data["metrics"]
+            if self.notifying:
+                self.notify_client()
 
-        logger.debug("AutoCapture Manager setup")
+        payload_bytes = bytes(value)
+        payload_text = ""
+        payload_data: dict[str, object] | None = None
+        if payload_bytes:
+            try:
+                payload_text = payload_bytes.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                logger.warning("Incoming BLE payload is not valid UTF-8")
+        if payload_text:
+            try:
+                maybe_data = json.loads(payload_text)
+            except json.JSONDecodeError:
+                logger.debug("BLE payload is not JSON; treating as raw string")
+            else:
+                if isinstance(maybe_data, dict):
+                    payload_data = maybe_data
+
+        club_selection = "mid-iron"
+        if payload_data and isinstance(payload_data.get("club"), str):
+            club_selection = payload_data["club"].strip() or club_selection
+
+        shutter_override: int | None = None
+        if payload_data:
+            for key in ("shutter_speed", "shutter", "exposure"):
+                if key in payload_data:
+                    try:
+                        shutter_override = int(float(payload_data[key]))
+                    except (TypeError, ValueError):
+                        logger.warning("Invalid shutter value for key %s: %s", key, payload_data[key])
+                    break
+        elif payload_text.isdigit():
+            shutter_override = int(payload_text)
+
+        default_shutter: int | None = None
+        if self.service.exposure:
+            try:
+                default_shutter = int(float(self.service.exposure))
+            except (TypeError, ValueError):
+                logger.warning("Stored exposure is not numeric: %s", self.service.exposure)
+        shutter_speed = shutter_override if shutter_override is not None else (default_shutter or 200)
+
+        low_config_kwargs = {
+            "low_fps": 5.0,
+            "max_wait_seconds": 120.0,
+            "score_threshold": 0.20,
+            "min_consecutive_hits": 2,
+        }
+        if payload_data:
+            if isinstance(payload_data.get("low_fps"), (int, float)):
+                low_config_kwargs["low_fps"] = float(payload_data["low_fps"])
+            if isinstance(payload_data.get("low_max_wait"), (int, float)):
+                low_config_kwargs["max_wait_seconds"] = float(payload_data["low_max_wait"])
+            if isinstance(payload_data.get("low_score_threshold"), (int, float)):
+                low_config_kwargs["score_threshold"] = float(payload_data["low_score_threshold"])
+            if isinstance(payload_data.get("low_min_hits"), int):
+                low_config_kwargs["min_consecutive_hits"] = int(payload_data["low_min_hits"])
+
+        low_config = LowRateDetectionConfig(**low_config_kwargs)
+
+        high_config_kwargs = {
+            "duration_seconds": 5.0,
+            "shutter_speed": shutter_speed,
+            "width": 196,
+            "height": 128,
+            "framerate": 550,
+            "camera_index": 0,
+        }
+        if payload_data:
+            if isinstance(payload_data.get("duration"), (int, float)):
+                high_config_kwargs["duration_seconds"] = float(payload_data["duration"])
+            if isinstance(payload_data.get("framerate"), (int, float)):
+                high_config_kwargs["framerate"] = int(payload_data["framerate"])
+            if isinstance(payload_data.get("width"), (int, float)):
+                high_config_kwargs["width"] = int(payload_data["width"])
+            if isinstance(payload_data.get("height"), (int, float)):
+                high_config_kwargs["height"] = int(payload_data["height"])
+            if isinstance(payload_data.get("camera_index"), int):
+                high_config_kwargs["camera_index"] = int(payload_data["camera_index"])
+
+        high_config = HighSpeedCaptureConfig(**high_config_kwargs)
+
         manager = AutoCaptureManager(
             low_config=low_config,
             high_config=high_config,
@@ -174,92 +245,82 @@ class SwingAnalysisCharacteristic(Characteristic):
             tail_min_hits=2,
             max_high_attempts=5,
         )
-        
-        logger.debug("Beginning auto capture")
-        capture_cycle = manager.acquire_clip(self.service.exposure)
-        latest_file = str(capture_cycle.final_video)
-        logger.info(
-            "High-speed capture completed after %d attempt(s); final clip: %s",
-            capture_cycle.attempts,
-            latest_file,
+
+        logger.debug(
+            "Beginning auto capture with shutter=%s, club=%s", shutter_speed, club_selection
         )
-        if capture_cycle.detection_event:
-            det_evt = capture_cycle.detection_event
-            logger.debug(
-                "Low-rate watcher trigger frame=%d score=%.3f source=%s",
-                det_evt.frame_index,
-                det_evt.score,
-                det_evt.source,
-            )
-        if len(capture_cycle.all_videos) > 1:
-            logger.debug(
-                "Intermediate clips before final selection: %s",
-                ", ".join(str(p) for p in capture_cycle.all_videos[:-1]),
-            )
 
-
-        # if self.service.exposure == None: 
-        #     self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
-        #     self.service.shared_data["feedback"] = "Please run calibration first!"
-        # else:
         try:
-            # Run video script
-            subprocess.run(
-                [
-                    "./embedded/rpicam_run.sh",
-                    "5s",  # Time in seconds
-                    self.service.exposure
-                ],
-                check=True,
+            capture_cycle = manager.acquire_clip()
+            latest_file = str(capture_cycle.final_video)
+            logger.info(
+                "High-speed capture completed after %d attempt(s); final clip: %s",
+                capture_cycle.attempts,
+                latest_file,
             )
+            if capture_cycle.detection_event:
+                det_evt = capture_cycle.detection_event
+                logger.debug(
+                    "Low-rate watcher trigger frame=%d score=%.3f source=%s",
+                    det_evt.frame_index,
+                    det_evt.score,
+                    det_evt.source,
+                )
+            if len(capture_cycle.all_videos) > 1:
+                logger.debug(
+                    "Intermediate clips before final selection: %s",
+                    ", ".join(str(p) for p in capture_cycle.all_videos[:-1]),
+                )
 
-            logger.info("processing video now")
-            # Find most recent tst*.mp4 file in output directory
-            # output_dir = os.path.expanduser("~/Documents/webcamGolf")
-            # mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
-            # if not mp4_files:
-            #     raise FileNotFoundError("No vid*.mp4 files found in webcamGolf directory")
-
-            # latest_file = max(mp4_files, key=os.path.getmtime)
-            # logger.info(f"Latest video file: {latest_file}")
-
-            # For testing
-            latest_file = "CEsticker_white_200exp1.mp4"
-
-            # Process video
-            result = process_video(
+            processing = process_video(
                 latest_file,
                 "ball_coords.json",
                 "sticker_coords.json",
                 "ball_frames",
+                tail_check=capture_cycle.tail,
             )
-            if result != "skibidi":
-                raise RuntimeError("Video processing did not complete")
-            # Run metric calculations
-            self.service.shared_data = rule_based_system("mid-iron")
-            self.value = self.service.shared_data["metrics"]
+            if not isinstance(processing, dict) or processing.get("status") != "ok":
+                raise RuntimeError("Video processing did not complete successfully")
 
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Shell script failed: {e}")
-            self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
-            self.service.shared_data["feedback"] = "Script execution failed!"
-            self.value = self.service.shared_data["metrics"]
-            if self.notifying:
-                self.notify_client()
+            shared = rule_based_system(club_selection)
+            if not isinstance(shared, dict):
+                raise TypeError("rule_based_system returned unexpected payload")
+            shared["capture_attempts"] = capture_cycle.attempts
+            shared["tail"] = processing.get("tail", {})
+            shared["final_video"] = latest_file
+            shared["processing"] = {
+                "ball_points": processing.get("ball_points"),
+                "club_points": processing.get("club_points"),
+                "ball_detection_time": processing.get("ball_detection_time"),
+                "clubface_time": processing.get("clubface_time"),
+            }
+            if capture_cycle.detection_event:
+                det_evt = capture_cycle.detection_event
+                shared["ball_detection"] = {
+                    "frame_index": det_evt.frame_index,
+                    "score": det_evt.score,
+                    "source": det_evt.source,
+                }
 
-        except Exception as e:
-            logger.error(f"Processing failed: {e}")
-            self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
-            self.service.shared_data["feedback"] = "Swing analysis failed! Please try again."
-            self.value = self.service.shared_data["metrics"]
-            if self.notifying:
-                self.notify_client()
+            self.service.shared_data = shared
+            self.value = self.service.shared_data.get("metrics", {})
 
-        else:
-            # This block runs only if try block completes without exception
-            logger.debug("Updated value after script")
-            if self.notifying:
-                self.notify_client()
+        except TimeoutError as err:
+            logger.warning("Ball detection timed out before capture trigger: %s", err)
+            set_failure("Ball not detected in frame window. Please reset and try again.")
+            return
+        except subprocess.CalledProcessError as err:
+            logger.exception("High-speed recording command failed")
+            set_failure("High-speed recording failed. Please try again.")
+            return
+        except Exception as err:
+            logger.exception("Unexpected error while running swing analysis")
+            set_failure("Swing analysis failed! Please try again.")
+            return
+
+        logger.debug("Auto capture and processing complete; notifying client")
+        if self.notifying:
+            self.notify_client()
 
         
     def StartNotify(self):
