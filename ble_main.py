@@ -271,6 +271,8 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "Intermediate clips before final selection: %s",
                     ", ".join(str(p) for p in capture_cycle.all_videos[:-1]),
                 )
+            if capture_cycle.low_video:
+                logger.debug("Low-rate recording stored at %s", capture_cycle.low_video)
 
             processing = process_video(
                 latest_file,
@@ -288,6 +290,8 @@ class SwingAnalysisCharacteristic(Characteristic):
             shared["capture_attempts"] = capture_cycle.attempts
             shared["tail"] = processing.get("tail", {})
             shared["final_video"] = latest_file
+            if capture_cycle.low_video:
+                shared["low_video"] = str(capture_cycle.low_video)
             shared["processing"] = {
                 "ball_points": processing.get("ball_points"),
                 "club_points": processing.get("club_points"),
