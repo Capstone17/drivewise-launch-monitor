@@ -2077,3 +2077,30 @@
 2025-10-22 03:16:08,276 - __main__ - INFO - GATT application registered
 2025-10-22 03:16:08,278 - __main__ - INFO - Advertisement registered
 2025-10-25 20:34:25,219 - __main__ - DEBUG - Hostname found: '172.16.179.60 \n'
+2025-10-25 21:40:07,339 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-25 21:40:07,340 - __main__ - INFO - Registering GATT application...
+2025-10-25 21:40:07,352 - __main__ - INFO - GATT application registered
+2025-10-25 21:40:07,354 - __main__ - INFO - Advertisement registered
+2025-10-25 21:44:19,555 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-25 21:44:19,556 - __main__ - INFO - Registering GATT application...
+2025-10-25 21:44:19,567 - __main__ - INFO - GATT application registered
+2025-10-25 21:44:19,569 - __main__ - INFO - Advertisement registered
+2025-10-25 21:44:37,616 - __main__ - DEBUG - StartNotify called
+2025-10-25 21:44:42,116 - __main__ - DEBUG - received write command
+2025-10-25 21:44:42,116 - __main__ - DEBUG - Began calibration function
+2025-10-25 21:44:57,095 - __main__ - INFO - Exposure from calibration: 750
+2025-10-25 21:44:57,096 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-25 21:44:57,105 - __main__ - DEBUG - Calibration and GS_Crop successful
+2025-10-25 21:44:57,105 - __main__ - DEBUG - Notifying values changed
+2025-10-25 21:45:16,865 - __main__ - DEBUG - StartNotify called
+2025-10-25 21:45:25,765 - __main__ - DEBUG - Received write command
+2025-10-25 21:47:46,841 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-25 21:47:46,842 - __main__ - INFO - Registering GATT application...
+2025-10-25 21:47:46,853 - __main__ - INFO - GATT application registered
+2025-10-25 21:47:46,855 - __main__ - INFO - Advertisement registered
+2025-10-25 21:48:06,813 - __main__ - DEBUG - StartNotify called
+2025-10-25 21:48:11,514 - __main__ - DEBUG - Received write command
+2025-10-25 21:50:57,879 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-25 21:50:57,880 - __main__ - INFO - Registering GATT application...
+2025-10-25 21:50:57,891 - __main__ - INFO - GATT application registered
+2025-10-25 21:50:57,892 - __main__ - INFO - Advertisement registered

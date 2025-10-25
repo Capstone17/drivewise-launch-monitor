@@ -33,6 +33,7 @@ from video_ball_detector import process_video
 from metrics.ruleBasedSystem import rule_based_system
 from embedded.exposure_calibration import calibrate_exposure
 from battery import return_battery_power
+from auto_capture import *
 
 MainLoop = None
 try:
@@ -139,6 +140,59 @@ class SwingAnalysisCharacteristic(Characteristic):
         
     def WriteValue(self, value, options):
         logger.debug("Received write command")
+        
+        # Create a config and manager classes necessary for auto capture
+        low_config = LowRateDetectionConfig(
+            low_fps=5.0,
+            max_wait_seconds=120.0,
+            score_threshold=0.20,
+            min_consecutive_hits=2,
+        )
+
+        logger.debug("High speed capture config setup")
+        high_config = HighSpeedCaptureConfig(
+            duration_seconds=5.0,
+            shutter_speed=200,
+            width=196,
+            height=128,
+            framerate=550,
+            camera_index=0,
+        )
+
+        logger.debug("AutoCapture Manager setup")
+        manager = AutoCaptureManager(
+            low_config=low_config,
+            high_config=high_config,
+            tail_frames_to_check=8,
+            tail_stride=1,
+            tail_score_threshold=0.20,
+            tail_min_hits=2,
+            max_high_attempts=5,
+        )
+        
+        logger.debug("Beginning auto capture")
+        capture_cycle = manager.acquire_clip(self.service.exposure)
+        latest_file = str(capture_cycle.final_video)
+        logger.info(
+            "High-speed capture completed after %d attempt(s); final clip: %s",
+            capture_cycle.attempts,
+            latest_file,
+        )
+        if capture_cycle.detection_event:
+            det_evt = capture_cycle.detection_event
+            logger.debug(
+                "Low-rate watcher trigger frame=%d score=%.3f source=%s",
+                det_evt.frame_index,
+                det_evt.score,
+                det_evt.source,
+            )
+        if len(capture_cycle.all_videos) > 1:
+            logger.debug(
+                "Intermediate clips before final selection: %s",
+                ", ".join(str(p) for p in capture_cycle.all_videos[:-1]),
+            )
+
+
         # if self.service.exposure == None: 
         #     self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
         #     self.service.shared_data["feedback"] = "Please run calibration first!"
