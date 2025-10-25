@@ -2104,3 +2104,11 @@
 2025-10-25 21:50:57,880 - __main__ - INFO - Registering GATT application...
 2025-10-25 21:50:57,891 - __main__ - INFO - GATT application registered
 2025-10-25 21:50:57,892 - __main__ - INFO - Advertisement registered
+2025-10-25 21:53:18,512 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-25 21:53:18,514 - __main__ - INFO - Registering GATT application...
+2025-10-25 21:53:18,525 - __main__ - INFO - GATT application registered
+2025-10-25 21:53:18,525 - __main__ - INFO - Advertisement registered
+2025-10-25 21:54:49,974 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-25 21:54:49,977 - __main__ - INFO - Registering GATT application...
+2025-10-25 21:54:49,993 - __main__ - INFO - GATT application registered
+2025-10-25 21:54:49,995 - __main__ - INFO - Advertisement registered

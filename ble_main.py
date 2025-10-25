@@ -29,11 +29,16 @@ import json
 import os
 import glob
 
+from auto_capture import (
+    AutoCaptureManager,
+    HighSpeedCaptureConfig,
+    LowRateDetectionConfig,
+)
+
 from video_ball_detector import process_video
 from metrics.ruleBasedSystem import rule_based_system
 from embedded.exposure_calibration import calibrate_exposure
 from battery import return_battery_power
-from auto_capture import *
 
 MainLoop = None
 try:
