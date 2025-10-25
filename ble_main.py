@@ -31,6 +31,8 @@ import glob
 
 from video_ball_detector import process_video
 from metrics.ruleBasedSystem import rule_based_system
+from embedded.exposure_calibration import calibrate_exposure
+from battery import return_battery_power
 
 MainLoop = None
 try:
@@ -106,9 +108,12 @@ class rpiService(Service):
             "metrics": None,
             "feedback": None
         }
+        self.exposure = "200"
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
         self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
         self.add_characteristic(FindIPCharacteristic(bus, 2, self))
+        self.add_characteristic(CalibrationCharacteristic(bus, 3, self))
+        self.add_characteristic(BatteryMonitorCharacteristic(bus, 4, self))
         # self.add_characteristic(PowerOffCharacteristic(bus, 3, self))
 
 
@@ -134,38 +139,33 @@ class SwingAnalysisCharacteristic(Characteristic):
         
     def WriteValue(self, value, options):
         logger.debug("Received write command")
+        # if self.service.exposure == None: 
+        #     self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
+        #     self.service.shared_data["feedback"] = "Please run calibration first!"
+        # else:
         try:
-            # Run config script
-            subprocess.run(
-                [
-                    "./embedded/GS_config.sh"
-                    # , If we want to specify width or height we should do so here
-                ],
-                check=True,
-            )
-
             # Run video script
             subprocess.run(
                 [
                     "./embedded/rpicam_run.sh",
                     "5s",  # Time in seconds
-                    200
+                    self.service.exposure
                 ],
                 check=True,
             )
 
             logger.info("processing video now")
-             # Find most recent tst*.mp4 file in output directory
-            output_dir = os.path.expanduser("~/Documents/webcamGolf")
-            mp4_files = glob.glob(os.path.join(output_dir, "tst*.mp4"))
-            if not mp4_files:
-                raise FileNotFoundError("No tst*.mp4 files found in webcamGolf directory")
+            # Find most recent tst*.mp4 file in output directory
+            # output_dir = os.path.expanduser("~/Documents/webcamGolf")
+            # mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
+            # if not mp4_files:
+            #     raise FileNotFoundError("No vid*.mp4 files found in webcamGolf directory")
 
-            latest_file = max(mp4_files, key=os.path.getmtime)
-            logger.info(f"Latest video file: {latest_file}")
+            # latest_file = max(mp4_files, key=os.path.getmtime)
+            # logger.info(f"Latest video file: {latest_file}")
 
             # For testing
-            # latest_file = "exposure_test/tst_skinny_240.mp4"
+            latest_file = "CEsticker_white_200exp1.mp4"
 
             # Process video
             result = process_video(
@@ -269,6 +269,147 @@ class FindIPCharacteristic(Characteristic):
         result_bytes = json.dumps(self.value).encode('utf-8')
         return [dbus.Byte(b) for b in result_bytes]
     
+class CalibrationCharacteristic(Characteristic):
+    uuid = "778c5d1a-315f-4baf-a23b-6429b84835e3"
+    description = b"Use to calibrate the exposure of the camera!"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["write", "notify"], service,
+        )
+        self.notifying = False
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
+
+    def WriteValue(self, value, options):
+        logger.debug("received write command")
+        try: 
+            # Run calibration script
+            logger.debug("Began calibration function")
+            self.service.exposure = calibrate_exposure()
+            logger.info(f"Exposure from calibration: {self.service.exposure}")
+            # Run config script
+            logger.debug("Calibration successful. Now running GS_config")
+            subprocess.run(
+                [
+                    "./embedded/GS_config.sh",
+                    # , If we want to specify width or height we should do so here
+                    "224", # Width
+                    "128"  # Height
+                ],
+                check=True,
+            )
+        except Exception as e:
+            logger.error(f"Calibration function failed: {e}")
+            if self.notifying:
+                self.notify_client()
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"GS crop script failed: {e}")
+            if self.notifying:
+                self.notify_client()
+
+        else:
+            # This block runs only if try block completes without exception
+            logger.debug("Calibration and GS_Crop successful")
+            if self.notifying:
+                self.notify_client()
+
+    def StartNotify(self):
+        if self.notifying:
+            logger.debug("Already notifying")
+            return
+        logger.debug("StartNotify called")
+        self.notifying = True
+        # self.notify_client()
+
+    def StopNotify(self):
+        if not self.notifying:
+            logger.debug("Not currently notifying")
+            return
+        logger.debug("StopNotify called")
+        self.notifying = False
+
+    def notify_client(self):
+        if not self.notifying:
+            logger.debug("Not notifying, skipping notify_client")
+            return
+
+        self.value = "Calibration complete!"
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        logger.debug("Notifying values changed")
+        self.PropertiesChanged(
+        GATT_CHRC_IFACE,
+        {"Value": [dbus.Byte(b) for b in result_bytes]},
+        []
+        )
+
+class BatteryMonitorCharacteristic(Characteristic):
+    uuid = "a834f0f7-89cc-453b-8be4-2905d27344bf"
+    description = b"Regularly send the battery status to the app!"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["read","notify"], service,
+        )
+        self.notifying = False
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 4, self))
+
+    def ReadValue(self, options):
+        # 
+        self.value = return_battery_power()
+        logger.debug("reading battery power: " + repr(self.value))
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        return [dbus.Byte(b) for b in result_bytes]
+
+    def StartNotify(self):
+        if self.notifying:
+            logger.debug("Already notifying")
+            return
+        logger.debug("StartNotify called")
+        self.notifying = True
+
+        self.value = return_battery_power()
+        self.notify_client()
+
+        # start periodic updates every 5 seconds
+        self.notify_timer = GLib.timeout_add_seconds(60, self.check_battery)
+
+    def StopNotify(self):
+        if not self.notifying:
+            logger.debug("Not currently notifying")
+            return
+        logger.debug("StopNotify called")
+        self.notifying = False
+
+        # stop the periodic update
+        if self.notify_timer:
+            GLib.source_remove(self.notify_timer)
+            self.notify_timer = None
+
+    def notify_client(self):
+        if not self.notifying:
+            logger.debug("Not notifying, skipping notify_client")
+            return
+
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        logger.debug("Notifying values changed")
+        self.PropertiesChanged(
+        GATT_CHRC_IFACE,
+        {"Value": [dbus.Byte(b) for b in result_bytes]},
+        []
+        )
+
+    def check_battery(self):
+        if not self.notifying:
+            return False  # stops the GLib timer
+
+        self.value = return_battery_power()
+        logger.debug("Battery updated: %s", self.value)
+        self.notify_client()
+
+        return True  # continue calling periodically
+
+
 # class PowerOffCharacteristic(Characteristic):
 #     uuid = ""
 #     description = b"Write to power off BLE!"

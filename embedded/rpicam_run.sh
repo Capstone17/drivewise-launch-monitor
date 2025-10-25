@@ -16,7 +16,6 @@ echo "Video directory:  $VIDEO_DIR"
 # -------------------------
 DEFAULT_TIME="1s"
 DEFAULT_SHUTTER=10
-DEFAULT_FILENAME="/../vid00.mp4"
 
 # -------------------------
 # Argument Handling
@@ -67,7 +66,7 @@ echo "Saving video as: $filepath"
 rpicam-vid --level 4.2 \
     -t "$capture_time" \
     --camera 0 \
-    --width 196 \
+    --width 224 \
     --height 128 \
     --no-raw \
     --denoise cdn_off \

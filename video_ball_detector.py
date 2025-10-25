@@ -160,6 +160,15 @@ class RefinedTrajectory:
     pixel_points: list[dict[str, float]]
 
 
+@dataclass
+class TailCheckResult:
+    ball_present: bool
+    hits: int
+    frames_checked: int
+    scores: list[float]
+    frame_indices: list[int]
+
+
 class MotionWindowError(RuntimeError):
     """Base error for failures while establishing a ball motion window."""
 
@@ -3321,6 +3330,87 @@ class TFLiteBallDetector:
         return padded, ratio, (left, top)
 
 
+def check_tail_for_ball(
+    video_path: str,
+    *,
+    detector: TFLiteBallDetector | None = None,
+    frames_to_check: int = 12,
+    stride: int = 1,
+    score_threshold: float = 0.25,
+    min_hits: int = 2,
+) -> TailCheckResult:
+    """Inspect the tail end of a clip and report whether the ball remains visible."""
+
+    if frames_to_check <= 0:
+        return TailCheckResult(False, 0, 0, [], [])
+    if stride <= 0:
+        raise ValueError("stride must be positive")
+
+    owned_detector = detector is None
+    if detector is None:
+        detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Unable to open video for tail check: {video_path}")
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+    scores: list[float] = []
+    frame_indices: list[int] = []
+    hits = 0
+    processed = 0
+
+    if total_frames > 0:
+        last_idx = max(0, total_frames - 1)
+        span = frames_to_check * stride
+        start_idx = max(0, last_idx - span + 1)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_idx)
+        current_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) or start_idx
+        while processed < frames_to_check and current_idx <= last_idx:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                break
+            detections = detector.detect(frame)
+            best_score = max((det.get("score", 0.0) for det in detections), default=0.0)
+            scores.append(float(best_score))
+            frame_indices.append(int(current_idx))
+            if best_score >= score_threshold:
+                hits += 1
+            processed += 1
+            if processed >= frames_to_check:
+                break
+            skip = stride - 1
+            while skip > 0 and current_idx < last_idx:
+                ok_skip = cap.grab()
+                current_idx += 1
+                if not ok_skip:
+                    break
+                skip -= 1
+            current_idx += 1
+    else:
+        while processed < frames_to_check:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                break
+            detections = detector.detect(frame)
+            best_score = max((det.get("score", 0.0) for det in detections), default=0.0)
+            scores.append(float(best_score))
+            frame_indices.append(processed)
+            if best_score >= score_threshold:
+                hits += 1
+            processed += 1
+            for _ in range(stride - 1):
+                if not cap.grab():
+                    break
+
+    cap.release()
+    if owned_detector and hasattr(detector, "interpreter"):
+        del detector
+
+    ball_present = hits >= min_hits and hits > 0
+    return TailCheckResult(ball_present, hits, processed, scores, frame_indices)
+
 
 def find_motion_window(
     video_path: str,
@@ -3611,13 +3701,22 @@ def process_video(
     ball_path: str,
     sticker_path: str,
     frames_dir: str = "ball_frames",
-) -> str:
-    """Process video_path saving ball trajectory and a simple club path from non-green islands.
+    *,
+    tail_check: TailCheckResult | None = None,
+    tail_frames_to_check: int = 12,
+    tail_stride: int = 1,
+    tail_score_threshold: float = 0.25,
+    tail_min_hits: int = 2,
+) -> dict[str, object]:
+    """Process ``video_path`` and persist ball + club trajectories alongside tail metadata.
 
     Club detection is simplified: blackout green pixels and use the largest
     remaining non-black connected component as the club "island". Its centroid
     per frame defines a trajectory. Teleporting points (large inter-frame jumps)
-    are rejected.
+    are rejected. The helper reuses the same TFLite detector to quickly
+    determine whether the ball remains visible in the clip tail so callers can
+    decide whether additional captures are required before running the full
+    pipeline.
     """
 
     if not os.path.exists(video_path):
@@ -3626,6 +3725,24 @@ def process_video(
     ball_compile_start = time.perf_counter()
     detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
     ball_compile_time = time.perf_counter() - ball_compile_start
+
+    if tail_check is None:
+        tail_check = check_tail_for_ball(
+            video_path,
+            detector=detector,
+            frames_to_check=tail_frames_to_check,
+            stride=tail_stride,
+            score_threshold=tail_score_threshold,
+            min_hits=tail_min_hits,
+        )
+
+    tail_summary = "n/a"
+    if tail_check is not None:
+        tail_summary = (
+            f"{tail_check.hits}/{tail_check.frames_checked} frames >= {tail_score_threshold:.2f}"
+        )
+        state = "yes" if tail_check.ball_present else "no"
+        print(f"Tail ball present: {state} ({tail_summary})")
 
     try:
         start_frame, end_frame, _, motion_stats = find_motion_window(
@@ -4044,7 +4161,26 @@ def process_video(
     print(f"Ball detection compile time: {ball_compile_time:.2f}s")
     print(f"Ball detection time: {ball_time:.2f}s")
     print(f"Clubface tracking time: {clubface_time:.2f}s")
-    return "skibidi"
+    return {
+        "status": "ok",
+        "video_path": video_path,
+        "ball_path": ball_path,
+        "sticker_path": sticker_path,
+        "ball_points": len(ball_coords),
+        "club_points": len(club_pixels),
+        "ball_compile_time": ball_compile_time,
+        "ball_detection_time": ball_time,
+        "clubface_time": clubface_time,
+        "tail": {
+            "ball_present": (tail_check.ball_present if tail_check else None),
+            "hits": (tail_check.hits if tail_check else 0),
+            "frames_checked": (tail_check.frames_checked if tail_check else 0),
+            "scores": (tail_check.scores if tail_check else []),
+            "frame_indices": (tail_check.frame_indices if tail_check else []),
+            "score_threshold": tail_score_threshold,
+            "min_hits": tail_min_hits,
+        },
+    }
 
 
 
@@ -4053,9 +4189,17 @@ if __name__ == "__main__":
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
-    process_video(
+    result = process_video(
         video_path,
         ball_path,
         sticker_path,
         frames_dir,
     )
+    try:
+        tail = result.get("tail", {}) if isinstance(result, dict) else {}
+        print(
+            "Tail ball present (CLI):",
+            tail.get("ball_present"),
+        )
+    except Exception:
+        pass

@@ -82,5 +82,3 @@ echo "Found camera $CAMERA_NAME on $MEDIA_DEV"
 # -------------------------
 media-ctl -d "$MEDIA_DEV" --set-v4l2 "'${CAMERA_NAME}':0 [fmt:SBGGR10_1X10/${width}x${height} crop:(${crop_x},${crop_y})/${width}x${height}]" -v
 
-# Confirm configuration
-media-ctl -d "$MEDIA_DEV" --get-v4l2
