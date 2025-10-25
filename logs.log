@@ -2137,3 +2137,33 @@
 2025-10-25 22:15:28,530 - __main__ - DEBUG - Beginning auto capture with shutter=750, club=mid-iron
 2025-10-25 22:17:28,531 - __main__ - WARNING - Ball detection timed out before capture trigger: Ball detection timed out before capture trigger
 2025-10-25 22:17:28,531 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-25 22:25:58,323 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-25 22:25:58,323 - __main__ - INFO - Registering GATT application...
+2025-10-25 22:25:58,335 - __main__ - INFO - GATT application registered
+2025-10-25 22:25:58,338 - __main__ - INFO - Advertisement registered
+2025-10-25 22:26:18,550 - __main__ - DEBUG - StartNotify called
+2025-10-25 22:26:22,840 - __main__ - DEBUG - received write command
+2025-10-25 22:26:22,840 - __main__ - DEBUG - Began calibration function
+2025-10-25 22:26:37,620 - __main__ - INFO - Exposure from calibration: 750
+2025-10-25 22:26:37,620 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-25 22:26:37,625 - __main__ - DEBUG - Calibration and GS_Crop successful
+2025-10-25 22:26:37,625 - __main__ - DEBUG - Notifying values changed
+2025-10-25 22:27:24,520 - __main__ - DEBUG - StartNotify called
+2025-10-25 22:27:29,500 - __main__ - DEBUG - Received write command
+2025-10-25 22:27:29,500 - __main__ - DEBUG - BLE payload is not JSON; treating as raw string
+2025-10-25 22:27:29,547 - __main__ - DEBUG - Beginning auto capture with shutter=750, club=mid-iron
+2025-10-25 22:29:29,549 - __main__ - WARNING - Ball detection timed out before capture trigger: Ball detection timed out before capture trigger
+2025-10-25 22:29:29,549 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
+2025-10-25 22:34:26,344 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-25 22:34:26,345 - __main__ - INFO - Registering GATT application...
+2025-10-25 22:34:26,361 - __main__ - INFO - GATT application registered
+2025-10-25 22:34:26,364 - __main__ - INFO - Advertisement registered
+2025-10-26 00:06:27,132 - __main__ - DEBUG - Hostname found: '172.29.155.194 \n'
+                                                                                 2025-10-26 00:07:20,032 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-26 00:07:20,034 - __main__ - INFO - Registering GATT application...
+2025-10-26 00:07:20,053 - __main__ - INFO - GATT application registered
+2025-10-26 00:07:20,055 - __main__ - INFO - Advertisement registered
+2025-10-26 00:52:07,085 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-26 00:52:07,086 - __main__ - INFO - Registering GATT application...
+2025-10-26 00:52:07,098 - __main__ - INFO - GATT application registered
+2025-10-26 00:52:07,100 - __main__ - INFO - Advertisement registered
