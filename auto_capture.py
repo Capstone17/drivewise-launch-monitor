@@ -207,7 +207,7 @@ class HighSpeedRecorder:
             self._mock_queue.put(path)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def record_clip(self) -> Path:
+    def record_clip(self, shutter_speed) -> Path:
         if not self._mock_queue.empty():
             clip = self._mock_queue.get()
             logger.debug("HighSpeedRecorder returning mock clip %s", clip)
@@ -243,29 +243,27 @@ class HighSpeedRecorder:
         timestamp = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
         return self.config.output_dir / f"auto_{timestamp}.mp4"
 
-    def _build_command(self, output_path: Path) -> list[str]:
+    def _build_command(self, output_path: Path, shutter_speed) -> list[str]:
         cmd = [
             "rpicam-vid",
-            "--level",
-            "4.2",
-            "-t",
-            f"{self.config.duration_seconds}s",
-            "--camera",
-            str(self.config.camera_index),
-            "--width",
-            str(self.config.width),
-            "--height",
-            str(self.config.height),
-            "--no-raw",
-            "--denoise",
-            "cdn_off",
             "-o",
             str(output_path),
+            "--level",
+            "4.2",
+            "camera",
+            "0",
+            "-t",
+            f"{self.config.duration_seconds}s",
+            "--width",
+            "224",
+            "--height",
+            "128",
+            "--no-raw",
             "-n",
-            "--framerate",
-            str(self.config.framerate),
             "--shutter",
-            str(self.config.shutter_speed),
+            str(shutter_speed),
+            "--frames",
+            "5"
         ]
         if self.config.hflip:
             cmd.append("--hflip")
@@ -322,7 +320,7 @@ class AutoCaptureManager:
         self.watcher = BallWatcher(self.detector, self.low_config)
         self.recorder = HighSpeedRecorder(self.high_config)
 
-    def acquire_clip(self) -> CaptureCycleResult:
+    def acquire_clip(self, shutter_speed) -> CaptureCycleResult:
         logger.info("Waiting for ball appearance via low-rate watcher")
         detection_event = self.watcher.wait_for_ball(timeout=self.low_config.max_wait_seconds)
         self.watcher.stop()
