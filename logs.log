@@ -2112,3 +2112,28 @@
 2025-10-25 21:54:49,977 - __main__ - INFO - Registering GATT application...
 2025-10-25 21:54:49,993 - __main__ - INFO - GATT application registered
 2025-10-25 21:54:49,995 - __main__ - INFO - Advertisement registered
+2025-10-25 22:10:27,143 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-25 22:10:27,144 - __main__ - INFO - Registering GATT application...
+2025-10-25 22:10:27,155 - __main__ - INFO - GATT application registered
+2025-10-25 22:10:27,155 - __main__ - INFO - Advertisement registered
+2025-10-25 22:13:07,961 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-25 22:13:07,963 - __main__ - INFO - Registering GATT application...
+2025-10-25 22:13:07,984 - __main__ - INFO - GATT application registered
+2025-10-25 22:13:07,986 - __main__ - INFO - Advertisement registered
+2025-10-25 22:13:51,972 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-25 22:13:51,973 - __main__ - INFO - Registering GATT application...
+2025-10-25 22:13:51,985 - __main__ - INFO - GATT application registered
+2025-10-25 22:13:51,987 - __main__ - INFO - Advertisement registered
+2025-10-25 22:14:53,080 - __main__ - DEBUG - StartNotify called
+2025-10-25 22:14:57,190 - __main__ - DEBUG - received write command
+2025-10-25 22:14:57,190 - __main__ - DEBUG - Began calibration function
+2025-10-25 22:15:12,907 - __main__ - INFO - Exposure from calibration: 750
+2025-10-25 22:15:12,907 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-25 22:15:12,917 - __main__ - DEBUG - Calibration and GS_Crop successful
+2025-10-25 22:15:12,917 - __main__ - DEBUG - Notifying values changed
+2025-10-25 22:15:22,599 - __main__ - DEBUG - StartNotify called
+2025-10-25 22:15:27,939 - __main__ - DEBUG - Received write command
+2025-10-25 22:15:27,939 - __main__ - DEBUG - BLE payload is not JSON; treating as raw string
+2025-10-25 22:15:28,530 - __main__ - DEBUG - Beginning auto capture with shutter=750, club=mid-iron
+2025-10-25 22:17:28,531 - __main__ - WARNING - Ball detection timed out before capture trigger: Ball detection timed out before capture trigger
+2025-10-25 22:17:28,531 - __main__ - DEBUG - Emitting PropertiesChanged with updated value
