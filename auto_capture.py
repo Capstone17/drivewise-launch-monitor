@@ -4,7 +4,7 @@ import queue
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -32,11 +32,6 @@ class LowRateDetectionConfig:
     frame_resize: tuple[int, int] | None = None
     allow_video_loop: bool = True
     mock_video_path: Path | None = None
-    record_stream: bool = True
-    output_dir: Path = field(
-        default_factory=lambda: Path.home() / "Documents" / "webcamGolf" / "low_rate"
-    )
-    codec: str = "mp4v"
 
 
 @dataclass
@@ -62,7 +57,6 @@ class BallDetectionEvent:
     score: float
     frame: Optional[object]
     source: str
-    low_video_path: Optional[Path] = None
 
 
 @dataclass
@@ -72,7 +66,6 @@ class CaptureCycleResult:
     attempts: int
     detection_event: Optional[BallDetectionEvent]
     all_videos: list[Path]
-    low_video: Optional[Path]
 
 
 class BallWatcher:
@@ -88,7 +81,6 @@ class BallWatcher:
         self._stop_event = threading.Event()
         self._event_queue: queue.Queue[BallDetectionEvent] = queue.Queue(maxsize=1)
         self._thread: Optional[threading.Thread] = None
-        self._current_low_video: Optional[Path] = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -122,15 +114,6 @@ class BallWatcher:
         if not cap.isOpened():
             logger.error("BallWatcher failed to open capture source")
             return
-
-        writer: Optional[cv2.VideoWriter] = None
-        video_path: Optional[Path] = None
-        if self.config.record_stream:
-            try:
-                self.config.output_dir.mkdir(parents=True, exist_ok=True)
-            except Exception as exc:
-                logger.warning("Unable to create low-rate output directory: %s", exc)
-                self.config.record_stream = False
 
         fps_interval = 1.0 / self.config.low_fps if self.config.low_fps > 0 else 0.0
         start_time = time.monotonic()
@@ -171,33 +154,6 @@ class BallWatcher:
             if self.config.frame_resize:
                 frame = cv2.resize(frame, self.config.frame_resize, interpolation=cv2.INTER_AREA)
 
-            if self.config.record_stream:
-                if writer is None:
-                    try:
-                        video_path = self._next_low_video_path()
-                        fourcc = cv2.VideoWriter_fourcc(*self.config.codec)
-                        height, width = frame.shape[:2]
-                        writer = cv2.VideoWriter(
-                            str(video_path),
-                            fourcc,
-                            max(self.config.low_fps, 1.0),
-                            (width, height),
-                        )
-                        if not writer.isOpened():
-                            logger.error("Failed to open low-rate writer for %s", video_path)
-                            writer.release()
-                            writer = None
-                            video_path = None
-                    except Exception as exc:
-                        logger.error("Unable to initialise low-rate recording: %s", exc)
-                        if writer is not None:
-                            writer.release()
-                        writer = None
-                        video_path = None
-                        self.config.record_stream = False
-                if writer is not None:
-                    writer.write(frame)
-
             detections = self.detector.detect(frame)
             best_score = max((det.get("score", 0.0) for det in detections), default=0.0)
             if best_score >= self.config.score_threshold:
@@ -209,7 +165,6 @@ class BallWatcher:
                         score=float(best_score),
                         frame=frame.copy(),
                         source="mock" if self.config.mock_video_path else "camera",
-                        low_video_path=video_path,
                     )
                     logger.debug("BallWatcher detected ball with score %.3f", best_score)
                     self._put_event(event)
@@ -230,10 +185,6 @@ class BallWatcher:
             frame_idx += 1
 
         cap.release()
-        if writer is not None:
-            writer.release()
-
-        self._current_low_video = video_path
 
     def _put_event(self, event: BallDetectionEvent) -> None:
         try:
@@ -244,10 +195,6 @@ class BallWatcher:
             except queue.Empty:
                 pass
             self._event_queue.put_nowait(event)
-
-    def _next_low_video_path(self) -> Path:
-        timestamp = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
-        return self.config.output_dir / f"low_{timestamp}.mp4"
 
 
 class HighSpeedRecorder:
@@ -417,5 +364,4 @@ class AutoCaptureManager:
             attempts=attempts,
             detection_event=detection_event,
             all_videos=captured,
-            low_video=detection_event.low_video_path if detection_event else None,
         )
