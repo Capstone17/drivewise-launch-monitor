@@ -1965,3 +1965,115 @@
 2025-10-21 00:21:36,256 - __main__ - DEBUG - Calibration successful. Now running GS_config
 2025-10-21 00:21:36,261 - __main__ - DEBUG - Calibration and GS_Crop successful
 2025-10-21 00:21:36,261 - __main__ - DEBUG - Notifying values changed
+2025-10-21 00:30:03,474 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-21 00:30:03,475 - __main__ - INFO - Registering GATT application...
+2025-10-21 00:30:03,494 - __main__ - INFO - GATT application registered
+2025-10-21 00:30:03,497 - __main__ - INFO - Advertisement registered
+2025-10-22 00:55:55,399 - __main__ - DEBUG - Hostname found: '172.16.179.60 \n'
+2025-10-22 01:02:49,113 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 01:02:49,114 - __main__ - INFO - Registering GATT application...
+2025-10-22 01:02:49,132 - __main__ - INFO - GATT application registered
+2025-10-22 01:02:49,135 - __main__ - INFO - Advertisement registered
+2025-10-22 01:02:49,092 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 01:02:49,094 - __main__ - INFO - Registering GATT application...
+2025-10-22 01:02:49,118 - __main__ - INFO - GATT application registered
+2025-10-22 01:02:49,121 - __main__ - INFO - Advertisement registered
+2025-10-22 02:29:45,880 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 02:29:45,881 - __main__ - INFO - Registering GATT application...
+2025-10-22 02:29:45,892 - __main__ - INFO - GATT application registered
+2025-10-22 02:29:45,893 - __main__ - INFO - Advertisement registered
+2025-10-22 02:30:17,902 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:32:26,352 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 02:32:26,352 - __main__ - INFO - Registering GATT application...
+2025-10-22 02:32:26,365 - __main__ - INFO - GATT application registered
+2025-10-22 02:32:26,367 - __main__ - INFO - Advertisement registered
+2025-10-22 02:32:37,044 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:32:37,044 - __main__ - DEBUG - check battery called
+2025-10-22 02:32:41,904 - __main__ - DEBUG - StopNotify called
+2025-10-22 02:32:42,204 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:32:42,204 - __main__ - DEBUG - check battery called
+2025-10-22 02:36:23,166 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 02:36:23,167 - __main__ - INFO - Registering GATT application...
+2025-10-22 02:36:23,179 - __main__ - INFO - GATT application registered
+2025-10-22 02:36:23,181 - __main__ - INFO - Advertisement registered
+2025-10-22 02:36:35,308 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:36:35,309 - __main__ - DEBUG - check battery called
+2025-10-22 02:38:39,642 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 02:38:39,642 - __main__ - INFO - Registering GATT application...
+2025-10-22 02:38:39,653 - __main__ - INFO - GATT application registered
+2025-10-22 02:38:39,655 - __main__ - INFO - Advertisement registered
+2025-10-22 02:38:51,301 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:38:51,301 - __main__ - DEBUG - check battery called
+2025-10-22 02:38:51,303 - __main__ - DEBUG - return_battery_power function called
+2025-10-22 02:43:21,612 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 02:43:21,613 - __main__ - INFO - Registering GATT application...
+2025-10-22 02:43:21,622 - __main__ - INFO - GATT application registered
+2025-10-22 02:43:21,625 - __main__ - INFO - Advertisement registered
+2025-10-22 02:43:34,118 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:43:34,118 - __main__ - DEBUG - check battery called
+2025-10-22 02:43:34,120 - __main__ - DEBUG - return_battery_power function called
+2025-10-22 02:44:58,518 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 02:44:58,519 - __main__ - INFO - Registering GATT application...
+2025-10-22 02:44:58,530 - __main__ - INFO - GATT application registered
+2025-10-22 02:44:58,532 - __main__ - INFO - Advertisement registered
+2025-10-22 02:45:17,503 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:45:21,433 - __main__ - DEBUG - received write command
+2025-10-22 02:45:21,433 - __main__ - DEBUG - Began calibration function
+2025-10-22 02:45:21,883 - __main__ - INFO - Exposure from calibration: 538
+2025-10-22 02:45:21,883 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-22 02:45:21,896 - __main__ - ERROR - Calibration function failed: Command '['./embedded/GS_config.sh', '224', '128']' returned non-zero exit status 1.
+2025-10-22 02:45:21,896 - __main__ - DEBUG - Notifying values changed
+2025-10-22 02:45:53,474 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:45:53,474 - __main__ - DEBUG - check battery called
+2025-10-22 02:45:53,477 - __main__ - DEBUG - return_battery_power function called
+2025-10-22 02:46:16,395 - __main__ - DEBUG - StopNotify called
+2025-10-22 02:46:16,995 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:46:16,995 - __main__ - DEBUG - check battery called
+2025-10-22 02:46:16,998 - __main__ - DEBUG - return_battery_power function called
+2025-10-22 02:46:18,285 - __main__ - DEBUG - StopNotify called
+2025-10-22 02:46:18,615 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:46:18,615 - __main__ - DEBUG - check battery called
+2025-10-22 02:46:18,618 - __main__ - DEBUG - return_battery_power function called
+2025-10-22 02:46:19,275 - __main__ - DEBUG - StopNotify called
+2025-10-22 02:48:30,749 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 02:48:30,750 - __main__ - INFO - Registering GATT application...
+2025-10-22 02:48:30,760 - __main__ - INFO - GATT application registered
+2025-10-22 02:48:30,762 - __main__ - INFO - Advertisement registered
+2025-10-22 02:48:41,420 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:48:41,420 - __main__ - DEBUG - check battery called
+2025-10-22 02:48:41,423 - __main__ - DEBUG - return_battery_power function called
+2025-10-22 02:52:11,710 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 02:52:11,711 - __main__ - INFO - Registering GATT application...
+2025-10-22 02:52:11,723 - __main__ - INFO - GATT application registered
+2025-10-22 02:52:11,726 - __main__ - INFO - Advertisement registered
+2025-10-22 02:52:25,258 - __main__ - DEBUG - reading battery power: {'Percent': 96.11111111111114}
+2025-10-22 02:52:27,776 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:52:27,776 - __main__ - DEBUG - check battery called
+2025-10-22 02:52:27,779 - __main__ - DEBUG - return_battery_power function called
+2025-10-22 02:52:34,286 - __main__ - DEBUG - StopNotify called
+2025-10-22 02:56:07,474 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 02:56:07,475 - __main__ - INFO - Registering GATT application...
+2025-10-22 02:56:07,488 - __main__ - INFO - GATT application registered
+2025-10-22 02:56:07,491 - __main__ - INFO - Advertisement registered
+2025-10-22 02:56:18,301 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:56:23,758 - __main__ - DEBUG - Battery updated: {'Percent': 95.66666666666669}
+2025-10-22 02:56:23,759 - __main__ - DEBUG - Notifying values changed
+2025-10-22 02:56:28,757 - __main__ - DEBUG - Battery updated: {'Percent': 95.77777777777779}
+2025-10-22 02:56:28,758 - __main__ - DEBUG - Notifying values changed
+2025-10-22 02:56:33,757 - __main__ - DEBUG - Battery updated: {'Percent': 95.66666666666669}
+2025-10-22 02:56:33,758 - __main__ - DEBUG - Notifying values changed
+2025-10-22 02:59:28,327 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 02:59:28,328 - __main__ - INFO - Registering GATT application...
+2025-10-22 02:59:28,339 - __main__ - INFO - GATT application registered
+2025-10-22 02:59:28,341 - __main__ - INFO - Advertisement registered
+2025-10-22 02:59:38,826 - __main__ - DEBUG - StartNotify called
+2025-10-22 02:59:38,828 - __main__ - DEBUG - Notifying values changed
+2025-10-22 03:00:38,768 - __main__ - DEBUG - Battery updated: {'Percent': 95.77777777777779}
+2025-10-22 03:00:38,768 - __main__ - DEBUG - Notifying values changed
+2025-10-22 03:01:38,813 - __main__ - DEBUG - Battery updated: {'Percent': 95.66666666666669}
+2025-10-22 03:01:38,813 - __main__ - DEBUG - Notifying values changed
+2025-10-22 03:16:08,244 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-22 03:16:08,247 - __main__ - INFO - Registering GATT application...
+2025-10-22 03:16:08,276 - __main__ - INFO - GATT application registered
+2025-10-22 03:16:08,278 - __main__ - INFO - Advertisement registered
+2025-10-25 20:34:25,219 - __main__ - DEBUG - Hostname found: '172.16.179.60 \n'
