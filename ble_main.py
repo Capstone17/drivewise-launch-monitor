@@ -280,6 +280,9 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "High-rate capture limit reached (%d attempts) with ball still detected",
                     max_high_attempts,
                 )
+                raise RuntimeError(
+                    f"High-rate capture limit reached after {max_high_attempts} attempts with ball still detected."
+                )
 
             logger.info("STAGE4: STATE: %s latest video is sent to video_ball_detector.py", ball_detected_high)
 
