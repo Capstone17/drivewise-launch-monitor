@@ -4,7 +4,7 @@ import os
 import sys
 import time
 import warnings
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -142,6 +142,25 @@ CLUBFACE_DEPTH_MAX_CM = 400.0
 CLUBFACE_CENTER_OFFSET_CM = CLUBFACE_HORIZONTAL_SPACING_CM / 2.0
 CLUBFACE_Z_OFFSET_CM = 30.0
 CLUBFACE_VERTICAL_ALIGNMENT_PX = 40.0
+
+
+class TimingCollector:
+    """Collect sequential timing measurements and preserve insertion order."""
+
+    def __init__(self) -> None:
+        self._sections: OrderedDict[str, float] = OrderedDict()
+
+    def add(self, name: str, duration: float) -> None:
+        self._sections[name] = self._sections.get(name, 0.0) + float(duration)
+
+    def items(self):
+        return self._sections.items()
+
+    def as_dict(self) -> dict[str, float]:
+        return dict(self._sections)
+
+    def total(self) -> float:
+        return sum(self._sections.values())
 
 
 @dataclass
@@ -3350,6 +3369,7 @@ def check_tail_for_ball(
     if detector is None:
         detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
 
+    frame_loop_start = time.perf_counter()
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Unable to open video for tail check: {video_path}")
@@ -3722,11 +3742,17 @@ def process_video(
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
 
+    timings = TimingCollector()
+    total_start = time.perf_counter()
+
     ball_compile_start = time.perf_counter()
     detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
     ball_compile_time = time.perf_counter() - ball_compile_start
+    timings.add("detector_initialisation", ball_compile_time)
 
+    tail_time = 0.0
     if tail_check is None:
+        tail_start = time.perf_counter()
         tail_check = check_tail_for_ball(
             video_path,
             detector=detector,
@@ -3735,6 +3761,8 @@ def process_video(
             score_threshold=tail_score_threshold,
             min_hits=tail_min_hits,
         )
+        tail_time = time.perf_counter() - tail_start
+    timings.add("tail_check", tail_time)
 
     tail_summary = "n/a"
     if tail_check is not None:
@@ -3744,6 +3772,7 @@ def process_video(
         state = "yes" if tail_check.ball_present else "no"
         print(f"Tail ball present: {state} ({tail_summary})")
 
+    motion_start = time.perf_counter()
     try:
         start_frame, end_frame, _, motion_stats = find_motion_window(
             video_path,
@@ -3751,7 +3780,10 @@ def process_video(
             debug=MOTION_WINDOW_DEBUG,
         )
     except MotionWindowError as exc:
+        timings.add("motion_window", time.perf_counter() - motion_start)
         raise RuntimeError(f"Motion window detection failed: {exc}") from exc
+    motion_window_time = time.perf_counter() - motion_start
+    timings.add("motion_window", motion_window_time)
     processed = motion_stats.get("frames_processed", 0)
     detector_calls = motion_stats.get("detector_calls", 0)
     coarse_step = motion_stats.get("coarse_step")
@@ -3773,6 +3805,9 @@ def process_video(
     alpha_mapper = AdaptiveAlphaMapper()
     motion_guard_tracker = MotionGuardTracker()
     calib_dir = "alphamapping"
+    alpha_cal_time = 0.0
+    alpha_cal_start = time.perf_counter()
+    cap_cal: cv2.VideoCapture | None = None
     try:
         cap_cal = cv2.VideoCapture(video_path)
         if not cap_cal.isOpened():
@@ -3797,10 +3832,14 @@ def process_video(
                 frame_index=calib_idx,
                 save_dir=calib_dir,
             )
-        cap_cal.release()
     except Exception:
         # Non-fatal; we will fall back to green-only if calibration didn't initialize
         pass
+    finally:
+        if cap_cal is not None:
+            cap_cal.release()
+        alpha_cal_time = time.perf_counter() - alpha_cal_start
+        timings.add("alpha_calibration", alpha_cal_time)
 
     # Simplified club tracking via non-green islands (no dot/column logic)
     MAX_TELEPORT_JUMP_PX = CLUBFACE_MAX_JUMP_PX
@@ -3858,6 +3897,7 @@ def process_video(
     ball_velocity = np.zeros(2, dtype=float)
     last_ball_distance: float | None = None
 
+    frame_loop_start = time.perf_counter()
     frame_idx = 0
     while True:
         ret, frame = cap.read()
@@ -3983,6 +4023,7 @@ def process_video(
         if fixed_blackout_y is not None:
             output_frame[fixed_blackout_y + 1 :, :, :] = 0
         if in_window:
+            club_stage_start = time.perf_counter()
             gray_blk = cv2.cvtColor(output_frame, cv2.COLOR_BGR2GRAY)
             _, nb = cv2.threshold(gray_blk, 10, 255, cv2.THRESH_BINARY)
             # Apply the same stationary cutoff on the binary mask
@@ -4103,6 +4144,7 @@ def process_video(
                         prev_centroid = (u, v)
                         prev_club_mask = club_mask.copy()
                 output_frame = cv2.bitwise_and(output_frame, output_frame, mask=club_mask)
+            clubface_time += time.perf_counter() - club_stage_start
         if ball_overlay is not None:
             cx_i, cy_i = ball_overlay["center"]
             radius_i = max(int(ball_overlay["radius"]), 1)
@@ -4133,6 +4175,9 @@ def process_video(
         frame_idx += 1
 
     cap.release()
+    frame_loop_time = time.perf_counter() - frame_loop_start
+    timings.add("frame_processing", frame_loop_time)
+    post_start = time.perf_counter()
 
     ball_coords.sort(key=lambda c: c["time"])
     # Persist simple pixel-space club trajectory
@@ -4152,6 +4197,8 @@ def process_video(
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w", encoding="utf-8") as f:
         json.dump(club_pixels, f, indent=2)
+    post_time = time.perf_counter() - post_start
+    timings.add("post_process", post_time)
 
     print(f"Saved {len(ball_coords)} ball points to {ball_path}")
     if club_pixels:
@@ -4161,6 +4208,27 @@ def process_video(
     print(f"Ball detection compile time: {ball_compile_time:.2f}s")
     print(f"Ball detection time: {ball_time:.2f}s")
     print(f"Clubface tracking time: {clubface_time:.2f}s")
+
+    frame_other_time = max(0.0, frame_loop_time - ball_time - clubface_time)
+    total_time = time.perf_counter() - total_start
+    accounted = timings.total()
+    unaccounted = max(0.0, total_time - accounted)
+    print("Timing breakdown:")
+    for name, duration in timings.items():
+        pct = (duration / total_time * 100.0) if total_time > 0 else 0.0
+        print(f"  {name:<24}: {duration:.2f}s ({pct:5.1f}%)")
+    if frame_loop_time > 0:
+        ball_pct = (ball_time / frame_loop_time * 100.0) if frame_loop_time > 0 else 0.0
+        club_pct = (clubface_time / frame_loop_time * 100.0) if frame_loop_time > 0 else 0.0
+        other_pct = (frame_other_time / frame_loop_time * 100.0) if frame_loop_time > 0 else 0.0
+        print("  frame_processing details:")
+        print(f"    ball_detection: {ball_time:.2f}s ({ball_pct:5.1f}%)")
+        print(f"    club_tracking: {clubface_time:.2f}s ({club_pct:5.1f}%)")
+        print(f"    frame_other:   {frame_other_time:.2f}s ({other_pct:5.1f}%)")
+    if unaccounted > 0.005:
+        pct = (unaccounted / total_time * 100.0) if total_time > 0 else 0.0
+        print(f"  untracked: {unaccounted:.2f}s ({pct:5.1f}%)")
+    print(f"  total: {total_time:.2f}s")
     return {
         "status": "ok",
         "video_path": video_path,
@@ -4171,6 +4239,18 @@ def process_video(
         "ball_compile_time": ball_compile_time,
         "ball_detection_time": ball_time,
         "clubface_time": clubface_time,
+        "timings": {
+            "total": total_time,
+            "accounted": accounted,
+            "unaccounted": unaccounted,
+            "sections": timings.as_dict(),
+            "frame": {
+                "total": frame_loop_time,
+                "ball_detection": ball_time,
+                "club_tracking": clubface_time,
+                "other": frame_other_time,
+            },
+        },
         "tail": {
             "ball_present": (tail_check.ball_present if tail_check else None),
             "hits": (tail_check.hits if tail_check else 0),
