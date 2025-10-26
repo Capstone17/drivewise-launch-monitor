@@ -29,6 +29,7 @@ import json
 import os
 import glob
 import time
+from datetime import datetime
 
 from video_ball_detector import process_video, TFLiteBallDetector, check_tail_for_ball
 from metrics.ruleBasedSystem import rule_based_system
@@ -230,11 +231,21 @@ class SwingAnalysisCharacteristic(Characteristic):
                 high_attempt += 1
                 logger.info("STAGE3: high freq video recording started STATE: %s", ball_detected_high)
                 try:
+
+                    # Get the current date and time for testing
+                    current_time = datetime.now()
+                    print(f"Time at video start: {current_time.time()}")
+
                     subprocess.run(
                         ["./embedded/rpicam_run.sh", "3s", str(self.service.exposure)],
                         check=True,
                         capture_output=True,
                     )
+
+                    # Get the current date and time for testing
+                    current_time = datetime.now()
+                    print(f"Time at video end: {current_time.time()}")
+
                 except subprocess.CalledProcessError:
                     logger.exception("Full video capture failed")
                     self._reset_shared_data("Script execution failed during capture")
@@ -284,8 +295,6 @@ class SwingAnalysisCharacteristic(Characteristic):
                     "sticker_coords.json",
                     "ball_frames"
                 )
-                if result != "skibidi":
-                    raise RuntimeError("Video processing did not complete")
 
                 logger.info("Running rule-based analysis...")
                 self.service.shared_data = rule_based_system("mid-iron")

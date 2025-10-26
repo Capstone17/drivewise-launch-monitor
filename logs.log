@@ -2176,3 +2176,14 @@
 2025-10-26 19:45:58,057 - __main__ - INFO - Registering GATT application...
 2025-10-26 19:45:58,074 - __main__ - INFO - GATT application registered
 2025-10-26 19:45:58,077 - __main__ - INFO - Advertisement registered
+2025-10-26 21:05:21,430 - __main__ - DEBUG - Entered generatefeedback characteristic
+2025-10-26 21:05:21,431 - __main__ - INFO - Registering GATT application...
+2025-10-26 21:05:21,442 - __main__ - INFO - GATT application registered
+2025-10-26 21:05:21,444 - __main__ - INFO - Advertisement registered
+2025-10-26 21:05:39,628 - __main__ - DEBUG - StartNotify called
+2025-10-26 21:05:42,088 - __main__ - DEBUG - received write command
+2025-10-26 21:05:42,088 - __main__ - DEBUG - Began calibration function
+2025-10-26 21:05:56,821 - __main__ - INFO - Exposure from calibration: 750
+2025-10-26 21:05:56,821 - __main__ - DEBUG - Calibration successful. Now running GS_config
+2025-10-26 21:05:56,825 - __main__ - DEBUG - Calibration and GS_Crop successful
+2025-10-26 21:05:56,826 - __main__ - DEBUG - Notifying values changed
