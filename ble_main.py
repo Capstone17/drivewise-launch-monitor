@@ -311,40 +311,45 @@ class SwingAnalysisCharacteristic(Characteristic):
             if self.notifying:
                 self.notify_client()
 
-            else:
-                # This block runs only if try block completes without exception
-                logger.debug("Updated value after script")
-                if self.notifying:
-                    self.notify_client()
-
-            
-        def StartNotify(self):
+        else:
+            # This block runs only if try block completes without exception
+            logger.debug("Updated value after script")
             if self.notifying:
-                logger.debug("Already notifying")
-                return
-            logger.debug("StartNotify called")
-            self.notifying = True
-            # self.notify_client()
+                self.notify_client()
 
-        def StopNotify(self):
-            if not self.notifying:
-                logger.debug("Not currently notifying")
-                return
-            logger.debug("StopNotify called")
-            self.notifying = False
+    def StartNotify(self):
+        if self.notifying:
+            logger.debug("Already notifying")
+            return
+        logger.debug("StartNotify called")
+        self.notifying = True
+        # self.notify_client()
 
-        def notify_client(self):
-            if not self.notifying:
-                logger.debug("Not notifying, skipping notify_client")
-                return
+    def StopNotify(self):
+        if not self.notifying:
+            logger.debug("Not currently notifying")
+            return
+        logger.debug("StopNotify called")
+        self.notifying = False
 
-            result_bytes = json.dumps(self.value).encode('utf-8')
-            logger.debug("Emitting PropertiesChanged with updated value")
-            self.PropertiesChanged(
+    def notify_client(self):
+        if not self.notifying:
+            logger.debug("Not notifying, skipping notify_client")
+            return
+
+        result_bytes = json.dumps(self.value).encode("utf-8")
+        logger.debug("Emitting PropertiesChanged with updated value")
+        self.PropertiesChanged(
             GATT_CHRC_IFACE,
             {"Value": [dbus.Byte(b) for b in result_bytes]},
-            []
-            )
+            [],
+        )
+
+    def _reset_shared_data(self, feedback_message):
+        logger.debug("Resetting shared data because of failure: %s", feedback_message)
+        self.service.shared_data["metrics"] = None
+        self.service.shared_data["feedback"] = feedback_message
+        self.value = self.service.shared_data["metrics"]
 
 class GenerateFeedbackCharacteristic(Characteristic):
     uuid = "2c58a217-0a9b-445f-adac-0b37bd8635c3"
