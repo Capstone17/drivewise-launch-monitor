@@ -182,17 +182,13 @@ class SwingAnalysisCharacteristic(Characteristic):
 
         except subprocess.CalledProcessError as e:
             logger.error(f"Shell script failed: {e}")
-            self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
-            self.service.shared_data["feedback"] = "Script execution failed!"
-            self.value = self.service.shared_data["metrics"]
+            self._reset_shared_data("Script execution failed!")
             if self.notifying:
                 self.notify_client()
 
         except Exception as e:
             logger.error(f"Processing failed: {e}")
-            self.service.shared_data["metrics"] = {'face angle': 0, 'swing path': 0, 'attack angle': 0, 'side angle': 0}
-            self.service.shared_data["feedback"] = "Swing analysis failed! Please try again."
-            self.value = self.service.shared_data["metrics"]
+            self._reset_shared_data("Swing analysis failed! Please try again.")
             if self.notifying:
                 self.notify_client()
 
@@ -230,6 +226,12 @@ class SwingAnalysisCharacteristic(Characteristic):
         {"Value": [dbus.Byte(b) for b in result_bytes]},
         []
         )
+
+    def _reset_shared_data(self, feedback_message):
+        logger.debug("Resetting shared data because of failure: %s", feedback_message)
+        self.service.shared_data["metrics"] = None
+        self.service.shared_data["feedback"] = feedback_message
+        self.value = self.service.shared_data["metrics"]
 
 class GenerateFeedbackCharacteristic(Characteristic):
     uuid = "2c58a217-0a9b-445f-adac-0b37bd8635c3"
