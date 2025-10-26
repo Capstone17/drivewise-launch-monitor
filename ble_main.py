@@ -225,7 +225,7 @@ class SwingAnalysisCharacteristic(Characteristic):
             latest_file = None
             tail_check = None
             high_attempt = 0
-            max_high_attempts = 5
+            max_high_attempts = 10
 
             while ball_detected_high and high_attempt < max_high_attempts:
                 high_attempt += 1
@@ -237,7 +237,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                     print(f"Time at video start: {current_time.time()}")
 
                     subprocess.run(
-                        ["./embedded/rpicam_run.sh", "3s", str(self.service.exposure)],
+                        ["./embedded/rpicam_run.sh", "5s", str(self.service.exposure)],
                         check=True,
                         capture_output=True,
                     )
