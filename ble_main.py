@@ -139,14 +139,15 @@ class SwingAnalysisCharacteristic(Characteristic):
         
         
 def WriteValue(self, value, options):
-    logger.info("Received write command")
+    logger.debug("Received write command")
 
     try:
         ball_detected = False
 
-        logger.debug("STAGE1: before auto_capture is called")
+        logger.info("STAGE1: before auto_capture is called")
+
         while not ball_detected:
-            logger.info("Capturing short burst of frames to detect ball")
+            logger.info("Capturing short burst of frames to detect ball...")
             try:
                 subprocess.run(
                     [
@@ -168,6 +169,7 @@ def WriteValue(self, value, options):
                 logger.exception("Ball detection capture command failed")
                 break
 
+            logger.info("Processing frames to check for ball...")
             detector = getattr(self, "_ball_detector", None)
             if detector is None:
                 try:
@@ -194,17 +196,14 @@ def WriteValue(self, value, options):
                 logger.exception("Low-rate ball detection failed")
                 ball_detected = False
 
-            time.sleep(1.5)  # Wait before next attempt, this can be adjusted as needed
+            logger.info("STAGE2: low freq video recording started STATE: %s", ball_detected)
 
-        
-        
-        logger.info("Ball detected, turning on yellow LED")
+            time.sleep(1.5)  # Wait before next attempt
+
+        logger.info("Ball detected! Turning on yellow LED...")
         # TODO: RYAN TO ADD LED CONTROL LOGIC HERE
-        time.sleep(3)  # Yellow LED on for 3 seconds, then yellow off and green on
 
-
-
-        logger.info("Starting full video capture")
+        logger.info("Starting full video capture...")
         detector = getattr(self, "_ball_detector", None)
         if detector is None:
             try:
@@ -224,30 +223,54 @@ def WriteValue(self, value, options):
         ball_detected_high = True
         latest_file = None
         tail_check = None
+        high_attempt = 0
+        max_high_attempts = 5
 
-        try:
-            subprocess.run(
-                ["./embedded/rpicam_run.sh", "7s", str(self.service.exposure)],
-                check=True,
-                capture_output=True,
+        while ball_detected_high and high_attempt < max_high_attempts:
+            high_attempt += 1
+            logger.info("STAGE3: high freq video recording started STATE: %s", ball_detected_high)
+            try:
+                subprocess.run(
+                    ["./embedded/rpicam_run.sh", "3s", str(self.service.exposure)],
+                    check=True,
+                    capture_output=True,
+                )
+            except subprocess.CalledProcessError:
+                logger.exception("Full video capture failed")
+                self._reset_shared_data("Script execution failed during capture")
+                if self.notifying:
+                    self.notify_client()
+                return
+
+            mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
+            if not mp4_files:
+                logger.error("No vid*.mp4 found in webcamGolf after high-rate capture")
+                break
+
+            latest_file = max(mp4_files, key=os.path.getmtime)
+
+            try:
+                tail_check = check_tail_for_ball(
+                    latest_file,
+                    detector=detector,
+                    frames_to_check=5,
+                    stride=1,
+                    score_threshold=0.25,
+                    min_hits=1,
+                )
+                ball_detected_high = tail_check.ball_present
+            except Exception:
+                logger.exception("High-rate ball detection failed; assuming ball exited frame.")
+                ball_detected_high = False
+                break
+
+        if ball_detected_high and high_attempt >= max_high_attempts:
+            logger.warning(
+                "High-rate capture limit reached (%d attempts) with ball still detected",
+                max_high_attempts,
             )
-        except subprocess.CalledProcessError:
-            logger.exception("Full video capture failed")
-            self._reset_shared_data("Script execution failed during capture")
-            if self.notifying:
-                self.notify_client()
-            return
 
-        # TODO: RYAN TO ADD LED CONTROL LOGIC HERE
-        logger.info("Full video capture complete, analyzing results")
-
-        # Find the lastest vid*.mp4 file in the output directory
-        # This will be the video we just captured
-        mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
-        if not mp4_files:
-            logger.error("No vid*.mp4 found in webcamGolf after high-rate capture")
-            break
-        latest_file = max(mp4_files, key=os.path.getmtime)
+        logger.info("STAGE4: STATE: %s latest video is sent to video_ball_detector.py", ball_detected_high)
 
         logger.info("Processing video data...")
         try:
