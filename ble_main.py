@@ -270,7 +270,7 @@ def WriteValue(self, value, options):
                 max_high_attempts,
             )
 
-        logger.info("STAGE5: STATE: %s latest video is sent to video_ball_detector.py", ball_detected_high)
+        logger.info("STAGE4: STATE: %s latest video is sent to video_ball_detector.py", ball_detected_high)
 
         logger.info("Processing video data...")
         try:
