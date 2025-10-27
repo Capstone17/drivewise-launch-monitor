@@ -62,13 +62,18 @@ logger.addHandler(filelogHandler)
 logger.addHandler(logHandler)
 
 _STATUS_LED_RED_PIN = 17
+_STATUS_LED_YELLOW_PIN = 22
 _STATUS_LED_GREEN_PIN = 27
-_STATUS_LED_BLUE_PIN = 22  # Reserved for future use
-_STATUS_LED_COLOR_LEVELS = {
-    "off": (0, 0, 0),
-    "red": (1, 0, 0),
-    "green": (0, 1, 0),
-    "yellow": (1, 1, 0),
+_STATUS_LED_ALL_PINS = (
+    _STATUS_LED_RED_PIN,
+    _STATUS_LED_YELLOW_PIN,
+    _STATUS_LED_GREEN_PIN,
+)
+_STATUS_LED_COLOR_PINS = {
+    "off": (),
+    "red": (_STATUS_LED_RED_PIN,),
+    "yellow": (_STATUS_LED_YELLOW_PIN,),
+    "green": (_STATUS_LED_GREEN_PIN,),
 }
 _status_led_initialized = False
 _status_led_available = True
@@ -90,7 +95,7 @@ def _ensure_status_led():
         try:
             _LED_GPIO.setwarnings(False)
             _LED_GPIO.setmode(_LED_GPIO.BCM)
-            for pin in (_STATUS_LED_RED_PIN, _STATUS_LED_GREEN_PIN, _STATUS_LED_BLUE_PIN):
+            for pin in _STATUS_LED_ALL_PINS:
                 _LED_GPIO.setup(pin, _LED_GPIO.OUT, initial=_LED_GPIO.LOW)
         except Exception:
             if not _status_led_disable_logged:
@@ -107,17 +112,17 @@ def set_status_led_color(color: str) -> None:
     if not _ensure_status_led():
         return
     normalized = color.lower()
-    levels = _STATUS_LED_COLOR_LEVELS.get(normalized)
-    if levels is None:
+    pins = _STATUS_LED_COLOR_PINS.get(normalized)
+    if pins is None:
         logger.debug("Unsupported status LED color '%s'; ignoring.", color)
         return
     if normalized == _status_led_last_color:
         return
     try:
-        for pin, level in zip(
-            (_STATUS_LED_RED_PIN, _STATUS_LED_GREEN_PIN, _STATUS_LED_BLUE_PIN), levels
-        ):
-            _LED_GPIO.output(pin, _LED_GPIO.HIGH if level else _LED_GPIO.LOW)
+        for pin in _STATUS_LED_ALL_PINS:
+            _LED_GPIO.output(pin, _LED_GPIO.LOW)
+        for pin in pins:
+            _LED_GPIO.output(pin, _LED_GPIO.HIGH)
     except Exception:
         if not _status_led_disable_logged:
             logger.exception("Failed to update status LED state; disabling LED control.")
