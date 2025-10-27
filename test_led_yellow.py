@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-
-"""Simple standalone test that lights the yellow status LED."""
+"""Simple standalone test that lights the yellow status LED using the shared helper."""
 
 import time
 
-import RPi.GPIO as GPIO
-
-YELLOW_LED_PIN = 22  # BCM numbering
+from status_led import cleanup_status_led, set_status_led_color
 
 
 def main() -> None:
-    GPIO.setwarnings(False)
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(YELLOW_LED_PIN, GPIO.OUT, initial=GPIO.LOW)
-
-    GPIO.output(YELLOW_LED_PIN, GPIO.HIGH)
+    set_status_led_color("yellow")
     print("Yellow LED should now be on (GPIO22 high). Press Ctrl+C to exit.")
 
     try:
@@ -23,8 +16,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        GPIO.output(YELLOW_LED_PIN, GPIO.LOW)
-        GPIO.cleanup(YELLOW_LED_PIN)
+        cleanup_status_led()
 
 
 if __name__ == "__main__":
