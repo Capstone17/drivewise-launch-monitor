@@ -146,6 +146,7 @@ class SwingAnalysisCharacteristic(Characteristic):
 
         try:
             while True:
+                set_status_led_color("red")
                 ball_detected = False
 
                 logger.info("STAGE1: before auto_capture is called")
@@ -205,8 +206,6 @@ class SwingAnalysisCharacteristic(Characteristic):
                     time.sleep(1.5)  # Wait before next attempt
 
                 logger.info("Ball detected! Turning on yellow LED...")
-                # TODO: RYAN TO ADD LED CONTROL LOGIC HERE
-                set_status_led_color("yellow")
 
                 logger.info("Starting full video capture...")
                 detector = getattr(self, "_ball_detector", None)
@@ -234,6 +233,8 @@ class SwingAnalysisCharacteristic(Characteristic):
                 while ball_detected_high and high_attempt < max_high_attempts:
                     high_attempt += 1
                     logger.info("STAGE3: high freq video recording started STATE: %s", ball_detected_high)
+                    set_status_led_color("green")
+
                     try:
 
                         # Get the current date and time for testing
@@ -289,6 +290,8 @@ class SwingAnalysisCharacteristic(Characteristic):
                     )
 
                 logger.info("STAGE4: STATE: %s latest video is sent to video_ball_detector.py", ball_detected_high)
+                
+                set_status_led_color("yellow")
 
                 logger.info("Processing video data...")
                 try:
@@ -310,10 +313,13 @@ class SwingAnalysisCharacteristic(Characteristic):
                 except (FileNotFoundError, RuntimeError) as e:
                     logger.exception(f"Video processing failed: {e}")
                     self._reset_shared_data("Swing analysis failed! Please try again.")
+                    set_status_led_color("off")
                 else:
                     logger.debug("Updated value after processing")
                     if self.notifying:
                         self.notify_client()
+                
+                set_status_led_color("off")
 
         except TimeoutError as e:
             logger.warning(str(e))
