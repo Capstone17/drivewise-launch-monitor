@@ -173,7 +173,11 @@ class SwingAnalysisCharacteristic(Characteristic):
                         )
                     except subprocess.CalledProcessError as e:
                         logger.exception("Ball detection capture command failed")
-                        break
+                        self._reset_shared_data("Could not capture the ball")
+                        if self.notifying:
+                            self.notify_client()
+                        set_status_led_color("off")
+                        return
 
                     logger.info("Processing frames to check for ball...")
                     detector = getattr(self, "_ball_detector", None)
@@ -185,7 +189,11 @@ class SwingAnalysisCharacteristic(Characteristic):
                             )
                         except Exception:
                             logger.exception("Failed to initialise ball detector")
-                            break
+                            self._reset_shared_data("Could not initialize the ball detector")
+                            if self.notifying:
+                                self.notify_client()
+                            set_status_led_color("off")
+                            return
                         self._ball_detector = detector
 
                     try:
@@ -201,6 +209,11 @@ class SwingAnalysisCharacteristic(Characteristic):
                     except Exception:
                         logger.exception("Low-rate ball detection failed")
                         ball_detected = False
+                        self._reset_shared_data("Ball detection failed")
+                        if self.notifying:
+                            self.notify_client()
+                        set_status_led_color("off")
+                        return
 
                     logger.info("STAGE2: low freq video recording started STATE: %s", ball_detected)
 
@@ -229,7 +242,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                 latest_file = None
                 tail_check = None
                 high_attempt = 0
-                max_high_attempts = 10
+                max_high_attempts = 20
 
                 while ball_detected_high and high_attempt < max_high_attempts:
                     high_attempt += 1
@@ -257,6 +270,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                         self._reset_shared_data("Script execution failed during capture")
                         if self.notifying:
                             self.notify_client()
+                        set_status_led_color("off")
                         return
 
                     mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
@@ -279,7 +293,11 @@ class SwingAnalysisCharacteristic(Characteristic):
                     except Exception:
                         logger.exception("High-rate ball detection failed; assuming ball exited frame.")
                         ball_detected_high = False
-                        break
+                        self._reset_shared_data("High-rate ball detection failed; assuming ball exited frame.")
+                        if self.notifying:
+                            self.notify_client()
+                        set_status_led_color("off")
+                        return
 
                 if ball_detected_high and high_attempt >= max_high_attempts:
                     logger.warning(
@@ -288,6 +306,11 @@ class SwingAnalysisCharacteristic(Characteristic):
                     )
                     raise RuntimeError(
                         f"High-rate capture limit reached after {max_high_attempts} attempts with ball still detected."
+                        self._reset_shared_data("limit reached after max_high_attempts attempts with ball still detected.")
+                        if self.notifying:
+                            self.notify_client()
+                        set_status_led_color("off")
+                        return
                     )
 
                 logger.info("STAGE4: STATE: %s latest video is sent to video_ball_detector.py", ball_detected_high)
@@ -314,7 +337,10 @@ class SwingAnalysisCharacteristic(Characteristic):
                 except (FileNotFoundError, RuntimeError) as e:
                     logger.exception(f"Video processing failed: {e}")
                     self._reset_shared_data("Swing analysis failed! Please try again.")
+                    if self.notifying:
+                        self.notify_client()
                     set_status_led_color("off")
+                    return
                 else:
                     logger.debug("Updated value after processing")
                     if self.notifying:
