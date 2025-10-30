@@ -319,7 +319,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                     if self.notifying:
                         self.notify_client()
                 
-                set_status_led_color("off")
+            set_status_led_color("off")
 
         except TimeoutError as e:
             logger.warning(str(e))
