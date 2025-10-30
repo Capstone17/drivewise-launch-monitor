@@ -144,8 +144,9 @@ class SwingAnalysisCharacteristic(Characteristic):
     def WriteValue(self, value, options):
         logger.debug("Received write command")
 
-        try:
-            while True:
+
+        while True:
+            try:
                 set_status_led_color("red")
                 ball_detected = False
 
@@ -318,8 +319,10 @@ class SwingAnalysisCharacteristic(Characteristic):
                     logger.debug("Updated value after processing")
                     if self.notifying:
                         self.notify_client()
-                
-            set_status_led_color("off")
+
+            except Exception:
+                logger.exception("Low-rate ball detection failed")
+                set_status_led_color("off")
 
         except TimeoutError as e:
             logger.warning(str(e))
