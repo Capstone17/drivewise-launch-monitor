@@ -345,23 +345,23 @@ class SwingAnalysisCharacteristic(Characteristic):
                 logger.exception("Low-rate ball detection failed")
                 set_status_led_color("off")
 
-        except TimeoutError as e:
-            logger.warning(str(e))
-            self._reset_shared_data("Ball not detected in time.")
-            if self.notifying:
-                self.notify_client()
+        # except TimeoutError as e:
+        #     logger.warning(str(e))
+        #     self._reset_shared_data("Ball not detected in time.")
+        #     if self.notifying:
+        #         self.notify_client()
 
-        except Exception as e:
-            logger.exception(f"Unexpected failure in WriteValue: {e}")
-            self._reset_shared_data("Unexpected system error occurred.")
-            if self.notifying:
-                self.notify_client()
+        # except Exception as e:
+        #     logger.exception(f"Unexpected failure in WriteValue: {e}")
+        #     self._reset_shared_data("Unexpected system error occurred.")
+        #     if self.notifying:
+        #         self.notify_client()
 
-        else:
-            # This block runs only if try block completes without exception
-            logger.debug("Updated value after script")
-            if self.notifying:
-                self.notify_client()
+        # else:
+        #     # This block runs only if try block completes without exception
+        #     logger.debug("Updated value after script")
+        #     if self.notifying:
+        #         self.notify_client()
 
     def StartNotify(self):
         if self.notifying:
