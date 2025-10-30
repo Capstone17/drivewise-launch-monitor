@@ -306,10 +306,6 @@ class SwingAnalysisCharacteristic(Characteristic):
                     )
                     raise RuntimeError(
                         f"High-rate capture limit reached after {max_high_attempts} attempts with ball still detected."
-                        self._reset_shared_data("limit reached after max_high_attempts attempts with ball still detected.")
-                        if self.notifying:
-                            self.notify_client()
-                        set_status_led_color("off")
                         return
                     )
 
