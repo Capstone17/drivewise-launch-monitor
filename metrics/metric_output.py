@@ -12,46 +12,76 @@ import os
 import matplotlib.pyplot as plt
 
 
-
+# TODO: Remove this function completely
 def load_ball_movement_window(json_path):
     """
     Finds the first instance of major movement and returns all frames from impact onward.
-    
+
     Returns:
-        tuple: (window, impact_idx_in_window, pre_frame, post_frame)
-        - pre_frame is the impact frame
-        - post_frame is the frame directly after impact
+    tuple: (window, impact_idx_in_window, pre_frame, post_frame)
+    - pre_frame is the impact frame
+    - post_frame is the frame directly after impact
     """
+
 
     # x and y are much more accurate than z, hence the smaller movement thresholds
     x_threshold = 0.1
     y_threshold = 0.1
     z_threshold = 8.0
 
+
     with open(json_path, 'r') as f:
         data = json.load(f)
 
+
     if not data:
-        return [], None, None, None, None  # No data at all
+        return [], None, None, None, None # No data at all
+
 
     for i in range(len(data) - 1):
         frame1 = data[i]
         frame2 = data[i + 1]
 
+
         dx = abs(frame2['x'] - frame1['x'])
         dy = abs(frame2['y'] - frame1['y'])
         dz = abs(frame2['z'] - frame1['z'])
 
+
         if dx > x_threshold or dy > y_threshold or dz > z_threshold:
             # Window is everything from impact onward
             window = data[i:]
-            impact_idx_in_window = 0  # Impact is first frame in the window
+            impact_idx_in_window = 0 # Impact is first frame in the window
             pre_frame = window[0]
             post_frame = window[1] if len(window) > 1 else None
             last_frame = window[-1]
             return window, impact_idx_in_window, pre_frame, post_frame, last_frame
 
-    return [], None, None, None, None  # No movement found
+
+    return [], None, None, None, None # No movement found
+
+
+def load_impact_time(json_path):
+    """
+    Finds the last sticker frame and returns it as the moment of impact.
+    This is because the computer vision algorithm stops tracking the sticker once the ball begins to move.
+    
+    Returns:
+        impact_time: Time of impact
+    """
+    with open(json_path, 'r') as f:
+        data = json.load(f)
+
+    if not data:
+        return None
+
+    # Use last frame as the moment of impact
+    impact_idx = len(data) - 1
+    impact_time = data[impact_idx]['time']
+
+    return impact_time
+
+
 
 
 # Load the marker pose immediately before and immediately after impact
@@ -149,22 +179,37 @@ def fit_line(t_values, y_values):
     return m, b
 
 
-# Ball velocity components
-def velocity_components(frames):
+# Find the ball velocity components
+def ball_velocity_components(json_path, time_threshold):
     """
-    Given a window of ≥ 3 frames, fit best-fit lines for x and z vs. time.
-    Returns velocity components (x_rate, z_rate) in units per second.
+    Given a JSON file path and a time threshold, compute velocity components
+    by fitting best-fit lines for x, y, and z vs. time using only frames
+    with time > time_threshold.
+    
+    Args:
+        json_path: Path to the JSON file containing coordinate data
+        time_threshold: Only consider frames with time > this value
+    
+    Returns:
+        tuple: (x_rate, y_rate, z_rate) velocity components in units per second
     """
+    # Load data from JSON file
+    with open(json_path, 'r') as f:
+        data = json.load(f)
+    
+    # Filter frames with time > time_threshold
+    frames = [d for d in data if d['time'] > time_threshold]
+    
     if len(frames) < 3:
-        raise ValueError("Need at least 3 frames for a fit.")
-
+        raise ValueError("Need at least 3 frames after filtering for a fit.")
+    
     t_vals = [f['time'] for f in frames]
-
-    # Fit lines for x and z; slopes = velocity components
+    
+    # Fit lines for x, y, and z; slopes = velocity components
     x_rate, _ = fit_line(t_vals, [f['x'] for f in frames])
-    y_rate, _ = fit_line(t_vals, [f['z'] for f in frames])
+    y_rate, _ = fit_line(t_vals, [f['y'] for f in frames])
     z_rate, _ = fit_line(t_vals, [f['z'] for f in frames])
-
+    
     return x_rate, y_rate, z_rate
 
 
@@ -232,19 +277,19 @@ def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz
     # ---------------------------------
     
     if (abs(swing_path) > 25):
-        print("Extreme swing path; using default of 0.00")
+        print(f"Extreme swing path {swing_path}; using default of 0.00")
         swing_path = 0.00
     if (abs(side_angle) > 25):
-        print("Extreme side angle; using default of 0.00")
+        print(f"Extreme side angle {side_angle}; using default of 0.00")
         side_angle = 0.00
     if (abs(face_angle) > 25):
-        print("Extreme face angle; using default of 0.00")
+        print(f"Extreme face angle {face_angle}; using default of 0.00")
         face_angle = 0.00
     if (abs(attack_angle) > 25):
-        print("Extreme attack angle; using default of 0.00")
+        print(f"Extreme attack angle {attack_angle}; using default of 0.00")
         attack_angle = 0.00
     if (abs(face_to_path) > 25):
-        print("Extreme face-to-path; using default of 0.00")
+        print(f"Extreme face-to-path {face_to_path}; using default of 0.00")
         face_to_path = 0.00
 
     return {
@@ -313,18 +358,19 @@ def return_metrics() -> dict:
     # Coordinate source paths
     src_coords_path = Path("~/Documents/webcamGolf").expanduser()
     src_coords = str(src_coords_path) + "/"
-    ball_coords_path = os.path.join(src_coords, 'ball_coords.json')
-    sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')
-
+    # CHANGE: ball_coords_path = os.path.join(src_coords, 'ball_coords.json')
+    # CHANGE: sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')
+    ball_coords_path = "../ball_coords.json"
+    sticker_coords_path = "../sticker_coords.json"
 
     # ---------------------------------
-    # Load movement windows
-    # ---------------------------------
-    # Find ball data
-    threshold = 10.0
+    # Find impact time
+    # --------------------------------- 
     ball_window, ball_impact_idx, ball_pre_frame, ball_post_frame, ball_last_frame = load_ball_movement_window(ball_coords_path)  # Find moment of impact and its surrounding frames
-        
+    impact_time = load_impact_time(sticker_coords_path)
+    print(f"Impact time: {impact_time}")
 
+    # TODO: Remove section completely
     # ---------------------------------
     # Load Window & Print
     # ---------------------------------
@@ -343,28 +389,21 @@ def return_metrics() -> dict:
     elif marker_frame_after_impact:
         marker_target_time = marker_frame_after_impact["time"]
 
-    # Print ball data
-    print("Impact frame index in window:", ball_impact_idx)
-    print("Pre-impact frame:", ball_pre_frame)
-    print("Post-impact frame:", ball_post_frame)
-    print("Ball last frame:", ball_last_frame)
     for idx, frame in enumerate(ball_window):
         print(f"Frame {idx}: time={frame['time']}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
 
     # Print marker data
-    print("\nMarker Frames:")  
-    print("Marker impact frame:", marker_target_time)
+    print("\nMarker Frames:")
     for idx, frame in enumerate(marker_window):
         print(f"Frame {idx}: time={frame['time']:.3f}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
 
     # ---------------------------------
     # Velocity Approximation
     # ---------------------------------
-    ball_dx, ball_dy, ball_dz = velocity_components(ball_window)
+    ball_dx, ball_dy, ball_dz = ball_velocity_components(ball_coords_path, impact_time)
     print(f"Ball dx: {ball_dx}, Ball dy: {ball_dy}, Ball dz: {ball_dz}")
     marker_dx, marker_dy, marker_dz = finite_diff_velocity(marker_window, t_target=marker_target_time)
     print(f"At time {marker_target_time}, Marker dx: {marker_dx}, Marker dy: {marker_dy}, Marker dz: {marker_dz}")
-
 
     # Calculate the metrics
     metrics = metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz)
