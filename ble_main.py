@@ -31,6 +31,7 @@ import os
 import glob
 import time
 from datetime import datetime
+import threading
 
 from video_ball_detector import process_video, TFLiteBallDetector, check_tail_for_ball
 from metrics.ruleBasedSystem import rule_based_system
@@ -136,7 +137,7 @@ class rpiService(Service):
             "metrics": None,
             "feedback": None
         }
-        self.run_camera = True
+        self.camera_event = threading.Event()
         self.exposure = "200"
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
         self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
@@ -169,10 +170,18 @@ class SwingAnalysisCharacteristic(Characteristic):
         
     def WriteValue(self, value, options):
         logger.debug("Received write command")
-        self.service.run_camera = True
+        if not self.service.camera_event.is_set():
+            self.service.camera_event.set()
+            threading.Thread(target=self.swingAnalysisLoop, daemon=True).start()
+            logger.info("started capture thread")
+        else:
+            logger.info("Capture already running")
 
 
-        while self.service.run_camera:
+    def swingAnalysisLoop(self, value):
+        logger.info("swing analysis loop function entered")
+
+        while self.service.camera_event.is_set():
             try:
                 set_status_led_color("red")
                 ball_detected = False
@@ -201,9 +210,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                     except subprocess.CalledProcessError as e:
                         logger.exception("Ball detection capture command failed")
                         self._reset_shared_data("Could not capture the ball")
-                        if self.notifying:
-                            self.notify_client()
-                        set_status_led_color("off")
+                        self.end_loop()
                         return
 
                     logger.info("Processing frames to check for ball...")
@@ -217,9 +224,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                         except Exception:
                             logger.exception("Failed to initialise ball detector")
                             self._reset_shared_data("Could not initialize the ball detector")
-                            if self.notifying:
-                                self.notify_client()
-                            set_status_led_color("off")
+                            self.end_loop()
                             return
                         self._ball_detector = detector
 
@@ -238,16 +243,15 @@ class SwingAnalysisCharacteristic(Characteristic):
                         logger.exception("Low-rate ball detection failed")
                         ball_detected = False
                         self._reset_shared_data("Ball detection failed")
-                        if self.notifying:
-                            self.notify_client()
-                        set_status_led_color("off")
+                        self.end_loop()
                         return
 
                     logger.info("STAGE2: low freq video recording started STATE: %s", ball_detected)
 
                     time.sleep(1.5)  # Wait before next attempt
-                    if(self.service.run_camera == False):
+                    if(not self.service.camera_event.is_set()):
                         logger.debug("Swing capture canceled by user")
+                        self.end_loop()
                         return
 
                 logger.info("Ball detected! Turning on yellow LED...")
@@ -299,9 +303,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                     except subprocess.CalledProcessError:
                         logger.exception("Full video capture failed")
                         self._reset_shared_data("Script execution failed during capture")
-                        if self.notifying:
-                            self.notify_client()
-                        set_status_led_color("off")
+                        self.end_loop()
                         return
 
                     mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
@@ -326,9 +328,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                         logger.exception("High-rate ball detection failed; assuming ball exited frame.")
                         ball_detected_high = False
                         self._reset_shared_data("High-rate ball detection failed; assuming ball exited frame.")
-                        if self.notifying:
-                            self.notify_client()
-                        set_status_led_color("off")
+                        self.end_loop()
                         return
 
                 if ball_detected_high and high_attempt >= max_high_attempts:
@@ -365,9 +365,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                 except (FileNotFoundError, RuntimeError) as e:
                     logger.exception(f"Video processing failed: {e}")
                     self._reset_shared_data("Swing analysis failed! Please try again.")
-                    if self.notifying:
-                        self.notify_client()
-                    set_status_led_color("off")
+                    self.end_loop()
                     return
                 else:
                     logger.debug("Updated value after processing")
@@ -376,7 +374,7 @@ class SwingAnalysisCharacteristic(Characteristic):
 
             except Exception:
                 logger.exception("Low-rate ball detection failed")
-                set_status_led_color("off")
+                self.end_loop()
 
         # except TimeoutError as e:
         #     logger.warning(str(e))
@@ -429,6 +427,13 @@ class SwingAnalysisCharacteristic(Characteristic):
         self.service.shared_data["metrics"] = None
         self.service.shared_data["feedback"] = feedback_message
         self.value = self.service.shared_data["metrics"]
+
+    def end_loop(self):
+        if self.notifying:
+            self.notify_client()
+        set_status_led_color("off")
+        self.service.camera_event.clear()
+        logger.info("Capture loop ended and event cleared")
 
 class GenerateFeedbackCharacteristic(Characteristic):
     uuid = "2c58a217-0a9b-445f-adac-0b37bd8635c3"
@@ -620,8 +625,9 @@ class CancelSwingCharacteristic(Characteristic):
 
     def WriteValue(self, value, options):
         logger.debug("received write command for cancel swing")
-        self.service.run_camera = False
-        logger.debug("run_camera set to False")
+        if hasattr(self.service, "camera_event"):
+            self.service.camera_event.clear()
+            logger.info("Stopped capture")
 
 
 
