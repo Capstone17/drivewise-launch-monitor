@@ -205,6 +205,7 @@ CLUBFACE_ELLIPSE_TOP_BAND_FRAC = 0.55
 CLUBFACE_ELLIPSE_TOPLEFT_CORE_PERCENTILE = 60.0
 CLUBFACE_ELLIPSE_BOTTOM_DIST_FRAC = 0.42
 CLUBFACE_ELLIPSE_BOTTOM_MIN_PX = 3.0
+CLUB_FINAL_TRIM_MARGIN = 12
 
 
 class TimingCollector:
@@ -3795,6 +3796,13 @@ def process_video(
             good_start = frame_samples[0]
         if good_end is None and frame_samples:
             good_end = frame_samples[-1]
+        if good_end is not None and CLUB_FINAL_TRIM_MARGIN > 0:
+            margin = int(CLUB_FINAL_TRIM_MARGIN)
+            candidate_min = good_start if good_start is not None else good_end
+            adjusted_end = max(int(candidate_min), int(good_end) - margin)
+            if adjusted_end < int(good_end):
+                good_end = adjusted_end
+                club_trim_info["good_end_margin_applied"] = margin
         club_trim_info["good_start"] = good_start
         club_trim_info["good_end"] = good_end
 
@@ -3824,6 +3832,15 @@ def process_video(
                 interp_target_frame = None
         if interp_target_frame is None:
             interp_target_frame = club_trim_info.get("max_frame")
+        if interp_target_frame is not None and CLUB_FINAL_TRIM_MARGIN > 0:
+            lower_bound = trim_min_frame
+            if lower_bound is None:
+                lower_bound = seed_start_frame
+            if lower_bound is None:
+                lower_bound = interp_target_frame
+            adjusted_target = max(int(lower_bound), int(interp_target_frame) - int(CLUB_FINAL_TRIM_MARGIN))
+            if adjusted_target < int(interp_target_frame):
+                interp_target_frame = adjusted_target
 
         club_pixels, club_interpolation_info = interpolate_club_points(
             club_pixels,
