@@ -177,7 +177,7 @@ CLUB_TEMPLATE_UPDATE_MARGIN = 1.12
 CLUB_TEMPLATE_RECOVERY_RATIO = 0.82
 CLUB_TEMPLATE_MIN_EXTENSION_PX = 4.0
 CLUB_TEMPLATE_MAX_EXTENSION_PX = 42.0
-CLUB_RESUME_DELAY_FRAMES = 12
+CLUB_RESUME_DELAY_FRAMES = 6
 CLUB_STAT_LIMIT_MULTIPLIER = 4.5
 CLUB_DEPTH_BASELINE_FRAMES = 20
 CLUB_DEPTH_BASELINE_MULTIPLIER = 1.6
@@ -3475,9 +3475,41 @@ def process_video(
                                         break
                                 attempt_thresh *= 0.88
 
+                    anchor_left_point: tuple[float, float] | None = None
+                    if top_left_mask is not None and int(np.count_nonzero(top_left_mask)) >= 3:
+                        tl_pts = cv2.findNonZero(top_left_mask)
+                        if tl_pts is not None and len(tl_pts):
+                            tl_arr = tl_pts.reshape(-1, 2).astype(float)
+                            tl_x = tl_arr[:, 0]
+                            tl_y = tl_arr[:, 1]
+                            scores_left = tl_x + 0.18 * tl_y
+                            best_idx = int(np.argmin(scores_left))
+                            anchor_left_point = (float(tl_x[best_idx]), float(tl_y[best_idx]))
+                    if anchor_left_point is None and component_points.size:
+                        scores_left = xs.astype(float) + 0.2 * ys.astype(float)
+                        best_idx = int(np.argmin(scores_left))
+                        anchor_left_point = (float(xs[best_idx]), float(ys[best_idx]))
+
+                    anchor_right_point: tuple[float, float] | None = None
+                    if bottom_right_mask is not None and int(np.count_nonzero(bottom_right_mask)) >= 3:
+                        br_pts = cv2.findNonZero(bottom_right_mask)
+                        if br_pts is not None and len(br_pts):
+                            br_arr = br_pts.reshape(-1, 2).astype(float)
+                            br_x = br_arr[:, 0]
+                            br_y = br_arr[:, 1]
+                            scores_right = br_x + 0.6 * br_y
+                            best_idx = int(np.argmax(scores_right))
+                            anchor_right_point = (float(br_x[best_idx]), float(br_y[best_idx]))
+                    if anchor_right_point is None and component_points.size:
+                        scores_right = xs.astype(float) + 0.85 * ys.astype(float)
+                        best_idx = int(np.argmax(scores_right))
+                        anchor_right_point = (float(xs[best_idx]), float(ys[best_idx]))
+
                     ellipse_source_mask: np.ndarray | None = None
+                    anchors_source_used = False
                     if top_left_mask is not None and int(np.count_nonzero(top_left_mask)) >= 5:
                         ellipse_source_mask = top_left_mask.copy()
+                        anchors_source_used = True
                     if bottom_right_mask is not None and int(np.count_nonzero(bottom_right_mask)) >= 5:
                         if ellipse_source_mask is None:
                             ellipse_source_mask = bottom_right_mask.copy()
@@ -3485,18 +3517,19 @@ def process_video(
                             ellipse_source_mask = cv2.bitwise_or(
                                 ellipse_source_mask, bottom_right_mask
                             )
-                    if ellipse_source_mask is None and refined_mask is not None:
-                        ellipse_source_mask = refined_mask.copy()
-                    elif ellipse_source_mask is not None and refined_mask is not None:
+                        anchors_source_used = True
+                    if ellipse_source_mask is None:
+                        if refined_mask is not None:
+                            ellipse_source_mask = refined_mask.copy()
+                        else:
+                            ellipse_source_mask = component_mask.copy()
+                    elif not anchors_source_used and refined_mask is not None:
                         ellipse_source_mask = cv2.bitwise_or(
                             ellipse_source_mask, refined_mask
                         )
-                    if ellipse_source_mask is None:
-                        ellipse_source_mask = component_mask.copy()
-                    else:
-                        ellipse_source_mask = cv2.bitwise_and(
-                            ellipse_source_mask, component_mask
-                        )
+                    ellipse_source_mask = cv2.bitwise_and(
+                        ellipse_source_mask, component_mask
+                    )
                     if int(np.count_nonzero(ellipse_source_mask)) < 5:
                         ellipse_source_mask = component_mask.copy()
 
@@ -3506,6 +3539,34 @@ def process_video(
                             ellipse = cv2.fitEllipse(ellipse_points)
                         except cv2.error:
                             ellipse = None
+
+                    if ellipse is not None and anchor_left_point is not None and anchor_right_point is not None:
+                        ax, ay = anchor_left_point
+                        bx, by = anchor_right_point
+                        center_anchor = ((ax + bx) / 2.0, (ay + by) / 2.0)
+                        dx = bx - ax
+                        dy = by - ay
+                        anchor_distance = math.hypot(dx, dy)
+                        anchor_angle = math.degrees(math.atan2(dy, dx))
+                        axes_existing = ellipse[1]
+                        major_existing = max(float(axes_existing[0]), float(axes_existing[1]))
+                        minor_existing = max(4.0, min(float(axes_existing[0]), float(axes_existing[1])))
+                        anchor_major = max(anchor_distance, major_existing)
+                        if anchor_major < 4.0:
+                            anchor_major = 4.0
+                        if dist_max > 0.0:
+                            dist_for_minor = dist_max * 1.6
+                        else:
+                            dist_for_minor = minor_existing
+                        anchor_minor = max(4.0, min(anchor_major, max(minor_existing, dist_for_minor)))
+                        if anchor_minor > anchor_major:
+                            anchor_minor, anchor_major = anchor_major, anchor_minor
+                            anchor_angle = (anchor_angle + 90.0) % 180.0
+                        ellipse = (
+                            (float(center_anchor[0]), float(center_anchor[1])),
+                            (float(anchor_major), float(anchor_minor)),
+                            float(anchor_angle),
+                        )
 
                     if ellipse is not None:
                         axes = list(ellipse[1])
@@ -3909,7 +3970,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_1.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_2.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
