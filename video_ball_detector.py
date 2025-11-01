@@ -169,6 +169,7 @@ CLUB_TEMPLATE_UPDATE_MARGIN = 1.12
 CLUB_TEMPLATE_RECOVERY_RATIO = 0.82
 CLUB_TEMPLATE_MIN_EXTENSION_PX = 4.0
 CLUB_TEMPLATE_MAX_EXTENSION_PX = 42.0
+CLUB_RESUME_DELAY_FRAMES = 6
 
 
 class TimingCollector:
@@ -280,6 +281,102 @@ def _robust_polyfit(
     return coeffs, fitted, current_mask
 
 
+
+
+def _median_mad_upper_limit(
+    values: Sequence[float],
+    *,
+    multiplier: float = 3.5,
+) -> float | None:
+    """Return a robust upper bound using the median and MAD (or heuristics if degenerate)."""
+    try:
+        arr = np.asarray(
+            [float(v) for v in values if v is not None and np.isfinite(float(v))],
+            dtype=np.float64,
+        )
+    except (TypeError, ValueError):
+        return None
+
+    if arr.size == 0:
+        return None
+    median = float(np.median(arr))
+    mad = float(np.median(np.abs(arr - median)))
+    if not np.isfinite(mad) or mad < 1e-6:
+        std = float(np.std(arr))
+        if not np.isfinite(std) or std < 1e-6:
+            max_val = float(np.max(arr))
+            if max_val <= 0.0:
+                return None
+            return max_val * 1.1
+        limit = median + multiplier * std
+    else:
+        scale = 1.4826 * mad
+        limit = median + multiplier * scale
+    if limit < median and median > 0.0:
+        limit = median * 1.1
+    return float(limit)
+
+
+def filter_club_point_outliers(
+    points: list[dict[str, float]],
+) -> tuple[list[dict[str, float]], dict[str, object]]:
+    """Trim club trajectory points with implausible sizes or distances."""
+    width_values: list[float] = []
+    depth_values: list[float] = []
+    for entry in points:
+        width_val = entry.get("_width_px")
+        if width_val is not None:
+            try:
+                width_float = float(width_val)
+            except (TypeError, ValueError):
+                width_float = None
+            if width_float is not None and np.isfinite(width_float):
+                width_values.append(width_float)
+        depth_val = entry.get("z")
+        if depth_val is not None:
+            try:
+                depth_float = float(depth_val)
+            except (TypeError, ValueError):
+                depth_float = None
+            if depth_float is not None and np.isfinite(depth_float):
+                depth_values.append(depth_float)
+
+    width_limit = _median_mad_upper_limit(width_values)
+    depth_limit = _median_mad_upper_limit(depth_values)
+
+    filtered: list[dict[str, float]] = []
+    removed = 0
+    for entry in points:
+        remove = False
+        width_val = entry.get("_width_px")
+        if (
+            width_limit is not None
+            and width_val is not None
+            and np.isfinite(float(width_val))
+            and float(width_val) > width_limit
+        ):
+            remove = True
+        depth_val = entry.get("z")
+        if depth_limit is not None and depth_val is not None:
+            try:
+                depth_float = float(depth_val)
+            except (TypeError, ValueError):
+                depth_float = None
+            if depth_float is not None and np.isfinite(depth_float) and depth_float > depth_limit:
+                remove = True
+        if remove:
+            removed += 1
+            continue
+        filtered.append(entry)
+
+    summary = {
+        "applied": bool(removed),
+        "total": len(points),
+        "removed": removed,
+        "width_limit": round(float(width_limit), 2) if width_limit is not None else None,
+        "depth_limit": round(float(depth_limit), 2) if depth_limit is not None else None,
+    }
+    return filtered, summary
 
 
 def smooth_sticker_pixels(
@@ -2476,6 +2573,8 @@ def process_video(
     # Stop collecting club points once ball starts moving
     BALL_MOVE_THRESHOLD_PX = 3.0
     club_recording_enabled = True
+    club_motion_pause_triggered = False
+    club_recording_resume_delay = 0
     prev_club_depth: float | None = None
     # Tunables for shape consistency
     IOU_SELECT_THRESHOLD = 0.15
@@ -2522,6 +2621,12 @@ def process_video(
         # No IR toggling; use color frames only for club path
         t = frame_idx / video_fps
         in_window = inference_start <= frame_idx < inference_end
+
+        if not club_recording_enabled and club_motion_pause_triggered:
+            if club_recording_resume_delay > 0:
+                club_recording_resume_delay -= 1
+            if club_recording_resume_delay <= 0 or frame_idx >= inference_end:
+                club_recording_enabled = True
 
         ball_overlay: dict[str, object] | None = None
         ball_prediction_overlay: dict[str, object] | None = None
@@ -2583,8 +2688,10 @@ def process_video(
                         detected = True
                         # If the ball started moving, stop recording club points
                         move_mag = float(np.linalg.norm(ball_velocity))
-                        if club_recording_enabled and move_mag > BALL_MOVE_THRESHOLD_PX:
+                        if (not club_motion_pause_triggered) and move_mag > BALL_MOVE_THRESHOLD_PX:
                             club_recording_enabled = False
+                            club_motion_pause_triggered = True
+                            club_recording_resume_delay = CLUB_RESUME_DELAY_FRAMES
                             # Trim the last 3 club points so recording effectively
                             # starts 3 frames before motion
                             trim_n = min(3, len(club_pixels))
@@ -2723,12 +2830,18 @@ def process_video(
                         if math.hypot(u - pu, v - pv) > MAX_TELEPORT_JUMP_PX:
                             accept = False
                     if accept:
-                        # Estimate depth from leftmost edge of the selected island
+                        # Estimate depth and coarse size metrics from the selected island
                         depth_cm: float | None = None
+                        club_width_px: float | None = None
+                        club_area_px: float | None = None
                         try:
                             nz = np.column_stack(np.where(club_mask > 0))
                             if nz.size:
-                                leftmost_x = float(nz[:, 1].min())
+                                xs = nz[:, 1]
+                                leftmost_x = float(xs.min())
+                                rightmost_x = float(xs.max())
+                                club_width_px = float(max(1.0, rightmost_x - leftmost_x + 1.0))
+                                club_area_px = float(nz.shape[0])
                                 baseline_px = max(1e-3, float(u) - leftmost_x)
                                 depth_cm = float(FOCAL_LENGTH * ACTUAL_BALL_RADIUS / baseline_px)
                         except Exception:
@@ -2738,12 +2851,17 @@ def process_video(
                         if depth_cm is not None:
                             prev_club_depth = depth_cm
                         if club_recording_enabled:
-                            club_pixels.append({
+                            club_entry = {
                                 "time": round(t, 3),
                                 "x": round(float(u), 2),
                                 "y": round(float(v), 2),
                                 "z": (round(float(depth_cm), 2) if depth_cm is not None else None),
-                            })
+                            }
+                            if club_width_px is not None:
+                                club_entry["_width_px"] = float(club_width_px)
+                            if club_area_px is not None:
+                                club_entry["_area_px"] = float(club_area_px)
+                            club_pixels.append(club_entry)
                             path_points.append((int(round(u)), int(round(v))))
                         if prev_centroid is not None:
                             prev_motion = (u - prev_centroid[0], v - prev_centroid[1])
@@ -2787,8 +2905,27 @@ def process_video(
 
     ball_coords.sort(key=lambda c: c["time"])
     # Persist simple pixel-space club trajectory
-    club_pixels.sort(key=lambda c: c["time"]) 
-
+    club_pixels.sort(key=lambda c: c["time"])
+    club_filter_info = {
+        "applied": False,
+        "total": len(club_pixels),
+        "removed": 0,
+        "width_limit": None,
+        "depth_limit": None,
+    }
+    if club_pixels:
+        club_pixels, club_filter_info = filter_club_point_outliers(club_pixels)
+        if club_filter_info.get("applied"):
+            removed = club_filter_info.get("removed", 0)
+            parts: list[str] = []
+            width_limit = club_filter_info.get("width_limit")
+            depth_limit = club_filter_info.get("depth_limit")
+            if width_limit is not None:
+                parts.append(f"width>{width_limit}")
+            if depth_limit is not None:
+                parts.append(f"depth>{depth_limit}")
+            clause = f" ({', '.join(parts)})" if parts else ""
+            print(f"Removed {removed} club outlier point(s){clause}")
     smoothed_club_pixels, smoothing_info = smooth_sticker_pixels(club_pixels)
     if smoothing_info.get("applied"):
         club_pixels = smoothed_club_pixels
@@ -2796,6 +2933,10 @@ def process_video(
             "Smoothed sticker trajectory: "
             f"{smoothing_info['inliers']} inliers of {smoothing_info['total']} samples"
         )
+    if club_pixels:
+        for entry in club_pixels:
+            entry.pop("_width_px", None)
+            entry.pop("_area_px", None)
     if frames_dir:
         _annotate_sticker_frames(frames_dir, club_pixels)
 
@@ -2842,6 +2983,8 @@ def process_video(
         "sticker_path": sticker_path,
         "ball_points": len(ball_coords),
         "club_points": len(club_pixels),
+        "club_filter": club_filter_info,
+        "club_smoothing": smoothing_info,
         "ball_compile_time": ball_compile_time,
         "ball_detection_time": ball_time,
         "clubface_time": clubface_time,
