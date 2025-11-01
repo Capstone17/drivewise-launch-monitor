@@ -174,8 +174,8 @@ CLUB_RESUME_DELAY_FRAMES = 12
 CLUB_STAT_LIMIT_MULTIPLIER = 4.5
 CLUB_DEPTH_BASELINE_FRAMES = 20
 CLUB_DEPTH_BASELINE_MULTIPLIER = 1.6
-CLUB_DEPTH_MIN_CM = 100.0
-CLUB_DEPTH_MAX_CM = 170.0
+CLUB_DEPTH_MIN_CM = 80.0
+CLUB_DEPTH_MAX_CM = 130.0
 
 
 class TimingCollector:
@@ -3396,7 +3396,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_4.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_5.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
