@@ -174,8 +174,8 @@ CLUB_RESUME_DELAY_FRAMES = 12
 CLUB_STAT_LIMIT_MULTIPLIER = 4.5
 CLUB_DEPTH_BASELINE_FRAMES = 20
 CLUB_DEPTH_BASELINE_MULTIPLIER = 1.6
-CLUB_DEPTH_MIN_CM = 80.0
-CLUB_DEPTH_MAX_CM = 150.0
+CLUB_DEPTH_MIN_CM = 100.0
+CLUB_DEPTH_MAX_CM = 170.0
 
 
 class TimingCollector:
@@ -921,7 +921,7 @@ class AdaptiveAlphaMapper:
     def __init__(
         self,
         *,
-        target_coverage: float = 0.94,
+        target_coverage: float = 0.90,
         k_clusters: int = 3,
         k_max: int = 5,
         silhouette_min: float = 0.10,
@@ -929,12 +929,12 @@ class AdaptiveAlphaMapper:
         max_samples: int = 250_000,
         min_radius: float = 6.0,
         max_radius: float = 28.0,
-        initial_quantile: float = 0.975,
-        min_visible_fraction: float = 0.0125,
+        initial_quantile: float = 0.955,
+        min_visible_fraction: float = 0.02,
         temporal_alpha: float = 0.02,
         morph_soften: bool = True,
-        guard_chroma_thresh: float = 12.0,
-        guard_margin: float = 2.0,
+        guard_chroma_thresh: float = 16.0,
+        guard_margin: float = 3.0,
     ) -> None:
         self.target_coverage = float(max(0.5, min(0.98, target_coverage)))
         self.k_clusters = int(max(2, k_clusters))
