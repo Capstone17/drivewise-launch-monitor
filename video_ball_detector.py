@@ -20,6 +20,13 @@ import cv2
 import numpy as np
 
 try:
+    from numpy import RankWarning as _NP_RANK_WARNING
+except ImportError:
+    class _NP_RANK_WARNING(RuntimeWarning):
+        """Fallback warning type when numpy.RankWarning is unavailable."""
+        pass
+
+try:
     from tflite_runtime.interpreter import Interpreter
 except ImportError:  # pragma: no cover - fallback when tflite-runtime is unavailable
     from tensorflow.lite.python.interpreter import Interpreter
@@ -175,7 +182,8 @@ CLUB_STAT_LIMIT_MULTIPLIER = 4.5
 CLUB_DEPTH_BASELINE_FRAMES = 20
 CLUB_DEPTH_BASELINE_MULTIPLIER = 1.6
 CLUB_DEPTH_MIN_CM = 80.0
-CLUB_DEPTH_MAX_CM = 130.0
+CLUB_DEPTH_MAX_CM = 150.0
+CLUB_MAX_FRAME_WINDOW = 34
 
 
 class TimingCollector:
@@ -238,7 +246,7 @@ def _polyfit_with_mask(
     deg = int(max(0, min(degree, count - 1)))
     try:
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore", np.RankWarning)
+            warnings.simplefilter("ignore", _NP_RANK_WARNING)
             coeffs = np.polyfit(times[mask], values[mask], deg)
     except (np.linalg.LinAlgError, ValueError):
         return None
@@ -510,6 +518,7 @@ def interpolate_club_points(
         added += 1
 
     summary["added"] = added
+    summary["end_frame"] = frames[-1] if frames else summary.get("end_frame")
     result = [frame_map[f] for f in sorted(frame_map)]
     result.sort(key=lambda p: (p.get("time", 0.0), p.get("_frame", 0)))
     return result, summary
@@ -585,6 +594,44 @@ def enforce_club_depth_range(
         summary["filled"] += 1
 
     return points, summary
+
+
+def trim_club_points_to_range(
+    points: list[dict[str, object]],
+    *,
+    min_frame: int | None,
+    max_frame: int | None,
+) -> tuple[list[dict[str, object]], dict[str, int | None]]:
+    """Drop club samples outside ``[min_frame, max_frame]`` when frame indices are known."""
+    if min_frame is None and max_frame is None:
+        return points, {"removed": 0, "min_frame": min_frame, "max_frame": max_frame}
+
+    kept: list[dict[str, object]] = []
+    removed = 0
+    for entry in points:
+        frame_val = entry.get("_frame")
+        if frame_val is None:
+            kept.append(entry)
+            continue
+        try:
+            frame_idx = int(frame_val)
+        except (TypeError, ValueError):
+            kept.append(entry)
+            continue
+        if min_frame is not None and frame_idx < min_frame:
+            removed += 1
+            continue
+        if max_frame is not None and frame_idx > max_frame:
+            removed += 1
+            continue
+        kept.append(entry)
+
+    summary = {
+        "removed": removed,
+        "min_frame": min_frame,
+        "max_frame": max_frame,
+    }
+    return kept, summary
 
 
 def filter_club_point_outliers(
@@ -921,7 +968,7 @@ class AdaptiveAlphaMapper:
     def __init__(
         self,
         *,
-        target_coverage: float = 0.90,
+        target_coverage: float = 0.83,
         k_clusters: int = 3,
         k_max: int = 5,
         silhouette_min: float = 0.10,
@@ -929,12 +976,12 @@ class AdaptiveAlphaMapper:
         max_samples: int = 250_000,
         min_radius: float = 6.0,
         max_radius: float = 28.0,
-        initial_quantile: float = 0.955,
-        min_visible_fraction: float = 0.02,
+        initial_quantile: float = 0.92,
+        min_visible_fraction: float = 0.028,
         temporal_alpha: float = 0.02,
         morph_soften: bool = True,
-        guard_chroma_thresh: float = 16.0,
-        guard_margin: float = 3.0,
+        guard_chroma_thresh: float = 20.0,
+        guard_margin: float = 4.0,
     ) -> None:
         self.target_coverage = float(max(0.5, min(0.98, target_coverage)))
         self.k_clusters = int(max(2, k_clusters))
@@ -3245,11 +3292,19 @@ def process_video(
         "added": 0,
         "start_frame": None,
         "target_frame": impact_frame_idx,
+        "end_frame": impact_frame_idx,
     }
     club_depth_info = {
         "total": 0,
         "filled": 0,
         "fallback_used": False,
+    }
+    club_trim_info = {
+        "removed": 0,
+        "initial_removed": 0,
+        "final_removed": 0,
+        "min_frame": int(start_frame) if start_frame is not None else None,
+        "max_frame": int(impact_frame_idx) if impact_frame_idx is not None else None,
     }
     if club_pixels:
         club_pixels, club_filter_info = filter_club_point_outliers(club_pixels)
@@ -3276,16 +3331,47 @@ def process_video(
                 parts.append(f"depth>{depth_baseline_limit} vs baseline")
             clause = f" (limits: {', '.join(parts)})" if parts else ""
             print(f"Removed {removed} club outlier point(s){clause}")
+        min_recorded_frame = None
+        try:
+            min_recorded_frame = min(
+                int(entry.get("_frame"))
+                for entry in club_pixels
+                if entry.get("_frame") is not None
+            )
+        except ValueError:
+            min_recorded_frame = None
+
+        trim_min_frame = int(start_frame) if start_frame is not None else min_recorded_frame
+        initial_trim_max_frame = None
+        if trim_min_frame is not None and CLUB_MAX_FRAME_WINDOW is not None:
+            initial_trim_max_frame = trim_min_frame + int(CLUB_MAX_FRAME_WINDOW) - 1
+
+        # Trim raw points to the trusted window before interpolation
+        club_pixels, initial_trim_info = trim_club_points_to_range(
+            club_pixels,
+            min_frame=trim_min_frame,
+            max_frame=initial_trim_max_frame,
+        )
+        club_trim_info["initial_removed"] = initial_trim_info.get("removed", 0)
+        club_trim_info["removed"] += club_trim_info["initial_removed"]
+        if initial_trim_info.get("min_frame") is not None:
+            club_trim_info["min_frame"] = initial_trim_info.get("min_frame")
+        if initial_trim_info.get("max_frame") is not None:
+            club_trim_info["max_frame"] = initial_trim_info.get("max_frame")
+
+        interp_target_frame = int(impact_frame_idx) if impact_frame_idx is not None else club_trim_info.get("max_frame")
+
         club_pixels, club_interpolation_info = interpolate_club_points(
             club_pixels,
-            target_frame=impact_frame_idx,
+            target_frame=interp_target_frame,
             fps=float(video_fps),
-            start_frame=0,
+            start_frame=trim_min_frame,
         )
         if club_interpolation_info.get("added"):
             added = club_interpolation_info.get("added")
             tgt = club_interpolation_info.get("target_frame")
             print(f"Interpolated {added} club point(s) up to frame {tgt}")
+
         club_pixels, club_depth_info = enforce_club_depth_range(
             club_pixels,
             min_depth=CLUB_DEPTH_MIN_CM,
@@ -3295,6 +3381,27 @@ def process_video(
             print(
                 "Adjusted club depth values: "
                 f"filled={club_depth_info.get('filled')} fallback={club_depth_info.get('fallback_used')}"
+            )
+
+        club_pixels, final_trim_info = trim_club_points_to_range(
+            club_pixels,
+            min_frame=trim_min_frame,
+            max_frame=interp_target_frame,
+        )
+        club_trim_info["final_removed"] = final_trim_info.get("removed", 0)
+        club_trim_info["removed"] += club_trim_info["final_removed"]
+        if final_trim_info.get("max_frame") is not None:
+            club_trim_info["max_frame"] = final_trim_info.get("max_frame")
+        if club_trim_info.get("removed"):
+            detail_parts = []
+            if club_trim_info.get("initial_removed"):
+                detail_parts.append(f"initial={club_trim_info['initial_removed']}")
+            if club_trim_info.get("final_removed"):
+                detail_parts.append(f"final={club_trim_info['final_removed']}")
+            detail = f" ({', '.join(detail_parts)})" if detail_parts else ""
+            print(
+                "Trimmed club samples outside frame window: "
+                f"removed={club_trim_info.get('removed')}" + detail
             )
     smoothed_club_pixels, smoothing_info = smooth_sticker_pixels(club_pixels)
     if smoothing_info.get("applied"):
@@ -3364,6 +3471,7 @@ def process_video(
         "club_filter": club_filter_info,
         "club_interpolation": club_interpolation_info,
         "club_depth": club_depth_info,
+        "club_trim": club_trim_info,
         "club_smoothing": smoothing_info,
         "impact_frame": impact_frame_idx,
         "impact_time": impact_time,
@@ -3396,7 +3504,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_5.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
