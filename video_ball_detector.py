@@ -189,6 +189,19 @@ CLUB_CUSTOM_FRAME_WINDOWS: dict[str, tuple[int, int]] = {
     "130cm_tst_1.mp4": (564, 597),
     "130cm_tst_6.mp4": (506, 537),
 }
+CLUBFACE_ELLIPSE_CORE_FRACTION = 0.45
+CLUBFACE_ELLIPSE_CORE_MIN_PX = 2.5
+CLUBFACE_ELLIPSE_REQUIRED_PIXELS = 24
+CLUBFACE_ELLIPSE_MAX_ASPECT = 2.05
+CLUBFACE_ELLIPSE_ERODE_SIZE = 5
+CLUBFACE_ELLIPSE_BORDER_EXPAND_RATIO = 0.35
+CLUBFACE_ELLIPSE_BORDER_EXPAND_MAX = 18.0
+CLUBFACE_ELLIPSE_CORE_PERCENTILE = 78.0
+CLUBFACE_ELLIPSE_MIN_PERCENTILE = 55.0
+CLUBFACE_ELLIPSE_BORDER_KERNEL = 3
+CLUBFACE_ELLIPSE_LEFT_BAND_FRAC = 0.22
+CLUBFACE_ELLIPSE_LEFT_BAND_MAX = 26.0
+CLUBFACE_ELLIPSE_TOP_BAND_FRAC = 0.55
 
 
 class TimingCollector:
@@ -3244,6 +3257,176 @@ def process_video(
                         prev_centroid = (u, v)
                         prev_club_mask = club_mask.copy()
                 output_frame = cv2.bitwise_and(output_frame, output_frame, mask=club_mask)
+                if club_mask is not None:
+                    ellipse_mask = club_mask.copy()
+                    mask_population = int(np.count_nonzero(ellipse_mask))
+                    ellipse = None
+                    dist: np.ndarray | None = None
+                    dist_max = 0.0
+                    refined_mask: np.ndarray | None = None
+                    kernel_size = max(3, int(CLUBFACE_ELLIPSE_ERODE_SIZE))
+                    erosion_kernel = cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
+                    )
+                    component_mask = ellipse_mask
+                    component_labels: np.ndarray | None = None
+                    component_count = 0
+                    if mask_population >= 5:
+                        try:
+                            component_count, component_labels = cv2.connectedComponents(ellipse_mask)
+                        except cv2.error:
+                            component_labels = None
+                            component_count = 0
+                        if component_count <= 1:
+                            component_labels = None
+                    if mask_population >= CLUBFACE_ELLIPSE_REQUIRED_PIXELS:
+                        try:
+                            dist = cv2.distanceTransform(ellipse_mask, cv2.DIST_L2, 5)
+                        except cv2.error:
+                            dist = None
+                    if dist is not None and dist.size:
+                        dist_max = float(dist.max())
+                        mask_bool = ellipse_mask > 0
+                        dist_vals = dist[mask_bool]
+                        if dist_vals.size:
+                            percentile = float(CLUBFACE_ELLIPSE_CORE_PERCENTILE)
+                            min_percentile = float(CLUBFACE_ELLIPSE_MIN_PERCENTILE)
+                            while percentile >= min_percentile:
+                                thresh_val = float(np.percentile(dist_vals, percentile))
+                                core_threshold = max(CLUBFACE_ELLIPSE_CORE_MIN_PX, thresh_val)
+                                core_mask = np.where(dist >= core_threshold, 255, 0).astype(np.uint8)
+                                if int(np.count_nonzero(core_mask)) < 5:
+                                    percentile -= 5.0
+                                    continue
+                                refined = cv2.erode(ellipse_mask, erosion_kernel, iterations=1)
+                                refined = cv2.bitwise_and(refined, core_mask)
+                                if int(np.count_nonzero(refined)) < 5:
+                                    refined = core_mask
+                                num, labels = cv2.connectedComponents(refined)
+                                if num > 1:
+                                    best_label = None
+                                    best_score = -1.0
+                                    for lbl in range(1, num):
+                                        region = labels == lbl
+                                        count = int(np.count_nonzero(region))
+                                        if count < 5:
+                                            continue
+                                        score = float(dist[region].mean())
+                                        if score > best_score:
+                                            best_score = score
+                                            best_label = lbl
+                                    if best_label is not None:
+                                        refined = np.where(labels == best_label, 255, 0).astype(np.uint8)
+                                if int(np.count_nonzero(refined)) >= 5:
+                                    refined_mask = refined
+                                    break
+                                percentile -= 5.0
+                    if refined_mask is None and dist is not None and dist.size and dist_max > 0.0:
+                        fallback_threshold = max(
+                            CLUBFACE_ELLIPSE_CORE_MIN_PX,
+                            dist_max * CLUBFACE_ELLIPSE_CORE_FRACTION,
+                        )
+                        fallback_mask = np.where(dist >= fallback_threshold, 255, 0).astype(np.uint8)
+                        if int(np.count_nonzero(fallback_mask)) >= 5:
+                            refined_mask = fallback_mask
+                    if refined_mask is None:
+                        eroded = cv2.erode(ellipse_mask, erosion_kernel, iterations=1)
+                        refined_mask = eroded if int(np.count_nonzero(eroded)) >= 5 else ellipse_mask.copy()
+                    else:
+                        border_kernel = cv2.getStructuringElement(
+                            cv2.MORPH_ELLIPSE,
+                            (
+                                max(1, int(CLUBFACE_ELLIPSE_BORDER_KERNEL)),
+                                max(1, int(CLUBFACE_ELLIPSE_BORDER_KERNEL)),
+                            ),
+                        )
+                        dilated = cv2.dilate(refined_mask, border_kernel, iterations=1)
+                        refined_mask = cv2.bitwise_and(dilated, ellipse_mask)
+
+                    if (
+                        component_labels is not None
+                        and refined_mask is not None
+                        and int(np.count_nonzero(refined_mask)) >= 5
+                    ):
+                        refined_bool = refined_mask > 0
+                        best_label = None
+                        best_overlap = 0
+                        for lbl in range(1, component_count):
+                            region_bool = component_labels == lbl
+                            overlap = int(np.count_nonzero(refined_bool & region_bool))
+                            if overlap > best_overlap:
+                                best_overlap = overlap
+                                best_label = lbl
+                        if best_label is not None:
+                            component_mask = np.where(component_labels == best_label, 255, 0).astype(np.uint8)
+                        refined_mask = cv2.bitwise_and(refined_mask, component_mask)
+                    else:
+                        component_mask = ellipse_mask
+
+                    component_points = np.column_stack(np.where(component_mask > 0))
+                    if component_points.size:
+                        xs = component_points[:, 1]
+                        ys = component_points[:, 0]
+                        min_x = int(xs.min())
+                        max_x = int(xs.max())
+                        min_y = int(ys.min())
+                        max_y = int(ys.max())
+                        width = max(1, max_x - min_x + 1)
+                        height = max(1, max_y - min_y + 1)
+                        band_width = int(
+                            min(
+                                CLUBFACE_ELLIPSE_LEFT_BAND_MAX,
+                                math.ceil(width * CLUBFACE_ELLIPSE_LEFT_BAND_FRAC),
+                            )
+                        )
+                        band_width = max(1, band_width)
+                        x_limit = min_x + band_width
+                        top_height = int(math.ceil(height * CLUBFACE_ELLIPSE_TOP_BAND_FRAC))
+                        top_height = max(1, top_height)
+                        y_limit = min_y + top_height
+                        selector = (xs <= x_limit) & (ys <= y_limit)
+                        if selector.any():
+                            left_band_mask = np.zeros_like(component_mask)
+                            left_band_mask[ys[selector], xs[selector]] = 255
+                            if refined_mask is not None:
+                                refined_mask = cv2.bitwise_or(refined_mask, left_band_mask)
+                            else:
+                                refined_mask = left_band_mask
+                        if refined_mask is not None:
+                            refined_mask = cv2.bitwise_and(refined_mask, component_mask)
+
+                    ellipse_points = cv2.findNonZero(refined_mask)
+                    if ellipse_points is not None and len(ellipse_points) >= 5:
+                        try:
+                            ellipse = cv2.fitEllipse(ellipse_points)
+                        except cv2.error:
+                            ellipse = None
+
+                    if ellipse is not None:
+                        axes = list(ellipse[1])
+                        if dist_max > 0.0:
+                            expand = min(
+                                CLUBFACE_ELLIPSE_BORDER_EXPAND_MAX,
+                                max(0.0, dist_max * CLUBFACE_ELLIPSE_BORDER_EXPAND_RATIO),
+                            )
+                            if expand > 0.0:
+                                axes[0] = max(1e-4, axes[0] + 2.0 * expand)
+                                axes[1] = max(1e-4, axes[1] + 2.0 * expand)
+                        major_idx = 0 if axes[0] >= axes[1] else 1
+                        minor_idx = 1 - major_idx
+                        major_axis = axes[major_idx]
+                        minor_axis = max(axes[minor_idx], 1e-4)
+                        max_major_allowed = CLUBFACE_ELLIPSE_MAX_ASPECT * minor_axis
+                        if major_axis > max_major_allowed:
+                            axes[major_idx] = max_major_allowed
+                        ellipse = (ellipse[0], tuple(axes), ellipse[2])
+                        cv2.ellipse(
+                            output_frame,
+                            ellipse,
+                            (0, 165, 255),
+                            2,
+                            cv2.LINE_AA,
+                        )
             clubface_time += time.perf_counter() - club_stage_start
         if ball_overlay is not None:
             cx_i, cy_i = ball_overlay["center"]
@@ -3621,7 +3804,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_6.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_2.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
