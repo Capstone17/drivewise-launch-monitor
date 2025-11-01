@@ -169,7 +169,7 @@ CLUB_TEMPLATE_UPDATE_MARGIN = 1.12
 CLUB_TEMPLATE_RECOVERY_RATIO = 0.82
 CLUB_TEMPLATE_MIN_EXTENSION_PX = 4.0
 CLUB_TEMPLATE_MAX_EXTENSION_PX = 42.0
-CLUB_RESUME_DELAY_FRAMES = 6
+CLUB_RESUME_DELAY_FRAMES = 12
 
 
 class TimingCollector:
@@ -2692,14 +2692,6 @@ def process_video(
                             club_recording_enabled = False
                             club_motion_pause_triggered = True
                             club_recording_resume_delay = CLUB_RESUME_DELAY_FRAMES
-                            # Trim the last 3 club points so recording effectively
-                            # starts 3 frames before motion
-                            trim_n = min(3, len(club_pixels))
-                            if trim_n:
-                                del club_pixels[-trim_n:]
-                            trim_n_path = min(3, len(path_points))
-                            if trim_n_path:
-                                del path_points[-trim_n_path:]
 
         if not detected and last_ball_center is not None and in_window:
             if last_ball_radius is not None:
