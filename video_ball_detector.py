@@ -170,6 +170,8 @@ CLUB_TEMPLATE_RECOVERY_RATIO = 0.82
 CLUB_TEMPLATE_MIN_EXTENSION_PX = 4.0
 CLUB_TEMPLATE_MAX_EXTENSION_PX = 42.0
 CLUB_RESUME_DELAY_FRAMES = 12
+CLUB_DEPTH_BASELINE_FRAMES = 20
+CLUB_DEPTH_BASELINE_MULTIPLIER = 1.35
 
 
 class TimingCollector:
@@ -283,37 +285,89 @@ def _robust_polyfit(
 
 
 
-def _median_mad_upper_limit(
+def _median_mad_limits(
     values: Sequence[float],
     *,
     multiplier: float = 3.5,
-) -> float | None:
-    """Return a robust upper bound using the median and MAD (or heuristics if degenerate)."""
+) -> tuple[float | None, float | None]:
+    """Return robust lower/upper bounds using the median and MAD (or heuristics if degenerate)."""
     try:
         arr = np.asarray(
             [float(v) for v in values if v is not None and np.isfinite(float(v))],
             dtype=np.float64,
         )
     except (TypeError, ValueError):
-        return None
+        return None, None
 
     if arr.size == 0:
-        return None
+        return None, None
     median = float(np.median(arr))
     mad = float(np.median(np.abs(arr - median)))
+    lower: float | None
+    upper: float | None
     if not np.isfinite(mad) or mad < 1e-6:
         std = float(np.std(arr))
         if not np.isfinite(std) or std < 1e-6:
             max_val = float(np.max(arr))
             if max_val <= 0.0:
-                return None
-            return max_val * 1.1
-        limit = median + multiplier * std
+                return None, None
+            upper = max(median * 1.5, max_val * 1.1)
+            lower = median * 0.5 if median > 0.0 else None
+        else:
+            scale = std
+            upper = median + multiplier * scale
+            lower = median - multiplier * scale
     else:
         scale = 1.4826 * mad
-        limit = median + multiplier * scale
+        upper = median + multiplier * scale
+        lower = median - multiplier * scale
+
+    if upper is not None and median > 0.0 and upper < median:
+        upper = median * 1.1
+    if lower is not None:
+        if median > 0.0 and lower > median:
+            lower = median * 0.9
+        if lower < 0.0:
+            lower = 0.0
+    return (float(lower) if lower is not None else None, float(upper) if upper is not None else None)
+
+
+def _compute_depth_baseline_limit(
+    points: Sequence[dict[str, float]],
+    *,
+    max_samples: int = CLUB_DEPTH_BASELINE_FRAMES,
+    multiplier: float = CLUB_DEPTH_BASELINE_MULTIPLIER,
+) -> float | None:
+    """Derive an upper depth bound from the first few frames (club closest to camera)."""
+    baseline: list[float] = []
+    for entry in points:
+        if len(baseline) >= max_samples:
+            break
+        depth_val = entry.get("z")
+        if depth_val is None:
+            continue
+        try:
+            depth_float = float(depth_val)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(depth_float):
+            baseline.append(depth_float)
+    if len(baseline) < 3:
+        return None
+
+    arr = np.asarray(baseline, dtype=np.float64)
+    median = float(np.median(arr))
+    mad = float(np.median(np.abs(arr - median)))
+    if not np.isfinite(mad) or mad < 1e-6:
+        std = float(np.std(arr))
+        if not np.isfinite(std) or std < 1e-6:
+            return median * multiplier
+        scale = std
+    else:
+        scale = 1.4826 * mad
+    limit = median + multiplier * scale
     if limit < median and median > 0.0:
-        limit = median * 1.1
+        limit = median * (1.0 + 0.05 * multiplier)
     return float(limit)
 
 
@@ -322,6 +376,7 @@ def filter_club_point_outliers(
 ) -> tuple[list[dict[str, float]], dict[str, object]]:
     """Trim club trajectory points with implausible sizes or distances."""
     width_values: list[float] = []
+    area_values: list[float] = []
     depth_values: list[float] = []
     for entry in points:
         width_val = entry.get("_width_px")
@@ -332,6 +387,14 @@ def filter_club_point_outliers(
                 width_float = None
             if width_float is not None and np.isfinite(width_float):
                 width_values.append(width_float)
+        area_val = entry.get("_area_px")
+        if area_val is not None:
+            try:
+                area_float = float(area_val)
+            except (TypeError, ValueError):
+                area_float = None
+            if area_float is not None and np.isfinite(area_float):
+                area_values.append(area_float)
         depth_val = entry.get("z")
         if depth_val is not None:
             try:
@@ -341,40 +404,66 @@ def filter_club_point_outliers(
             if depth_float is not None and np.isfinite(depth_float):
                 depth_values.append(depth_float)
 
-    width_limit = _median_mad_upper_limit(width_values)
-    depth_limit = _median_mad_upper_limit(depth_values)
+    width_min, width_max = _median_mad_limits(width_values)
+    area_min, area_max = _median_mad_limits(area_values)
+    _, depth_max = _median_mad_limits(depth_values)
+    baseline_depth_limit = _compute_depth_baseline_limit(points)
+    if baseline_depth_limit is not None:
+        if depth_max is None or baseline_depth_limit < depth_max:
+            depth_max = baseline_depth_limit
 
     filtered: list[dict[str, float]] = []
     removed = 0
     for entry in points:
         remove = False
         width_val = entry.get("_width_px")
-        if (
-            width_limit is not None
-            and width_val is not None
-            and np.isfinite(float(width_val))
-            and float(width_val) > width_limit
-        ):
-            remove = True
+        if width_val is not None:
+            try:
+                width_float = float(width_val)
+            except (TypeError, ValueError):
+                width_float = None
+            if width_float is not None and np.isfinite(width_float):
+                if width_min is not None and width_float < width_min:
+                    remove = True
+                if width_max is not None and width_float > width_max:
+                    remove = True
+        area_val = entry.get("_area_px")
+        if area_val is not None:
+            try:
+                area_float = float(area_val)
+            except (TypeError, ValueError):
+                area_float = None
+            if area_float is not None and np.isfinite(area_float):
+                if area_min is not None and area_float < area_min:
+                    remove = True
+                if area_max is not None and area_float > area_max:
+                    remove = True
         depth_val = entry.get("z")
-        if depth_limit is not None and depth_val is not None:
+        if depth_max is not None and depth_val is not None:
             try:
                 depth_float = float(depth_val)
             except (TypeError, ValueError):
                 depth_float = None
-            if depth_float is not None and np.isfinite(depth_float) and depth_float > depth_limit:
+            if depth_float is not None and np.isfinite(depth_float) and depth_float > depth_max:
                 remove = True
         if remove:
             removed += 1
             continue
         filtered.append(entry)
 
+    def _round_limit(value: float | None) -> float | None:
+        return round(float(value), 2) if value is not None else None
+
     summary = {
         "applied": bool(removed),
         "total": len(points),
         "removed": removed,
-        "width_limit": round(float(width_limit), 2) if width_limit is not None else None,
-        "depth_limit": round(float(depth_limit), 2) if depth_limit is not None else None,
+        "width_min": _round_limit(width_min),
+        "width_max": _round_limit(width_max),
+        "area_min": _round_limit(area_min),
+        "area_max": _round_limit(area_max),
+        "depth_max": _round_limit(depth_max),
+        "depth_baseline_limit": _round_limit(baseline_depth_limit),
     }
     return filtered, summary
 
@@ -2902,21 +2991,37 @@ def process_video(
         "applied": False,
         "total": len(club_pixels),
         "removed": 0,
-        "width_limit": None,
-        "depth_limit": None,
+        "width_min": None,
+        "width_max": None,
+        "area_min": None,
+        "area_max": None,
+        "depth_max": None,
+        "depth_baseline_limit": None,
     }
     if club_pixels:
         club_pixels, club_filter_info = filter_club_point_outliers(club_pixels)
         if club_filter_info.get("applied"):
             removed = club_filter_info.get("removed", 0)
             parts: list[str] = []
-            width_limit = club_filter_info.get("width_limit")
-            depth_limit = club_filter_info.get("depth_limit")
-            if width_limit is not None:
-                parts.append(f"width>{width_limit}")
-            if depth_limit is not None:
-                parts.append(f"depth>{depth_limit}")
-            clause = f" ({', '.join(parts)})" if parts else ""
+            width_min = club_filter_info.get("width_min")
+            width_max = club_filter_info.get("width_max")
+            area_min = club_filter_info.get("area_min")
+            area_max = club_filter_info.get("area_max")
+            depth_max = club_filter_info.get("depth_max")
+            depth_baseline_limit = club_filter_info.get("depth_baseline_limit")
+            if width_min is not None:
+                parts.append(f"width<{width_min}")
+            if width_max is not None:
+                parts.append(f"width>{width_max}")
+            if area_min is not None:
+                parts.append(f"area<{area_min}")
+            if area_max is not None:
+                parts.append(f"area>{area_max}")
+            if depth_max is not None:
+                parts.append(f"depth>{depth_max}")
+            if depth_baseline_limit is not None and depth_baseline_limit != depth_max:
+                parts.append(f"depth>{depth_baseline_limit} vs baseline")
+            clause = f" (limits: {', '.join(parts)})" if parts else ""
             print(f"Removed {removed} club outlier point(s){clause}")
     smoothed_club_pixels, smoothing_info = smooth_sticker_pixels(club_pixels)
     if smoothing_info.get("applied"):
