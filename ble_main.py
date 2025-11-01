@@ -136,12 +136,14 @@ class rpiService(Service):
             "metrics": None,
             "feedback": None
         }
+        self.run_camera = True
         self.exposure = "200"
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
         self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
         self.add_characteristic(FindIPCharacteristic(bus, 2, self))
         self.add_characteristic(CalibrationCharacteristic(bus, 3, self))
         self.add_characteristic(BatteryMonitorCharacteristic(bus, 4, self))
+        self.add_characteristic(CancelSwingCharacteristic(bus, 5, self))
         # self.add_characteristic(PowerOffCharacteristic(bus, 3, self))
 
 
@@ -167,9 +169,10 @@ class SwingAnalysisCharacteristic(Characteristic):
         
     def WriteValue(self, value, options):
         logger.debug("Received write command")
+        self.service.run_camera = True
 
 
-        while True:
+        while self.service.run_camera:
             try:
                 set_status_led_color("red")
                 ball_detected = False
@@ -243,6 +246,9 @@ class SwingAnalysisCharacteristic(Characteristic):
                     logger.info("STAGE2: low freq video recording started STATE: %s", ball_detected)
 
                     time.sleep(1.5)  # Wait before next attempt
+                    if(self.service.run_camera == False):
+                        logger.debug("Swing capture canceled by user")
+                        return
 
                 logger.info("Ball detected! Turning on yellow LED...")
 
@@ -394,7 +400,7 @@ class SwingAnalysisCharacteristic(Characteristic):
         if self.notifying:
             logger.debug("Already notifying")
             return
-        logger.debug("StartNotify called")
+        logger.debug("StartNotify called for analyze swing")
         self.notifying = True
         # self.notify_client()
 
@@ -474,7 +480,7 @@ class CalibrationCharacteristic(Characteristic):
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
 
     def WriteValue(self, value, options):
-        logger.debug("received write command")
+        logger.debug("received write command for ev calibration")
         try: 
             # Run calibration script
             logger.debug("Began calibration function")
@@ -511,7 +517,7 @@ class CalibrationCharacteristic(Characteristic):
         if self.notifying:
             logger.debug("Already notifying")
             return
-        logger.debug("StartNotify called")
+        logger.debug("StartNotify called for ev calibration")
         self.notifying = True
         # self.notify_client()
 
@@ -558,7 +564,7 @@ class BatteryMonitorCharacteristic(Characteristic):
         if self.notifying:
             logger.debug("Already notifying")
             return
-        logger.debug("StartNotify called")
+        logger.debug("StartNotify called for battery monitor")
         self.notifying = True
 
         self.value = return_battery_power()
@@ -601,6 +607,22 @@ class BatteryMonitorCharacteristic(Characteristic):
         self.notify_client()
 
         return True  # continue calling periodically
+    
+class CancelSwingCharacteristic(Characteristic):
+    uuid = "8f1a5ff0-399b-4afe-9cb4-280c8310e388"
+    description = b"Write to cancel swing analysis/camera operation"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["write"], service,
+        )
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 5, self))
+
+    def WriteValue(self, value, options):
+        logger.debug("received write command for cancel swing")
+        self.service.run_camera = False
+        logger.debug("run_camera set to False")
+
 
 
 # class PowerOffCharacteristic(Characteristic):
