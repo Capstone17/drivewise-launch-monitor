@@ -202,6 +202,9 @@ CLUBFACE_ELLIPSE_BORDER_KERNEL = 3
 CLUBFACE_ELLIPSE_LEFT_BAND_FRAC = 0.22
 CLUBFACE_ELLIPSE_LEFT_BAND_MAX = 26.0
 CLUBFACE_ELLIPSE_TOP_BAND_FRAC = 0.55
+CLUBFACE_ELLIPSE_TOPLEFT_CORE_PERCENTILE = 60.0
+CLUBFACE_ELLIPSE_BOTTOM_DIST_FRAC = 0.42
+CLUBFACE_ELLIPSE_BOTTOM_MIN_PX = 3.0
 
 
 class TimingCollector:
@@ -3363,6 +3366,8 @@ def process_video(
                     else:
                         component_mask = ellipse_mask
 
+                    top_left_mask: np.ndarray | None = None
+                    bottom_right_mask: np.ndarray | None = None
                     component_points = np.column_stack(np.where(component_mask > 0))
                     if component_points.size:
                         xs = component_points[:, 1]
@@ -3373,29 +3378,129 @@ def process_video(
                         max_y = int(ys.max())
                         width = max(1, max_x - min_x + 1)
                         height = max(1, max_y - min_y + 1)
-                        band_width = int(
-                            min(
-                                CLUBFACE_ELLIPSE_LEFT_BAND_MAX,
-                                math.ceil(width * CLUBFACE_ELLIPSE_LEFT_BAND_FRAC),
+                        left_frac = float(CLUBFACE_ELLIPSE_LEFT_BAND_FRAC)
+                        top_frac = float(CLUBFACE_ELLIPSE_TOP_BAND_FRAC)
+                        dist_component_vals = dist[ys, xs] if dist is not None and dist.size else None
+                        for _ in range(6):
+                            band_width = int(
+                                min(
+                                    CLUBFACE_ELLIPSE_LEFT_BAND_MAX,
+                                    math.ceil(width * left_frac),
+                                )
                             )
-                        )
-                        band_width = max(1, band_width)
-                        x_limit = min_x + band_width
-                        top_height = int(math.ceil(height * CLUBFACE_ELLIPSE_TOP_BAND_FRAC))
-                        top_height = max(1, top_height)
-                        y_limit = min_y + top_height
-                        selector = (xs <= x_limit) & (ys <= y_limit)
-                        if selector.any():
-                            left_band_mask = np.zeros_like(component_mask)
-                            left_band_mask[ys[selector], xs[selector]] = 255
-                            if refined_mask is not None:
-                                refined_mask = cv2.bitwise_or(refined_mask, left_band_mask)
-                            else:
-                                refined_mask = left_band_mask
-                        if refined_mask is not None:
-                            refined_mask = cv2.bitwise_and(refined_mask, component_mask)
+                            band_width = max(1, band_width)
+                            x_limit = min(max_x, min_x + band_width)
+                            top_height = int(math.ceil(height * top_frac))
+                            top_height = max(1, top_height)
+                            y_limit = min(max_y, min_y + top_height)
+                            selector = (xs <= x_limit) & (ys <= y_limit)
+                            if not selector.any():
+                                left_frac = min(0.8, left_frac + 0.08)
+                                top_frac = min(1.0, top_frac + 0.1)
+                                continue
+                            rows = ys[selector]
+                            cols = xs[selector]
+                            candidate = np.zeros_like(component_mask)
+                            candidate[rows, cols] = 255
+                            if dist is not None and dist.size:
+                                local_vals = dist[rows, cols]
+                                if local_vals.size:
+                                    local_thresh = max(
+                                        CLUBFACE_ELLIPSE_CORE_MIN_PX,
+                                        np.percentile(
+                                            local_vals,
+                                            CLUBFACE_ELLIPSE_TOPLEFT_CORE_PERCENTILE,
+                                        ),
+                                    )
+                                    keep_idx = local_vals >= local_thresh
+                                    if int(np.count_nonzero(keep_idx)) >= 5:
+                                        rows = rows[keep_idx]
+                                        cols = cols[keep_idx]
+                                        candidate[:] = 0
+                                        candidate[rows, cols] = 255
+                            if int(np.count_nonzero(candidate)) < 5:
+                                left_frac = min(0.8, left_frac + 0.08)
+                                top_frac = min(1.0, top_frac + 0.1)
+                                continue
+                            band_kernel = cv2.getStructuringElement(
+                                cv2.MORPH_ELLIPSE,
+                                (
+                                    max(1, int(CLUBFACE_ELLIPSE_BORDER_KERNEL)),
+                                    max(1, int(CLUBFACE_ELLIPSE_BORDER_KERNEL)),
+                                ),
+                            )
+                            candidate = cv2.dilate(candidate, band_kernel, iterations=1)
+                            candidate = cv2.bitwise_and(candidate, component_mask)
+                            if int(np.count_nonzero(candidate)) >= 5:
+                                top_left_mask = candidate
+                                break
+                            left_frac = min(0.8, left_frac + 0.08)
+                            top_frac = min(1.0, top_frac + 0.1)
 
-                    ellipse_points = cv2.findNonZero(refined_mask)
+                        if dist_component_vals is not None and dist_component_vals.size:
+                            moment = cv2.moments(component_mask, binaryImage=True)
+                            if moment["m00"] > 1e-6:
+                                cx = float(moment["m10"] / moment["m00"])
+                                cy = float(moment["m01"] / moment["m00"])
+                            else:
+                                cx = float(xs.mean())
+                                cy = float(ys.mean())
+                            threshold = max(
+                                CLUBFACE_ELLIPSE_BOTTOM_MIN_PX,
+                                dist_max * CLUBFACE_ELLIPSE_BOTTOM_DIST_FRAC,
+                            )
+                            attempt_thresh = threshold
+                            for _ in range(5):
+                                selection = (
+                                    (xs.astype(float) >= cx)
+                                    & (ys.astype(float) >= cy)
+                                    & (dist_component_vals >= attempt_thresh)
+                                )
+                                if int(np.count_nonzero(selection)) >= 5:
+                                    rows = ys[selection]
+                                    cols = xs[selection]
+                                    candidate = np.zeros_like(component_mask)
+                                    candidate[rows, cols] = 255
+                                    spread_kernel = cv2.getStructuringElement(
+                                        cv2.MORPH_ELLIPSE,
+                                        (
+                                            max(1, int(CLUBFACE_ELLIPSE_BORDER_KERNEL) + 1),
+                                            max(1, int(CLUBFACE_ELLIPSE_BORDER_KERNEL) + 1),
+                                        ),
+                                    )
+                                    candidate = cv2.dilate(candidate, spread_kernel, iterations=1)
+                                    candidate = cv2.bitwise_and(candidate, component_mask)
+                                    if int(np.count_nonzero(candidate)) >= 5:
+                                        bottom_right_mask = candidate
+                                        break
+                                attempt_thresh *= 0.88
+
+                    ellipse_source_mask: np.ndarray | None = None
+                    if top_left_mask is not None and int(np.count_nonzero(top_left_mask)) >= 5:
+                        ellipse_source_mask = top_left_mask.copy()
+                    if bottom_right_mask is not None and int(np.count_nonzero(bottom_right_mask)) >= 5:
+                        if ellipse_source_mask is None:
+                            ellipse_source_mask = bottom_right_mask.copy()
+                        else:
+                            ellipse_source_mask = cv2.bitwise_or(
+                                ellipse_source_mask, bottom_right_mask
+                            )
+                    if ellipse_source_mask is None and refined_mask is not None:
+                        ellipse_source_mask = refined_mask.copy()
+                    elif ellipse_source_mask is not None and refined_mask is not None:
+                        ellipse_source_mask = cv2.bitwise_or(
+                            ellipse_source_mask, refined_mask
+                        )
+                    if ellipse_source_mask is None:
+                        ellipse_source_mask = component_mask.copy()
+                    else:
+                        ellipse_source_mask = cv2.bitwise_and(
+                            ellipse_source_mask, component_mask
+                        )
+                    if int(np.count_nonzero(ellipse_source_mask)) < 5:
+                        ellipse_source_mask = component_mask.copy()
+
+                    ellipse_points = cv2.findNonZero(ellipse_source_mask)
                     if ellipse_points is not None and len(ellipse_points) >= 5:
                         try:
                             ellipse = cv2.fitEllipse(ellipse_points)
@@ -3804,7 +3909,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_2.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
