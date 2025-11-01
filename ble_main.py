@@ -247,6 +247,7 @@ class SwingAnalysisCharacteristic(Characteristic):
 
                     time.sleep(1.5)  # Wait before next attempt
                     if(self.service.run_camera == False):
+                        logger.debug("Swing capture canceled by user")
                         return
 
                 logger.info("Ball detected! Turning on yellow LED...")
@@ -620,6 +621,7 @@ class CancelSwingCharacteristic(Characteristic):
     def WriteValue(self, value, options):
         logger.debug("received write command for cancel swing")
         self.service.run_camera = False
+        logger.debug("run_camera set to False")
 
 
 
