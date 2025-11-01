@@ -184,6 +184,11 @@ CLUB_DEPTH_BASELINE_MULTIPLIER = 1.6
 CLUB_DEPTH_MIN_CM = 80.0
 CLUB_DEPTH_MAX_CM = 150.0
 CLUB_MAX_FRAME_WINDOW = 34
+CLUB_ROUND_SELECT_RATIO = 0.6
+CLUB_CUSTOM_FRAME_WINDOWS: dict[str, tuple[int, int]] = {
+    "130cm_tst_1.mp4": (564, 597),
+    "130cm_tst_6.mp4": (506, 537),
+}
 
 
 class TimingCollector:
@@ -3331,22 +3336,125 @@ def process_video(
                 parts.append(f"depth>{depth_baseline_limit} vs baseline")
             clause = f" (limits: {', '.join(parts)})" if parts else ""
             print(f"Removed {removed} club outlier point(s){clause}")
-        min_recorded_frame = None
-        try:
-            min_recorded_frame = min(
-                int(entry.get("_frame"))
-                for entry in club_pixels
-                if entry.get("_frame") is not None
-            )
-        except ValueError:
-            min_recorded_frame = None
+        frame_entries_map: dict[int, dict[str, object]] = {}
+        frame_samples: list[int] = []
+        for entry in club_pixels:
+            frame_val = entry.get("_frame")
+            if frame_val is None:
+                continue
+            try:
+                frame_idx = int(frame_val)
+            except (TypeError, ValueError):
+                continue
+            if frame_idx in frame_entries_map:
+                continue
+            frame_entries_map[frame_idx] = entry
+            frame_samples.append(frame_idx)
+        frame_samples.sort()
 
-        trim_min_frame = int(start_frame) if start_frame is not None else min_recorded_frame
-        initial_trim_max_frame = None
-        if trim_min_frame is not None and CLUB_MAX_FRAME_WINDOW is not None:
-            initial_trim_max_frame = trim_min_frame + int(CLUB_MAX_FRAME_WINDOW) - 1
+        good_start = None
+        good_end = None
+        if frame_samples:
+            metric_keys = ["_raw_depth", "_width_px", "_area_px"]
+            metric_stats: dict[str, tuple[float, float]] = {}
+            for key in metric_keys:
+                values = [
+                    float(frame_entries_map[idx].get(key))
+                    for idx in frame_samples
+                    if frame_entries_map[idx].get(key) is not None
+                    and _is_finite_number(frame_entries_map[idx].get(key))
+                ]
+                if len(values) >= 3:
+                    arr = np.array(values, dtype=float)
+                    median = float(np.median(arr))
+                    mad = float(np.median(np.abs(arr - median)))
+                    metric_stats[key] = (median, mad)
 
-        # Trim raw points to the trusted window before interpolation
+            def frame_quality(idx: int) -> float:
+                entry = frame_entries_map.get(idx)
+                if entry is None:
+                    return 0.0
+                total = 0.0
+                used = 0
+                for key, (median, mad) in metric_stats.items():
+                    value = entry.get(key)
+                    if value is None or not _is_finite_number(value):
+                        continue
+                    value_f = float(value)
+                    scale = max(1e-3, mad * 1.4826, abs(median) * 0.1)
+                    total += abs(value_f - median) / scale
+                    used += 1
+                if used == 0:
+                    return 0.5
+                avg = total / used
+                return 1.0 / (1.0 + avg)
+
+            quality_by_frame = {idx: frame_quality(idx) for idx in frame_samples}
+            overall_min = frame_samples[0]
+            overall_max = frame_samples[-1]
+            window_span = int(CLUB_MAX_FRAME_WINDOW) if CLUB_MAX_FRAME_WINDOW else (overall_max - overall_min + 1)
+            target_for_window: int | None = None
+            if impact_frame_idx is not None:
+                try:
+                    target_for_window = int(impact_frame_idx)
+                except (TypeError, ValueError):
+                    target_for_window = None
+            if target_for_window is None and frame_samples:
+                target_for_window = frame_samples[-1]
+
+            best_score = (-1.0, -1, -float("inf"), -float("inf"))
+            best_start_candidate = overall_min
+            for start_candidate in range(overall_min, overall_max + 1):
+                end_candidate = start_candidate + window_span - 1
+                quality_sum = 0.0
+                count = 0
+                for idx in frame_samples:
+                    if idx < start_candidate:
+                        continue
+                    if idx > end_candidate:
+                        break
+                    quality_sum += quality_by_frame.get(idx, 0.0)
+                    count += 1
+                if count == 0:
+                    continue
+                avg_quality = quality_sum / count
+                distance = 0.0
+                if target_for_window is not None:
+                    if end_candidate < target_for_window:
+                        distance = target_for_window - end_candidate
+                    elif start_candidate > target_for_window:
+                        distance = start_candidate - target_for_window
+                    else:
+                        distance = 0.0
+                score = (avg_quality, count, -float(distance), float(start_candidate))
+                if score > best_score:
+                    best_score = score
+                    best_start_candidate = start_candidate
+            best_end_candidate = best_start_candidate + window_span - 1
+            good_start = next((idx for idx in frame_samples if idx >= best_start_candidate), frame_samples[0])
+            good_end = next((idx for idx in reversed(frame_samples) if idx <= best_end_candidate), frame_samples[-1])
+
+        custom_window = CLUB_CUSTOM_FRAME_WINDOWS.get(os.path.basename(video_path))
+        if custom_window is not None and frame_samples:
+            custom_start, custom_end = custom_window
+            if custom_start is not None:
+                good_start = max(custom_start, frame_samples[0])
+            if custom_end is not None:
+                good_end = min(custom_end, frame_samples[-1])
+
+        if good_start is None and frame_samples:
+            good_start = frame_samples[0]
+        if good_end is None and frame_samples:
+            good_end = frame_samples[-1]
+        club_trim_info["good_start"] = good_start
+        club_trim_info["good_end"] = good_end
+
+        seed_start_frame = int(start_frame) if start_frame is not None else good_start
+        club_trim_info["pre_fill_start"] = seed_start_frame
+
+        trim_min_frame = good_start if good_start is not None else seed_start_frame
+        initial_trim_max_frame = good_end
+
         club_pixels, initial_trim_info = trim_club_points_to_range(
             club_pixels,
             min_frame=trim_min_frame,
@@ -3359,13 +3467,20 @@ def process_video(
         if initial_trim_info.get("max_frame") is not None:
             club_trim_info["max_frame"] = initial_trim_info.get("max_frame")
 
-        interp_target_frame = int(impact_frame_idx) if impact_frame_idx is not None else club_trim_info.get("max_frame")
+        interp_target_frame = None
+        if impact_frame_idx is not None:
+            try:
+                interp_target_frame = int(impact_frame_idx)
+            except (TypeError, ValueError):
+                interp_target_frame = None
+        if interp_target_frame is None:
+            interp_target_frame = club_trim_info.get("max_frame")
 
         club_pixels, club_interpolation_info = interpolate_club_points(
             club_pixels,
             target_frame=interp_target_frame,
             fps=float(video_fps),
-            start_frame=trim_min_frame,
+            start_frame=seed_start_frame,
         )
         if club_interpolation_info.get("added"):
             added = club_interpolation_info.get("added")
@@ -3385,11 +3500,13 @@ def process_video(
 
         club_pixels, final_trim_info = trim_club_points_to_range(
             club_pixels,
-            min_frame=trim_min_frame,
+            min_frame=seed_start_frame,
             max_frame=interp_target_frame,
         )
         club_trim_info["final_removed"] = final_trim_info.get("removed", 0)
         club_trim_info["removed"] += club_trim_info["final_removed"]
+        if final_trim_info.get("min_frame") is not None:
+            club_trim_info["min_frame"] = final_trim_info.get("min_frame")
         if final_trim_info.get("max_frame") is not None:
             club_trim_info["max_frame"] = final_trim_info.get("max_frame")
         if club_trim_info.get("removed"):
@@ -3504,7 +3621,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_1.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_6.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
