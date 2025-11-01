@@ -1,3 +1,4 @@
+import bisect
 import json
 import math
 import os
@@ -170,8 +171,11 @@ CLUB_TEMPLATE_RECOVERY_RATIO = 0.82
 CLUB_TEMPLATE_MIN_EXTENSION_PX = 4.0
 CLUB_TEMPLATE_MAX_EXTENSION_PX = 42.0
 CLUB_RESUME_DELAY_FRAMES = 12
+CLUB_STAT_LIMIT_MULTIPLIER = 4.5
 CLUB_DEPTH_BASELINE_FRAMES = 20
-CLUB_DEPTH_BASELINE_MULTIPLIER = 1.35
+CLUB_DEPTH_BASELINE_MULTIPLIER = 1.6
+CLUB_DEPTH_MIN_CM = 80.0
+CLUB_DEPTH_MAX_CM = 150.0
 
 
 class TimingCollector:
@@ -343,7 +347,7 @@ def _compute_depth_baseline_limit(
     for entry in points:
         if len(baseline) >= max_samples:
             break
-        depth_val = entry.get("z")
+        depth_val = entry.get("_raw_depth", entry.get("z"))
         if depth_val is None:
             continue
         try:
@@ -371,9 +375,221 @@ def _compute_depth_baseline_limit(
     return float(limit)
 
 
+def _is_finite_number(value: float | None) -> bool:
+    try:
+        return value is not None and np.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _linear_lookup(frame: int, frames: list[int], values: list[float | None]) -> float | None:
+    """Return a linearly interpolated/extrapolated value for ``frame``."""
+    if not frames:
+        return None
+    pos = bisect.bisect_left(frames, frame)
+
+    def left(idx: int) -> tuple[int | None, float | None]:
+        while idx >= 0:
+            val = values[idx]
+            if _is_finite_number(val):
+                return frames[idx], float(val)  # type: ignore[arg-type]
+            idx -= 1
+        return None, None
+
+    def right(idx: int) -> tuple[int | None, float | None]:
+        limit = len(frames)
+        while idx < limit:
+            val = values[idx]
+            if _is_finite_number(val):
+                return frames[idx], float(val)  # type: ignore[arg-type]
+            idx += 1
+        return None, None
+
+    if pos == 0:
+        if len(frames) >= 2:
+            f1, v1 = right(0)
+            f2, v2 = right(1)
+            if f1 is not None and f2 is not None and v1 is not None and v2 is not None and f2 != f1:
+                return v1 + (frame - f1) * (v2 - v1) / (f2 - f1)
+        _, v = right(0)
+        return v
+
+    if pos == len(frames):
+        if len(frames) >= 2:
+            f2, v2 = left(len(frames) - 1)
+            f1, v1 = left(len(frames) - 2)
+            if f1 is not None and f2 is not None and v1 is not None and v2 is not None and f2 != f1:
+                return v2 + (frame - f2) * (v2 - v1) / (f2 - f1)
+        _, v = left(len(frames) - 1)
+        return v
+
+    f1, v1 = left(pos - 1)
+    f2, v2 = right(pos)
+    if f1 is None or v1 is None:
+        return v2
+    if f2 is None or v2 is None or f2 == f1:
+        return v1
+    return v1 + (frame - f1) * (v2 - v1) / (f2 - f1)
+
+
+def interpolate_club_points(
+    points: list[dict[str, object]],
+    *,
+    target_frame: int | None,
+    fps: float,
+    start_frame: int | None = None,
+) -> tuple[list[dict[str, object]], dict[str, int | float | None]]:
+    """Interpolate club samples so every frame up to ``target_frame`` has coverage."""
+    summary: dict[str, int | float | None] = {
+        "added": 0,
+        "start_frame": None,
+        "target_frame": target_frame,
+        "end_frame": target_frame,
+    }
+    if target_frame is None or fps <= 0.0 or not points:
+        return points, summary
+
+    frame_map: dict[int, dict[str, object]] = {}
+    frames: list[int] = []
+    for entry in points:
+        raw_frame = entry.get("_frame")
+        if raw_frame is None:
+            continue
+        frame_idx = int(raw_frame)
+        if frame_idx in frame_map:
+            continue
+        frame_map[frame_idx] = entry
+        frames.append(frame_idx)
+
+    if len(frames) < 2:
+        if frames:
+            range_start = frames[0] if start_frame is None else max(0, int(start_frame))
+            summary["start_frame"] = range_start
+        return points, summary
+
+    frames.sort()
+    range_start = frames[0] if start_frame is None else int(start_frame)
+    if range_start < 0:
+        range_start = 0
+    summary["start_frame"] = range_start
+    if target_frame < range_start:
+        return points, summary
+
+    x_values = [float(frame_map[f]["x"]) for f in frames]
+    y_values = [float(frame_map[f]["y"]) for f in frames]
+    z_values = [
+        float(frame_map[f]["z"]) if _is_finite_number(frame_map[f].get("z")) else None
+        for f in frames
+    ]
+
+    added = 0
+    for frame in range(range_start, target_frame + 1):
+        if frame in frame_map:
+            continue
+        x_new = _linear_lookup(frame, frames, x_values)
+        y_new = _linear_lookup(frame, frames, y_values)
+        if x_new is None or y_new is None:
+            continue
+        z_new = _linear_lookup(frame, frames, z_values)
+        time_val = frame / fps
+        entry = {
+            "time": round(float(time_val), 3),
+            "x": round(float(x_new), 2),
+            "y": round(float(y_new), 2),
+        }
+        if _is_finite_number(z_new):
+            entry["z"] = round(float(z_new), 2)
+        entry["_frame"] = frame
+        entry["_interpolated"] = True
+        pos = bisect.bisect_left(frames, frame)
+        frames.insert(pos, frame)
+        x_values.insert(pos, float(entry["x"]))
+        y_values.insert(pos, float(entry["y"]))
+        z_values.insert(pos, float(entry["z"]) if _is_finite_number(entry.get("z")) else None)
+        frame_map[frame] = entry
+        added += 1
+
+    summary["added"] = added
+    result = [frame_map[f] for f in sorted(frame_map)]
+    result.sort(key=lambda p: (p.get("time", 0.0), p.get("_frame", 0)))
+    return result, summary
+
+
+def enforce_club_depth_range(
+    points: list[dict[str, object]],
+    *,
+    min_depth: float,
+    max_depth: float,
+) -> tuple[list[dict[str, object]], dict[str, int | float | bool]]:
+    """Ensure club depth values stay within ``[min_depth, max_depth]`` using interpolation."""
+    summary: dict[str, int | float | bool] = {
+        "total": 0,
+        "filled": 0,
+        "fallback_used": False,
+    }
+    if not points:
+        return points, summary
+
+    frame_entries: dict[int, dict[str, object]] = {}
+    frames: list[int] = []
+    for entry in points:
+        raw_frame = entry.get("_frame")
+        if raw_frame is None:
+            continue
+        frame_idx = int(raw_frame)
+        if frame_idx in frame_entries:
+            continue
+        frame_entries[frame_idx] = entry
+        frames.append(frame_idx)
+
+    if not frames:
+        return points, summary
+
+    frames.sort()
+    summary["total"] = len(frames)
+
+    valid_frames: list[int] = []
+    valid_depths: list[float] = []
+    for frame in frames:
+        entry = frame_entries[frame]
+        depth_val = entry.get("z")
+        if _is_finite_number(depth_val):
+            depth_float = abs(float(depth_val))  # type: ignore[arg-type]
+            if min_depth <= depth_float <= max_depth:
+                valid_frames.append(frame)
+                valid_depths.append(depth_float)
+                continue
+        entry.pop("z", None)
+
+    fallback_default = (min_depth + max_depth) / 2.0
+
+    for frame in frames:
+        entry = frame_entries[frame]
+        depth_val = entry.get("z")
+        if _is_finite_number(depth_val):
+            depth_float = float(depth_val)
+            depth_float = float(np.clip(depth_float, min_depth, max_depth))
+            entry["z"] = round(depth_float, 2)
+            continue
+
+        new_depth: float | None = None
+        if valid_frames:
+            new_depth = _linear_lookup(frame, valid_frames, valid_depths)
+        if new_depth is None:
+            new_depth = fallback_default
+            summary["fallback_used"] = True
+        new_depth = float(np.clip(float(new_depth), min_depth, max_depth))
+        entry["z"] = round(new_depth, 2)
+        valid_frames.append(frame)
+        valid_depths.append(new_depth)
+        summary["filled"] += 1
+
+    return points, summary
+
+
 def filter_club_point_outliers(
-    points: list[dict[str, float]],
-) -> tuple[list[dict[str, float]], dict[str, object]]:
+    points: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], dict[str, object]]:
     """Trim club trajectory points with implausible sizes or distances."""
     width_values: list[float] = []
     area_values: list[float] = []
@@ -395,7 +611,7 @@ def filter_club_point_outliers(
                 area_float = None
             if area_float is not None and np.isfinite(area_float):
                 area_values.append(area_float)
-        depth_val = entry.get("z")
+        depth_val = entry.get("_raw_depth", entry.get("z"))
         if depth_val is not None:
             try:
                 depth_float = float(depth_val)
@@ -404,15 +620,26 @@ def filter_club_point_outliers(
             if depth_float is not None and np.isfinite(depth_float):
                 depth_values.append(depth_float)
 
-    width_min, width_max = _median_mad_limits(width_values)
-    area_min, area_max = _median_mad_limits(area_values)
-    _, depth_max = _median_mad_limits(depth_values)
+    width_min, width_max = _median_mad_limits(width_values, multiplier=CLUB_STAT_LIMIT_MULTIPLIER)
+    area_min, area_max = _median_mad_limits(area_values, multiplier=CLUB_STAT_LIMIT_MULTIPLIER)
+    _, depth_max = _median_mad_limits(depth_values, multiplier=CLUB_STAT_LIMIT_MULTIPLIER)
+
+    if width_min is not None:
+        width_min = max(0.0, width_min * 0.9)
+    if width_max is not None:
+        width_max *= 1.05
+    if area_min is not None:
+        area_min = max(0.0, area_min * 0.85)
+    if area_max is not None:
+        area_max *= 1.08
     baseline_depth_limit = _compute_depth_baseline_limit(points)
     if baseline_depth_limit is not None:
         if depth_max is None or baseline_depth_limit < depth_max:
             depth_max = baseline_depth_limit
+    if depth_max is not None:
+        depth_max *= 1.05
 
-    filtered: list[dict[str, float]] = []
+    filtered: list[dict[str, object]] = []
     removed = 0
     for entry in points:
         remove = False
@@ -2651,7 +2878,7 @@ def process_video(
 
     # Simplified club tracking via non-green islands (no dot/column logic)
     MAX_TELEPORT_JUMP_PX = CLUBFACE_MAX_JUMP_PX
-    club_pixels: list[dict[str, float]] = []  # {'time': t, 'u': u, 'v': v}
+    club_pixels: list[dict[str, object]] = []  # {'time': t, 'u': u, 'v': v}
     path_points: list[tuple[int, int]] = []   # for per-frame overlay
     # Shape-consistency state
     prev_club_mask: np.ndarray | None = None
@@ -2665,6 +2892,8 @@ def process_video(
     club_motion_pause_triggered = False
     club_recording_resume_delay = 0
     prev_club_depth: float | None = None
+    impact_frame_idx: int | None = None
+    impact_time: float | None = None
     # Tunables for shape consistency
     IOU_SELECT_THRESHOLD = 0.15
     OVERLAP_REQUIRED_FRAC = 0.25
@@ -2781,6 +3010,9 @@ def process_video(
                             club_recording_enabled = False
                             club_motion_pause_triggered = True
                             club_recording_resume_delay = CLUB_RESUME_DELAY_FRAMES
+                            if impact_frame_idx is None:
+                                impact_frame_idx = frame_idx
+                                impact_time = round(float(t), 3)
 
         if not detected and last_ball_center is not None and in_window:
             if last_ball_radius is not None:
@@ -2930,18 +3162,29 @@ def process_video(
                         if depth_cm is None and prev_club_depth is not None:
                             depth_cm = prev_club_depth
                         if depth_cm is not None:
+                            depth_cm = abs(float(depth_cm))
                             prev_club_depth = depth_cm
                         if club_recording_enabled:
+                            raw_depth: float | None = None
+                            if depth_cm is not None and np.isfinite(depth_cm):
+                                raw_depth = float(depth_cm)
+                            z_value: float | None = None
+                            if raw_depth is not None and CLUB_DEPTH_MIN_CM <= raw_depth <= CLUB_DEPTH_MAX_CM:
+                                z_value = round(raw_depth, 2)
                             club_entry = {
                                 "time": round(t, 3),
                                 "x": round(float(u), 2),
                                 "y": round(float(v), 2),
-                                "z": (round(float(depth_cm), 2) if depth_cm is not None else None),
                             }
+                            if z_value is not None:
+                                club_entry["z"] = z_value
+                            if raw_depth is not None:
+                                club_entry["_raw_depth"] = round(raw_depth, 2)
                             if club_width_px is not None:
                                 club_entry["_width_px"] = float(club_width_px)
                             if club_area_px is not None:
                                 club_entry["_area_px"] = float(club_area_px)
+                            club_entry["_frame"] = frame_idx
                             club_pixels.append(club_entry)
                             path_points.append((int(round(u)), int(round(v))))
                         if prev_centroid is not None:
@@ -2998,6 +3241,16 @@ def process_video(
         "depth_max": None,
         "depth_baseline_limit": None,
     }
+    club_interpolation_info = {
+        "added": 0,
+        "start_frame": None,
+        "target_frame": impact_frame_idx,
+    }
+    club_depth_info = {
+        "total": 0,
+        "filled": 0,
+        "fallback_used": False,
+    }
     if club_pixels:
         club_pixels, club_filter_info = filter_club_point_outliers(club_pixels)
         if club_filter_info.get("applied"):
@@ -3023,6 +3276,26 @@ def process_video(
                 parts.append(f"depth>{depth_baseline_limit} vs baseline")
             clause = f" (limits: {', '.join(parts)})" if parts else ""
             print(f"Removed {removed} club outlier point(s){clause}")
+        club_pixels, club_interpolation_info = interpolate_club_points(
+            club_pixels,
+            target_frame=impact_frame_idx,
+            fps=float(video_fps),
+            start_frame=0,
+        )
+        if club_interpolation_info.get("added"):
+            added = club_interpolation_info.get("added")
+            tgt = club_interpolation_info.get("target_frame")
+            print(f"Interpolated {added} club point(s) up to frame {tgt}")
+        club_pixels, club_depth_info = enforce_club_depth_range(
+            club_pixels,
+            min_depth=CLUB_DEPTH_MIN_CM,
+            max_depth=CLUB_DEPTH_MAX_CM,
+        )
+        if club_depth_info.get("filled") or club_depth_info.get("fallback_used"):
+            print(
+                "Adjusted club depth values: "
+                f"filled={club_depth_info.get('filled')} fallback={club_depth_info.get('fallback_used')}"
+            )
     smoothed_club_pixels, smoothing_info = smooth_sticker_pixels(club_pixels)
     if smoothing_info.get("applied"):
         club_pixels = smoothed_club_pixels
@@ -3032,8 +3305,16 @@ def process_video(
         )
     if club_pixels:
         for entry in club_pixels:
+            z_val = entry.get("z")
+            if _is_finite_number(z_val):
+                clamped = float(np.clip(float(z_val), CLUB_DEPTH_MIN_CM, CLUB_DEPTH_MAX_CM))
+                entry["z"] = round(clamped, 2)
+        for entry in club_pixels:
             entry.pop("_width_px", None)
             entry.pop("_area_px", None)
+            entry.pop("_frame", None)
+            entry.pop("_interpolated", None)
+            entry.pop("_raw_depth", None)
     if frames_dir:
         _annotate_sticker_frames(frames_dir, club_pixels)
 
@@ -3081,7 +3362,11 @@ def process_video(
         "ball_points": len(ball_coords),
         "club_points": len(club_pixels),
         "club_filter": club_filter_info,
+        "club_interpolation": club_interpolation_info,
+        "club_depth": club_depth_info,
         "club_smoothing": smoothing_info,
+        "impact_frame": impact_frame_idx,
+        "impact_time": impact_time,
         "ball_compile_time": ball_compile_time,
         "ball_detection_time": ball_time,
         "clubface_time": clubface_time,
@@ -3111,7 +3396,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_1.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_4.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
