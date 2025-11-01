@@ -2,6 +2,9 @@
 set -e  # Exit on error
 set -x  # Debug: print each command
 
+# RUN INSTRUCTIONS:
+#   Example: ./rpicam_run.sh 5s 1000
+
 # -------------------------
 # Directories
 # -------------------------
