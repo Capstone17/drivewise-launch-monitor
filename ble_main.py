@@ -246,6 +246,8 @@ class SwingAnalysisCharacteristic(Characteristic):
                     logger.info("STAGE2: low freq video recording started STATE: %s", ball_detected)
 
                     time.sleep(1.5)  # Wait before next attempt
+                    if(self.service.run_camera == False):
+                        return
 
                 logger.info("Ball detected! Turning on yellow LED...")
 
