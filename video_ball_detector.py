@@ -68,7 +68,97 @@ FY = float(CAMERA_MATRIX[1, 1])
 CX = float(CAMERA_MATRIX[0, 2])
 CY = float(CAMERA_MATRIX[1, 2])
 
-MAX_MOTION_FRAMES = 40
+_DEFAULT_CAMERA_MATRIX = CAMERA_MATRIX.astype(np.float32, copy=True)
+_DEFAULT_DIST_COEFFS = DIST_COEFFS.astype(np.float32, copy=True)
+_DEFAULT_FOCAL_LENGTH = float(FOCAL_LENGTH)
+_DEFAULT_BALL_RADIUS = float(ACTUAL_BALL_RADIUS)
+_CURRENT_CALIBRATION: dict[str, object] | None = None
+
+
+def apply_calibration(calibration: dict[str, object] | None = None) -> dict[str, object]:
+    """Update module-wide calibration parameters from ``calibration`` and return the resolved set."""
+    global CAMERA_MATRIX, DIST_COEFFS, FX, FY, CX, CY, FOCAL_LENGTH, ACTUAL_BALL_RADIUS, _CURRENT_CALIBRATION
+
+    resolved_matrix = _DEFAULT_CAMERA_MATRIX
+    resolved_dist = _DEFAULT_DIST_COEFFS
+    resolved_focal = _DEFAULT_FOCAL_LENGTH
+    resolved_radius = _DEFAULT_BALL_RADIUS
+
+    if calibration:
+        try:
+            if "camera_matrix" in calibration and calibration["camera_matrix"] is not None:
+                mat = np.asarray(calibration["camera_matrix"], dtype=np.float32)
+                if mat.shape == (3, 3):
+                    resolved_matrix = mat
+        except Exception:
+            pass
+        try:
+            if "dist_coeffs" in calibration and calibration["dist_coeffs"] is not None:
+                dist = np.asarray(calibration["dist_coeffs"], dtype=np.float32)
+                if dist.ndim == 1:
+                    dist = dist.reshape(1, -1)
+                if dist.ndim == 2:
+                    resolved_dist = dist
+        except Exception:
+            pass
+        try:
+            if "focal_length" in calibration and calibration["focal_length"] is not None:
+                resolved_focal = float(calibration["focal_length"])
+        except (TypeError, ValueError):
+            pass
+        try:
+            if "ball_radius" in calibration and calibration["ball_radius"] is not None:
+                resolved_radius = float(calibration["ball_radius"])
+        except (TypeError, ValueError):
+            pass
+
+        # Allow direct overrides of fx/fy/cx/cy without supplying a full matrix.
+        overrides = {}
+        for key in ("fx", "fy", "cx", "cy"):
+            if calibration.get(key) is None:
+                continue
+            try:
+                overrides[key] = float(calibration[key])
+            except (TypeError, ValueError):
+                continue
+        if overrides:
+            matrix = resolved_matrix.astype(np.float32, copy=True)
+            if "fx" in overrides:
+                matrix[0, 0] = overrides["fx"]
+            if "fy" in overrides:
+                matrix[1, 1] = overrides["fy"]
+            if "cx" in overrides:
+                matrix[0, 2] = overrides["cx"]
+            if "cy" in overrides:
+                matrix[1, 2] = overrides["cy"]
+            resolved_matrix = matrix
+
+    CAMERA_MATRIX = resolved_matrix.astype(np.float32, copy=True)
+    DIST_COEFFS = resolved_dist.astype(np.float32, copy=True)
+    FOCAL_LENGTH = float(resolved_focal)
+    ACTUAL_BALL_RADIUS = float(resolved_radius)
+
+    FX = float(CAMERA_MATRIX[0, 0])
+    FY = float(CAMERA_MATRIX[1, 1])
+    CX = float(CAMERA_MATRIX[0, 2])
+    CY = float(CAMERA_MATRIX[1, 2])
+
+    _CURRENT_CALIBRATION = {
+        "camera_matrix": CAMERA_MATRIX.copy(),
+        "dist_coeffs": DIST_COEFFS.copy(),
+        "focal_length": FOCAL_LENGTH,
+        "ball_radius": ACTUAL_BALL_RADIUS,
+        "fx": FX,
+        "fy": FY,
+        "cx": CX,
+        "cy": CY,
+    }
+    return _CURRENT_CALIBRATION
+
+
+apply_calibration()
+
+MAX_MOTION_FRAMES = 80
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
@@ -1877,12 +1967,16 @@ def check_tail_for_ball(
     video_path: str,
     *,
     detector: TFLiteBallDetector | None = None,
+    calibration: dict[str, object] | None = None,
     frames_to_check: int = 12,
     stride: int = 1,
     score_threshold: float = 0.25,
     min_hits: int = 2,
 ) -> TailCheckResult:
     """Inspect the tail end of a clip and report whether the ball remains visible."""
+
+    if calibration is not None:
+        apply_calibration(calibration)
 
     if frames_to_check <= 0:
         return TailCheckResult(False, 0, 0, [], [])
@@ -2247,6 +2341,7 @@ def process_video(
     frames_dir: str = "ball_frames",
     *,
     tail_check: TailCheckResult | None = None,
+    calibration: dict[str, object] | None = None,
     tail_frames_to_check: int = 12,
     tail_stride: int = 1,
     tail_score_threshold: float = 0.25,
@@ -2266,6 +2361,8 @@ def process_video(
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
 
+    current_calibration = apply_calibration(calibration)
+
     timings = TimingCollector()
     total_start = time.perf_counter()
 
@@ -2280,6 +2377,7 @@ def process_video(
         tail_check = check_tail_for_ball(
             video_path,
             detector=detector,
+            calibration=current_calibration,
             frames_to_check=tail_frames_to_check,
             stride=tail_stride,
             score_threshold=tail_score_threshold,
@@ -2773,7 +2871,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "contSwing6.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"

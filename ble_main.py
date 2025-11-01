@@ -23,6 +23,7 @@ from ble import (
 )
 
 import array
+import numpy as np
 import sys
 import subprocess
 import json
@@ -56,6 +57,29 @@ logHandler.setFormatter(formatter)
 filelogHandler.setFormatter(formatter)
 logger.addHandler(filelogHandler)
 logger.addHandler(logHandler)
+
+CALIBRATION_PATH = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
+try:
+    with np.load(CALIBRATION_PATH) as calib_file:
+        _camera_matrix = calib_file["camera_matrix"]
+        _dist_coeffs = calib_file["dist_coeffs"]
+except Exception:
+    _camera_matrix = np.eye(3, dtype=np.float32)
+    _dist_coeffs = np.zeros((1, 5), dtype=np.float32)
+
+if _dist_coeffs.ndim == 1:
+    _dist_coeffs = _dist_coeffs.reshape(1, -1)
+
+CALIBRATION_PARAMS = {
+    "camera_matrix": _camera_matrix.astype(np.float32, copy=True),
+    "dist_coeffs": _dist_coeffs.astype(np.float32, copy=True),
+    "focal_length": float(_camera_matrix[0, 0]),
+    "ball_radius": 2.38,
+    "fx": float(_camera_matrix[0, 0]),
+    "fy": float(_camera_matrix[1, 1]),
+    "cx": float(_camera_matrix[0, 2]),
+    "cy": float(_camera_matrix[1, 2]),
+}
 
 
 BaseUrl = "XXXXXXXXXXXX"
@@ -200,6 +224,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                         tail_check = check_tail_for_ball(
                             "detect_ball.mp4",
                             detector=detector,
+                            calibration=CALIBRATION_PARAMS,
                             frames_to_check=5,
                             stride=1,
                             score_threshold=0.25,
@@ -284,6 +309,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                         tail_check = check_tail_for_ball(
                             latest_file,
                             detector=detector,
+                            calibration=CALIBRATION_PARAMS,
                             frames_to_check=5,
                             stride=1,
                             score_threshold=0.25,
@@ -322,7 +348,8 @@ class SwingAnalysisCharacteristic(Characteristic):
                         latest_file,
                         "ball_coords.json",
                         "sticker_coords.json",
-                        "ball_frames"
+                        "ball_frames",
+                        calibration=CALIBRATION_PARAMS,
                     )
 
                     logger.info("Running rule-based analysis...")
