@@ -171,6 +171,16 @@ CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
 CLUBFACE_MAX_JUMP_PX = 80.0
+CLUB_PRECONTACT_MIN_VISIBLE_FRAC = 0.012
+CLUB_PRECONTACT_MIN_COMPONENT_AREA_PX = 820.0
+CLUB_PRECONTACT_MIN_ELLIPSE_MAJOR_PX = 24.0
+CLUB_PRECONTACT_MIN_ELLIPSE_MINOR_PX = 8.0
+CLUB_BALL_CONTACT_MARGIN_PX = 12.0
+CLUB_BALL_CONTACT_HOLD_FRAMES = 5
+CLUB_BALL_CONTACT_UNION_MARGIN_PX = 3.0
+CLUB_ELLIPSE_MAX_DRIFT_PX = 45.0
+CLUB_ELLIPSE_CONTACT_BLEND = 0.55
+CLUB_ELLIPSE_HOLD_FRAMES = 4
 
 CLUB_TEMPLATE_MIN_AREA_PX = 1500
 CLUB_TEMPLATE_UPDATE_MARGIN = 1.12
@@ -3157,6 +3167,12 @@ def process_video(
         "streak_threshold": CLUB_ALPHA_RELAX_STREAK,
         "visible_trigger": CLUB_ALPHA_RELAX_VISIBLE_TRIGGER,
     }
+    last_ellipse_center: tuple[float, float] | None = None
+    last_ellipse_axes: tuple[float, float] | None = None
+    last_ellipse_angle: float | None = None
+    last_ellipse_frame_idx = -1
+    ball_contact_timer = 0
+    ball_contact_occurred = False
     # Tunables for shape consistency
     IOU_SELECT_THRESHOLD = 0.15
     OVERLAP_REQUIRED_FRAC = 0.25
@@ -3296,6 +3312,32 @@ def process_video(
                         float(cy + radius),
                     )
 
+        ball_center_px: tuple[float, float] | None = None
+        ball_radius_px: float | None = None
+        overlay_source = ball_overlay if ball_overlay is not None else ball_prediction_overlay
+        if overlay_source is not None:
+            cx_src, cy_src = overlay_source["center"]
+            ball_center_px = (float(cx_src), float(cy_src))
+            ball_radius_px = float(overlay_source["radius"])
+
+        ball_contact_candidate = False
+        if ball_center_px is not None:
+            contact_threshold = (ball_radius_px if ball_radius_px is not None else 0.0) + CLUB_BALL_CONTACT_MARGIN_PX
+            if prev_centroid is not None:
+                if math.hypot(ball_center_px[0] - prev_centroid[0], ball_center_px[1] - prev_centroid[1]) <= contact_threshold:
+                    ball_contact_candidate = True
+            if (not ball_contact_candidate) and last_ellipse_center is not None:
+                if math.hypot(ball_center_px[0] - last_ellipse_center[0], ball_center_px[1] - last_ellipse_center[1]) <= contact_threshold:
+                    ball_contact_candidate = True
+
+        if ball_contact_candidate:
+            ball_contact_timer = int(CLUB_BALL_CONTACT_HOLD_FRAMES)
+        elif ball_contact_timer > 0:
+            ball_contact_timer -= 1
+        ball_contact_active = ball_contact_timer > 0
+        if ball_contact_active:
+            ball_contact_occurred = True
+
         guard_info = motion_guard_tracker.update(base_frame, in_window=in_window)
         # Build a simplified club mask: adaptive alpha mapping (dominant background),
         # then take the largest non-black connected component as the "club" island.
@@ -3334,6 +3376,10 @@ def process_video(
         if total_preview > 0:
             frame_visible_fraction = float(np.count_nonzero(gray_preview)) / float(total_preview)
 
+        pre_contact_heavy_blackout = False
+        if not ball_contact_occurred and frame_visible_fraction < CLUB_PRECONTACT_MIN_VISIBLE_FRAC:
+            pre_contact_heavy_blackout = True
+
         club_sample_created = False
 
         if in_window:
@@ -3344,11 +3390,24 @@ def process_video(
             # Apply the same stationary cutoff on the binary mask
             if apply_blackout_line:
                 nb[fixed_blackout_y + 1 :, :] = 0
-            if ball_bbox_for_mask is not None:
-                x1, y1, x2, y2 = map(int, map(round, ball_bbox_for_mask))
-                x1 = max(0, x1); y1 = max(0, y1); x2 = min(w-1, x2); y2 = min(h-1, y2)
-                if x2 > x1 and y2 > y1:
-                    cv2.circle(nb, (int((x1+x2)/2), int((y1+y2)/2)), int(max(x2-x1,y2-y1)/2)+2, 0, -1, cv2.LINE_AA)
+            if not ball_contact_active:
+                if ball_center_px is not None and ball_radius_px is not None:
+                    cx_i = int(round(ball_center_px[0]))
+                    cy_i = int(round(ball_center_px[1]))
+                    rad_i = max(1, int(round(ball_radius_px))) + 2
+                    if 0 <= cx_i < w and 0 <= cy_i < h:
+                        cv2.circle(nb, (cx_i, cy_i), rad_i, 0, -1, cv2.LINE_AA)
+                elif ball_bbox_for_mask is not None:
+                    x1, y1, x2, y2 = map(int, map(round, ball_bbox_for_mask))
+                    x1 = max(0, x1)
+                    y1 = max(0, y1)
+                    x2 = min(w - 1, x2)
+                    y2 = min(h - 1, y2)
+                    if x2 > x1 and y2 > y1:
+                        cx_mid = int(round((x1 + x2) / 2))
+                        cy_mid = int(round((y1 + y2) / 2))
+                        rad_mid = int(round(max(x2 - x1, y2 - y1) / 2)) + 2
+                        cv2.circle(nb, (cx_mid, cy_mid), max(1, rad_mid), 0, -1, cv2.LINE_AA)
             if alpha_relax_level <= 1:
                 nb = cv2.morphologyEx(nb, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3)))
                 nb = cv2.morphologyEx(nb, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7)))
@@ -3359,6 +3418,10 @@ def process_video(
                     cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
                 )
             club_mask = None
+            if pre_contact_heavy_blackout:
+                blackout_outlier_frames.add(frame_idx)
+                clubface_time += time.perf_counter() - club_stage_start
+                continue
             if int(np.count_nonzero(nb)):
                 num, labels, stats, _ = cv2.connectedComponentsWithStats(nb)
                 # Predict where the shape should be based on previous motion
@@ -3428,7 +3491,20 @@ def process_video(
                 elif club_mask is None:
                     club_mask = nb
 
-                # Compute centroid and update motion
+                if club_mask is not None and ball_contact_active and ball_center_px is not None and ball_radius_px is not None:
+                    union_mask = club_mask.copy()
+                    cx_union = int(round(ball_center_px[0]))
+                    cy_union = int(round(ball_center_px[1]))
+                    union_radius = max(1, int(round(ball_radius_px + CLUB_BALL_CONTACT_UNION_MARGIN_PX)))
+                    cv2.circle(union_mask, (cx_union, cy_union), union_radius, 255, -1, cv2.LINE_AA)
+                    club_mask = union_mask
+
+                pending_sample: dict[str, object] | None = None
+                pending_path_point: tuple[int, int] | None = None
+                pending_u: float | None = None
+                pending_v: float | None = None
+                record_sample = False
+
                 depth_cm: float | None = None
                 club_width_px: float | None = None
                 club_area_px: float | None = None
@@ -3481,6 +3557,18 @@ def process_video(
                 if club_visible_frac is not None and club_visible_frac < CLUB_COMPONENT_MIN_VISIBLE_FRAC:
                     component_valid = False
                 if club_width_px is not None and club_width_px < CLUB_COMPONENT_MIN_WIDTH_PX:
+                    component_valid = False
+                pre_contact_small_component = False
+                if not ball_contact_occurred:
+                    if club_area_px is not None and club_area_px < CLUB_PRECONTACT_MIN_COMPONENT_AREA_PX:
+                        pre_contact_small_component = True
+                    visible_floor = max(
+                        CLUB_COMPONENT_MIN_VISIBLE_FRAC * 1.35,
+                        CLUB_COMPONENT_MIN_VISIBLE_FRAC + 0.0004,
+                    )
+                    if club_visible_frac is not None and club_visible_frac < visible_floor:
+                        pre_contact_small_component = True
+                if pre_contact_small_component:
                     component_valid = False
 
                 movement = None
@@ -3541,9 +3629,14 @@ def process_video(
                     continue
 
                 if not component_valid:
+                    if pre_contact_small_component:
+                        blackout_outlier_frames.add(frame_idx)
                     continue
 
-                if u is not None and v is not None and component_valid:
+                if club_mask is not None:
+                    output_frame = cv2.bitwise_and(output_frame, output_frame, mask=club_mask)
+
+                if u is not None and v is not None:
                     accept = True
                     if path_points:
                         pu, pv = path_points[-1]
@@ -3562,79 +3655,31 @@ def process_video(
                                 depth_cm = None
                         if depth_cm is None and prev_club_depth is not None:
                             depth_cm = prev_club_depth
-                        if depth_cm is not None:
+                        if depth_cm is not None and np.isfinite(depth_cm):
                             depth_cm = abs(float(depth_cm))
                             prev_club_depth = depth_cm
-                        if club_recording_enabled:
-                            raw_depth: float | None = None
-                            adjusted_depth: float | None = None
-                            if depth_cm is not None and np.isfinite(depth_cm):
-                                raw_depth = float(depth_cm)
-                                if club_depth_offset is None:
-                                    club_depth_anchor_samples.append(raw_depth)
-                                    if len(club_depth_anchor_samples) >= CLUB_DEPTH_ANCHOR_SAMPLES:
-                                        anchor_subset = club_depth_anchor_samples[:CLUB_DEPTH_ANCHOR_SAMPLES]
-                                        anchor_value = float(np.median(anchor_subset))
-                                        club_depth_offset = CLUB_DEPTH_ANCHOR_TARGET_CM - anchor_value
-                                        club_depth_anchor_samples_collected = len(anchor_subset)
-                                if club_depth_offset is not None:
-                                    adjusted_depth = raw_depth + club_depth_offset
-                                else:
-                                    adjusted_depth = CLUB_DEPTH_ANCHOR_TARGET_CM
-                            elif club_depth_offset is not None and prev_club_depth is not None:
-                                # Reuse previous depth when current frame lacks measurements
-                                raw_depth = float(prev_club_depth)
-                                adjusted_depth = raw_depth + club_depth_offset
-                            if adjusted_depth is not None:
-                                adjusted_depth = float(max(0.0, adjusted_depth))
-                            z_value: float | None = None
-                            if adjusted_depth is not None and np.isfinite(adjusted_depth):
-                                z_value = float(np.clip(adjusted_depth, CLUB_DEPTH_MIN_CM, CLUB_DEPTH_MAX_CM))
-                            club_entry = {
-                                "time": round(t, 3),
-                                "x": round(float(u), 2),
-                                "y": round(float(v), 2),
-                            }
-                            if z_value is not None:
-                                club_entry["z"] = round(float(z_value), 2)
-                            if raw_depth is not None:
-                                club_entry["_raw_depth"] = round(raw_depth, 2)
-                            if adjusted_depth is not None:
-                                club_entry["_depth_adjusted"] = round(float(adjusted_depth), 2)
-                            if club_width_px is not None:
-                                club_entry["_width_px"] = float(club_width_px)
-                            if club_area_px is not None:
-                                club_entry["_area_px"] = float(club_area_px)
-                            if club_visible_frac is not None:
-                                club_entry["_visible_frac"] = float(club_visible_frac)
-                            if leftmost_x is not None:
-                                club_entry["_left_edge_x"] = float(leftmost_x)
-                            club_entry["_frame"] = frame_idx
-                            if u is not None and v is not None:
-                                u_float = float(u)
-                                v_float = float(v)
-                                if club_path_min_u is None or u_float < club_path_min_u:
-                                    club_path_min_u = u_float
-                                if club_path_max_u is None or u_float > club_path_max_u:
-                                    club_path_max_u = u_float
-                                if club_path_min_v is None or v_float < club_path_min_v:
-                                    club_path_min_v = v_float
-                                if club_path_max_v is None or v_float > club_path_max_v:
-                                    club_path_max_v = v_float
-                                span_x_now = club_path_max_u - club_path_min_u if club_path_min_u is not None and club_path_max_u is not None else None
-                                span_y_now = club_path_max_v - club_path_min_v if club_path_min_v is not None and club_path_max_v is not None else None
-                                if span_x_now is not None and span_y_now is not None:
-                                    if span_x_now >= CLUB_PATH_MIN_SPAN_X_PX or span_y_now >= CLUB_PATH_MIN_SPAN_Y_PX:
-                                        club_path_confirmed = True
-                            club_pixels.append(club_entry)
-                            club_sample_created = True
-                            path_points.append((int(round(u)), int(round(v))))
-                        if prev_centroid is not None:
-                            prev_motion = (u - prev_centroid[0], v - prev_centroid[1])
-                        prev_centroid = (u, v)
-                        prev_club_mask = club_mask.copy()
-                output_frame = cv2.bitwise_and(output_frame, output_frame, mask=club_mask)
-                if club_mask is not None:
+                        pending_u = float(u)
+                        pending_v = float(v)
+                        pending_sample = {
+                            "time": float(t),
+                            "u": pending_u,
+                            "v": pending_v,
+                            "depth_cm": depth_cm if depth_cm is not None else None,
+                            "club_width_px": float(club_width_px) if club_width_px is not None else None,
+                            "club_area_px": float(club_area_px) if club_area_px is not None else None,
+                            "club_visible_frac": float(club_visible_frac) if club_visible_frac is not None else None,
+                            "left_edge_x": float(leftmost_x) if leftmost_x is not None else None,
+                            "frame_idx": frame_idx,
+                        }
+                        pending_path_point = (int(round(u)), int(round(v)))
+                        record_sample = club_recording_enabled and not pre_contact_heavy_blackout
+                        pending_sample["record"] = record_sample
+
+                tracking_valid = pending_sample is not None
+                small_ellipse_precontact = False
+                ellipse_candidate: tuple[tuple[float, float], tuple[float, float], float] | None = None
+                ellipse_center_payload: dict[str, float] | None = None
+                if club_mask is not None and tracking_valid:
                     ellipse_mask = club_mask.copy()
                     mask_population = int(np.count_nonzero(ellipse_mask))
                     ellipse = None
@@ -3980,6 +4025,7 @@ def process_video(
                         anchor_major_value = float(anchor_major)
                         anchor_minor_value = float(anchor_minor)
 
+                    ellipse_candidate: tuple[tuple[float, float], tuple[float, float], float] | None = None
                     if ellipse is not None:
                         axes = list(ellipse[1])
                         if dist_max > 0.0:
@@ -4004,31 +4050,211 @@ def process_video(
                         if major_axis > max_major_allowed:
                             axes[major_idx] = max_major_allowed
                         ellipse = (ellipse[0], tuple(axes), ellipse[2])
+                        center_corr = (float(ellipse[0][0]), float(ellipse[0][1]))
+                        axes_corr = (
+                            float(max(1e-4, ellipse[1][0])),
+                            float(max(1e-4, ellipse[1][1])),
+                        )
+                        if last_ellipse_axes is not None:
+                            axes_corr = (
+                                float(max(1e-4, 0.4 * axes_corr[0] + 0.6 * last_ellipse_axes[0])),
+                                float(max(1e-4, 0.4 * axes_corr[1] + 0.6 * last_ellipse_axes[1])),
+                            )
+                        angle_corr = float(ellipse[2])
+                        if last_ellipse_center is not None:
+                            allowed_drift = CLUB_ELLIPSE_MAX_DRIFT_PX
+                            if ball_contact_active:
+                                allowed_drift = max(
+                                    allowed_drift,
+                                    (ball_radius_px if ball_radius_px is not None else 0.0) + CLUB_BALL_CONTACT_MARGIN_PX,
+                                )
+                            drift = math.hypot(
+                                center_corr[0] - last_ellipse_center[0],
+                                center_corr[1] - last_ellipse_center[1],
+                            )
+                            if drift > allowed_drift:
+                                if ball_contact_active and ball_center_px is not None:
+                                    blend = min(max(CLUB_ELLIPSE_CONTACT_BLEND, 0.0), 1.0)
+                                    center_corr = (
+                                        float((1.0 - blend) * last_ellipse_center[0] + blend * ball_center_px[0]),
+                                        float((1.0 - blend) * last_ellipse_center[1] + blend * ball_center_px[1]),
+                                    )
+                                else:
+                                    center_corr = (
+                                        float(last_ellipse_center[0]),
+                                        float(last_ellipse_center[1]),
+                                    )
+                                if last_ellipse_axes is not None:
+                                    axes_corr = (
+                                        float(max(1e-4, 0.4 * axes_corr[0] + 0.6 * last_ellipse_axes[0])),
+                                        float(max(1e-4, 0.4 * axes_corr[1] + 0.6 * last_ellipse_axes[1])),
+                                    )
+                        major_axis = max(float(axes_corr[0]), float(axes_corr[1]))
+                        minor_axis = min(float(axes_corr[0]), float(axes_corr[1]))
+                        if (
+                            not ball_contact_occurred
+                            and (
+                                major_axis < CLUB_PRECONTACT_MIN_ELLIPSE_MAJOR_PX
+                                or minor_axis < CLUB_PRECONTACT_MIN_ELLIPSE_MINOR_PX
+                            )
+                        ):
+                            tracking_valid = False
+                            small_ellipse_precontact = True
+                            last_ellipse_center = None
+                            last_ellipse_axes = None
+                            last_ellipse_angle = None
+                            last_ellipse_frame_idx = -1
+                        else:
+                            ellipse_candidate = (center_corr, axes_corr, angle_corr)
+
+                    if (
+                        tracking_valid
+                        and ellipse_candidate is None
+                        and last_ellipse_center is not None
+                        and last_ellipse_axes is not None
+                        and last_ellipse_frame_idx >= 0
+                        and (frame_idx - last_ellipse_frame_idx) <= CLUB_ELLIPSE_HOLD_FRAMES
+                    ):
+                        angle_keep = last_ellipse_angle if last_ellipse_angle is not None else 0.0
+                        ellipse_candidate = (
+                            (float(last_ellipse_center[0]), float(last_ellipse_center[1])),
+                            (float(max(1e-4, last_ellipse_axes[0])), float(max(1e-4, last_ellipse_axes[1]))),
+                            float(angle_keep),
+                        )
+
+                    if ellipse_candidate is not None and tracking_valid:
+                        last_ellipse_center = (
+                            float(ellipse_candidate[0][0]),
+                            float(ellipse_candidate[0][1]),
+                        )
+                        last_ellipse_axes = (
+                            float(max(1e-4, ellipse_candidate[1][0])),
+                            float(max(1e-4, ellipse_candidate[1][1])),
+                        )
+                        last_ellipse_angle = float(ellipse_candidate[2])
+                        last_ellipse_frame_idx = frame_idx
+                        ellipse_center_payload = {
+                            "x": round(float(ellipse_candidate[0][0]), 2),
+                            "y": round(float(ellipse_candidate[0][1]), 2),
+                        }
                         cv2.ellipse(
                             output_frame,
-                            ellipse,
+                            ellipse_candidate,
                             (0, 165, 255),
                             2,
                             cv2.LINE_AA,
                         )
-                        center_f = ellipse[0]
-                        center_payload = {
-                            "x": round(float(center_f[0]), 2),
-                            "y": round(float(center_f[1]), 2),
-                        }
-                        if club_pixels:
-                            for entry in reversed(club_pixels):
-                                frame_tag = entry.get("_frame")
-                                if frame_tag is None:
-                                    continue
-                                try:
-                                    tag_int = int(frame_tag)
-                                except (TypeError, ValueError):
-                                    continue
-                                if tag_int == frame_idx:
-                                    entry["ellipse_center"] = center_payload
-                                    break
-            clubface_time += time.perf_counter() - club_stage_start
+                    elif (
+                        last_ellipse_center is not None
+                        and last_ellipse_frame_idx >= 0
+                        and (frame_idx - last_ellipse_frame_idx) > CLUB_ELLIPSE_HOLD_FRAMES
+                    ):
+                        last_ellipse_center = None
+                        last_ellipse_axes = None
+                        last_ellipse_angle = None
+                        last_ellipse_frame_idx = -1
+                else:
+                    tracking_valid = False
+
+                if tracking_valid and ellipse_candidate is None and ellipse_center_payload is None:
+                    tracking_valid = False
+
+                if small_ellipse_precontact:
+                    blackout_outlier_frames.add(frame_idx)
+                    frame_blackout_heavy = True
+
+                commit_sample = (
+                    tracking_valid
+                    and pending_sample is not None
+                    and bool(pending_sample.get("record"))
+                )
+                if commit_sample and pending_sample is not None:
+                    depth_cm_current = pending_sample.get("depth_cm")
+                    raw_depth: float | None = None
+                    adjusted_depth: float | None = None
+                    if depth_cm_current is not None and np.isfinite(depth_cm_current):
+                        raw_depth = float(depth_cm_current)
+                        if club_depth_offset is None:
+                            club_depth_anchor_samples.append(raw_depth)
+                            if len(club_depth_anchor_samples) >= CLUB_DEPTH_ANCHOR_SAMPLES:
+                                anchor_subset = club_depth_anchor_samples[:CLUB_DEPTH_ANCHOR_SAMPLES]
+                                anchor_value = float(np.median(anchor_subset))
+                                club_depth_offset = CLUB_DEPTH_ANCHOR_TARGET_CM - anchor_value
+                                club_depth_anchor_samples_collected = len(anchor_subset)
+                        if club_depth_offset is not None:
+                            adjusted_depth = raw_depth + club_depth_offset
+                        else:
+                            adjusted_depth = CLUB_DEPTH_ANCHOR_TARGET_CM
+                    elif club_depth_offset is not None and prev_club_depth is not None:
+                        raw_depth = float(prev_club_depth)
+                        adjusted_depth = raw_depth + club_depth_offset
+                    if adjusted_depth is not None:
+                        adjusted_depth = float(max(0.0, adjusted_depth))
+                    z_value: float | None = None
+                    if adjusted_depth is not None and np.isfinite(adjusted_depth):
+                        z_value = float(np.clip(adjusted_depth, CLUB_DEPTH_MIN_CM, CLUB_DEPTH_MAX_CM))
+                    club_entry = {
+                        "time": round(float(pending_sample["time"]), 3),
+                        "x": round(float(pending_sample["u"]), 2),
+                        "y": round(float(pending_sample["v"]), 2),
+                    }
+                    if z_value is not None:
+                        club_entry["z"] = round(float(z_value), 2)
+                    if raw_depth is not None:
+                        club_entry["_raw_depth"] = round(float(raw_depth), 2)
+                    if adjusted_depth is not None:
+                        club_entry["_depth_adjusted"] = round(float(adjusted_depth), 2)
+                    if pending_sample.get("club_width_px") is not None:
+                        club_entry["_width_px"] = float(pending_sample["club_width_px"])
+                    if pending_sample.get("club_area_px") is not None:
+                        club_entry["_area_px"] = float(pending_sample["club_area_px"])
+                    if pending_sample.get("club_visible_frac") is not None:
+                        club_entry["_visible_frac"] = float(pending_sample["club_visible_frac"])
+                    if pending_sample.get("left_edge_x") is not None:
+                        club_entry["_left_edge_x"] = float(pending_sample["left_edge_x"])
+                    if ellipse_center_payload is not None:
+                        club_entry["ellipse_center"] = dict(ellipse_center_payload)
+                    club_entry["_frame"] = frame_idx
+                    club_pixels.append(club_entry)
+                    club_sample_created = True
+                    if pending_path_point is None:
+                        pending_path_point = (
+                            int(round(pending_sample["u"])),
+                            int(round(pending_sample["v"])),
+                        )
+                    path_points.append(pending_path_point)
+                    u_float = float(pending_sample["u"])
+                    v_float = float(pending_sample["v"])
+                    if club_path_min_u is None or u_float < club_path_min_u:
+                        club_path_min_u = u_float
+                    if club_path_max_u is None or u_float > club_path_max_u:
+                        club_path_max_u = u_float
+                    if club_path_min_v is None or v_float < club_path_min_v:
+                        club_path_min_v = v_float
+                    if club_path_max_v is None or v_float > club_path_max_v:
+                        club_path_max_v = v_float
+                    span_x_now = (
+                        club_path_max_u - club_path_min_u
+                        if club_path_min_u is not None and club_path_max_u is not None
+                        else None
+                    )
+                    span_y_now = (
+                        club_path_max_v - club_path_min_v
+                        if club_path_min_v is not None and club_path_max_v is not None
+                        else None
+                    )
+                    if span_x_now is not None and span_y_now is not None:
+                        if span_x_now >= CLUB_PATH_MIN_SPAN_X_PX or span_y_now >= CLUB_PATH_MIN_SPAN_Y_PX:
+                            club_path_confirmed = True
+                else:
+                    club_sample_created = False
+
+                if tracking_valid and pending_u is not None and pending_v is not None and club_mask is not None:
+                    if prev_centroid is not None:
+                        prev_motion = (pending_u - prev_centroid[0], pending_v - prev_centroid[1])
+                    prev_centroid = (pending_u, pending_v)
+                    prev_club_mask = club_mask.copy()
+                clubface_time += time.perf_counter() - club_stage_start
         if ball_overlay is not None:
             cx_i, cy_i = ball_overlay["center"]
             radius_i = max(int(ball_overlay["radius"]), 1)
@@ -4050,7 +4276,9 @@ def process_video(
                 cv2.LINE_AA,
             )
 
-        frame_blackout_heavy = frame_visible_fraction < CLUB_ALPHA_RELAX_VISIBLE_TRIGGER
+        frame_blackout_heavy = (
+            frame_visible_fraction < CLUB_ALPHA_RELAX_VISIBLE_TRIGGER
+        ) or pre_contact_heavy_blackout
 
         if frames_dir and inference_start <= frame_idx < inference_end:
             frame_path = os.path.join(frames_dir, f"frame_{frame_idx:04d}.png")
