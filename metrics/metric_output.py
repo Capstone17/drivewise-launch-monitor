@@ -12,6 +12,18 @@ import os
 import matplotlib.pyplot as plt
 
 
+def _coerce_times_to_float(records: list[dict]) -> list[dict]:
+    """Normalize any string-based timestamps so downstream math keeps working."""
+    for record in records:
+        value = record.get("time")
+        if isinstance(value, str):
+            try:
+                record["time"] = float(value)
+            except ValueError:
+                continue
+    return records
+
+
 
 def load_ball_movement_window(json_path):
     """
@@ -29,7 +41,7 @@ def load_ball_movement_window(json_path):
     z_threshold = 8.0
 
     with open(json_path, 'r') as f:
-        data = json.load(f)
+        data = _coerce_times_to_float(json.load(f))
 
     if not data:
         return [], None, None, None, None  # No data at all
@@ -74,7 +86,7 @@ def load_marker_poses_with_impact_time(json_path, t_target, time_window=0.3):
             pose_after (dict or None): Pose closest after t_target in full dataset.
     """
     with open(json_path, 'r') as f:
-        poses = json.load(f)
+        poses = _coerce_times_to_float(json.load(f))
 
     if not poses:
         return [], None, None
@@ -108,7 +120,7 @@ def load_marker_poses_without_impact_time(json_path, time_jump_threshold=0.1):
         middle_pose (dict): Pose closest to the middle of the window.
     """
     with open(json_path, 'r') as f:
-        data = json.load(f)
+        data = _coerce_times_to_float(json.load(f))
 
     if not data or len(data) < 2:
         return [], None  # Not enough poses to analyze

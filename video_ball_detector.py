@@ -1,6 +1,7 @@
 import bisect
 import json
 import math
+import numbers
 import os
 import sys
 import time
@@ -38,6 +39,22 @@ try:
         cv2.ocl.setUseOpenCL(False)
 except Exception:
     pass
+
+def _serialize_with_time_precision(records: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+    """Return shallow copies ensuring any numeric 'time' fields emit three decimal places."""
+    formatted: list[dict[str, object]] = []
+    for record in records:
+        copy = dict(record)
+        time_value = copy.get("time")
+        if isinstance(time_value, numbers.Real):
+            copy["time"] = f"{float(time_value):.3f}"
+        elif isinstance(time_value, str):
+            try:
+                copy["time"] = f"{float(time_value):.3f}"
+            except ValueError:
+                pass
+        formatted.append(copy)
+    return formatted
 
 ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
@@ -4420,9 +4437,9 @@ def process_video(
         _annotate_sticker_frames(frames_dir, club_pixels)
 
     with open(ball_path, "w", encoding="utf-8") as f:
-        json.dump(ball_coords, f, indent=2)
+        json.dump(_serialize_with_time_precision(ball_coords), f, indent=2)
     with open(sticker_path, "w", encoding="utf-8") as f:
-        json.dump(club_pixels, f, indent=2)
+        json.dump(_serialize_with_time_precision(club_pixels), f, indent=2)
     post_time = time.perf_counter() - post_start
     timings.add("post_process", post_time)
 
@@ -4499,7 +4516,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_2.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_6.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
