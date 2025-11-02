@@ -10,6 +10,7 @@ from pathlib import Path
 import json
 import os
 import matplotlib.pyplot as plt
+from scipy.signal import savgol_filter
 
 
 # TODO: Remove this function completely
@@ -80,8 +81,6 @@ def load_impact_time(json_path):
     impact_time = data[impact_idx]['time']
 
     return impact_time
-
-
 
 
 # Load the marker pose immediately before and immediately after impact
@@ -167,6 +166,10 @@ def load_marker_poses_without_impact_time(json_path, time_jump_threshold=0.1):
     return window, middle_pose
 
 
+# -------------------------
+# Ball Velocity Helpers
+# -------------------------
+
 def fit_line(t_values, y_values):
     """
     Fit a straight line to (t, y) data using least squares.
@@ -179,38 +182,147 @@ def fit_line(t_values, y_values):
     return m, b
 
 
-# Find the ball velocity components
-def ball_velocity_components(json_path, time_threshold):
+def calculate_r_squared(t_values, y_values, slope, intercept):
     """
-    Given a JSON file path and a time threshold, compute velocity components
-    by fitting best-fit lines for x, y, and z vs. time using only frames
-    with time > time_threshold.
+    Calculate R-squared (coefficient of determination) for the fit.
+    R² = 1 means perfect fit, R² = 0 means the fit is no better than the mean.
+    """
+    t = np.array(t_values, dtype=float)
+    y = np.array(y_values, dtype=float)
+    
+    y_pred = slope * t + intercept
+    ss_res = np.sum((y - y_pred) ** 2)  # Residual sum of squares
+    ss_tot = np.sum((y - np.mean(y)) ** 2)  # Total sum of squares
+    
+    r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+    return r2
+
+
+def ball_velocity_components(json_path, time_threshold, apply_filter=True, 
+                            window_length=11, poly_order=2, 
+                            warn_threshold=0.8, verbose=True):
+    """
+    Compute velocity components from position data after a specified time,
+    with optional Savitzky-Golay filtering and fit quality diagnostics.
     
     Args:
-        json_path: Path to the JSON file containing coordinate data
+        json_path: Path to JSON file with position data (time, x, y, z)
         time_threshold: Only consider frames with time > this value
-    
+        apply_filter: If True, apply Savitzky-Golay filter to smooth data
+        window_length: Window length for Savitzky-Golay filter (must be odd)
+        poly_order: Polynomial order for Savitzky-Golay filter (typically 2-3)
+        warn_threshold: R² threshold below which to warn about poor fit quality
+        verbose: If True, print fit quality diagnostics
+        
     Returns:
-        tuple: (x_rate, y_rate, z_rate) velocity components in units per second
+        tuple: (x_rate, y_rate, z_rate, diagnostics)
+            - x_rate, y_rate, z_rate: velocity components in units/second
+            - diagnostics: dict with R² values and other fit quality metrics
+        
+    Raises:
+        ValueError: If insufficient frames available after filtering
     """
+
     # Load data from JSON file
     with open(json_path, 'r') as f:
         data = json.load(f)
-    
-    # Filter frames with time > time_threshold
-    frames = [d for d in data if d['time'] > time_threshold]
-    
-    if len(frames) < 3:
-        raise ValueError("Need at least 3 frames after filtering for a fit.")
-    
-    t_vals = [f['time'] for f in frames]
-    
-    # Fit lines for x, y, and z; slopes = velocity components
-    x_rate, _ = fit_line(t_vals, [f['x'] for f in frames])
-    y_rate, _ = fit_line(t_vals, [f['y'] for f in frames])
-    z_rate, _ = fit_line(t_vals, [f['z'] for f in frames])
-    
-    return x_rate, y_rate, z_rate
+
+    # Filter
+    def after_threshold(d, threshold):
+        return round(d['time'], 6) > round(threshold, 6)
+
+    frames = [d for d in data if after_threshold(d, time_threshold)]
+    print('Filtered time values:', [f['time'] for f in frames])
+    print('Frames found:', len(frames))
+
+    # Always use as many frames as possible
+    available_frames = len(frames)
+    if available_frames < 3:
+        raise ValueError("Need at least 3 frames after filtering for fit.")
+
+    t_vals = np.array([f['time'] for f in frames])
+    x_vals = np.array([f['x'] for f in frames])
+    y_vals = np.array([f['y'] for f in frames])
+    z_vals = np.array([f['z'] for f in frames])
+
+    # Savitzky-Golay: Use largest possible odd window length <= available_frames
+    if apply_filter and available_frames >= 3:
+        max_window = available_frames if available_frames % 2 == 1 else available_frames - 1
+        sg_win = min(window_length, max_window)
+        if sg_win < 3: sg_win = 3
+        sg_poly = min(poly_order, sg_win - 1)
+        # Only filter if window makes sense (>= 3 and poly < win)
+        if sg_win > sg_poly:
+            x_vals = savgol_filter(x_vals, sg_win, sg_poly)
+            y_vals = savgol_filter(y_vals, sg_win, sg_poly)
+            z_vals = savgol_filter(z_vals, sg_win, sg_poly)
+    else:
+        sg_win = None
+        sg_poly = None
+
+    # Fit lines for x, y, and z
+    x_rate, x_intercept = fit_line(t_vals, x_vals)
+    y_rate, y_intercept = fit_line(t_vals, y_vals)
+    z_rate, z_intercept = fit_line(t_vals, z_vals)
+
+    # R-squared diagnostics
+    r2_x = calculate_r_squared(t_vals, x_vals, x_rate, x_intercept)
+    r2_y = calculate_r_squared(t_vals, y_vals, y_rate, y_intercept)
+    r2_z = calculate_r_squared(t_vals, z_vals, z_rate, z_intercept)
+
+    # RMS error diagnostics
+    x_pred = x_rate * t_vals + x_intercept
+    y_pred = y_rate * t_vals + y_intercept
+    z_pred = z_rate * t_vals + z_intercept
+    rmse_x = np.sqrt(np.mean((x_vals - x_pred) ** 2))
+    rmse_y = np.sqrt(np.mean((y_vals - y_pred) ** 2))
+    rmse_z = np.sqrt(np.mean((z_vals - z_pred) ** 2))
+
+    diagnostics = {
+        'r2_x': r2_x,
+        'r2_y': r2_y,
+        'r2_z': r2_z,
+        'r2_min': min(r2_x, r2_y, r2_z),
+        'rmse_x': rmse_x,
+        'rmse_y': rmse_y,
+        'rmse_z': rmse_z,
+        'num_frames': available_frames,
+        'filtered': apply_filter and available_frames >= 3,
+        'window_length': sg_win,
+        'poly_order': sg_poly
+    }
+
+    # Print diagnostics
+    if verbose:
+        print(f"\n=== Velocity Fit Diagnostics ===")
+        print(f"Frames used: {available_frames}")
+        print(f"Time range: {t_vals[0]:.3f} to {t_vals[-1]:.3f} seconds")
+        if diagnostics['filtered']:
+            print(f"Filtering applied: Yes (Window length: {sg_win}, Polynomial order: {sg_poly})")
+        else:
+            print(f"Filtering applied: No (insufficient frames for filter or filter disabled)")
+        print(f"\nVelocity components:")
+        print(f"  x_rate: {x_rate:+.3f} units/sec")
+        print(f"  y_rate: {y_rate:+.3f} units/sec")
+        print(f"  z_rate: {z_rate:+.3f} units/sec")
+        print(f"\nFit quality (R²):")
+        print(f"  x: {r2_x:.4f}")
+        print(f"  y: {r2_y:.4f}")
+        print(f"  z: {r2_z:.4f}")
+        print(f"\nRMS errors:")
+        print(f"  x: {rmse_x:.4f} units")
+        print(f"  y: {rmse_y:.4f} units")
+        print(f"  z: {rmse_z:.4f} units")
+        if diagnostics['r2_min'] < warn_threshold:
+            print(f"\nWARNING: Poor fit quality detected (min R² = {diagnostics['r2_min']:.3f} < {warn_threshold})")
+            print("    This suggests either:")
+            print("    - Velocity is not constant after the threshold")
+            print("    - Data contains significant noise")
+            print("    - Time threshold may be incorrectly chosen")
+        else:
+            print(f"\nGood fit quality (all R² > {warn_threshold})")
+
+    return x_rate, y_rate, z_rate, diagnostics
 
 
 def finite_diff_velocity(frames, t_target=None):
@@ -400,7 +512,28 @@ def return_metrics() -> dict:
     # ---------------------------------
     # Velocity Approximation
     # ---------------------------------
-    ball_dx, ball_dy, ball_dz = ball_velocity_components(ball_coords_path, impact_time)
+
+    # With filtering (recommended)
+    ball_dx, ball_dy, ball_dz, diag = ball_velocity_components(
+        ball_coords_path, 
+        time_threshold=impact_time,
+        apply_filter=True,
+        window_length=11,
+        poly_order=2,
+        verbose=True
+    )
+    
+    # Without filtering (for comparison)
+    # x_vel, y_vel, z_vel, diag = ball_velocity_components(
+    #     'ball_data.json', 
+    #     time_threshold=1.462,
+    #     apply_filter=False,
+    #     verbose=True
+    # )
+
+    # Access diagnostics
+    print(f"\nMinimum R²: {diag['r2_min']:.4f}")
+
     print(f"Ball dx: {ball_dx}, Ball dy: {ball_dy}, Ball dz: {ball_dz}")
     marker_dx, marker_dy, marker_dz = finite_diff_velocity(marker_window, t_target=marker_target_time)
     print(f"At time {marker_target_time}, Marker dx: {marker_dx}, Marker dy: {marker_dy}, Marker dz: {marker_dz}")
