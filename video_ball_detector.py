@@ -205,6 +205,8 @@ CLUB_FINAL_TRIM_MARGIN = 2
 CLUB_TARGET_ALIGN_MIN_COVERAGE = 0.55
 CLUB_TARGET_ALIGN_BONUS = 0.05
 CLUB_LEFT_WEIGHT_BIAS = 1.8
+CLUB_ANNOTATION_MIN_VISIBLE_FRAC = 0.0015
+CLUB_ANNOTATION_MIN_FILE_BYTES = 10_240
 CLUB_TAIL_CONCAVITY_THRESHOLD = 0.58
 CLUB_TAIL_CONCAVITY_MAX_REMOVALS = 4
 CLUB_TAIL_CONCAVITY_WINDOW = 6
@@ -765,6 +767,7 @@ def filter_club_point_outliers(
     width_values: list[float] = []
     area_values: list[float] = []
     depth_values: list[float] = []
+    visible_values: list[float] = []
     for entry in points:
         width_val = entry.get("_width_px")
         if width_val is not None:
@@ -790,10 +793,19 @@ def filter_club_point_outliers(
                 depth_float = None
             if depth_float is not None and np.isfinite(depth_float):
                 depth_values.append(depth_float)
+        visible_val = entry.get("_visible_frac")
+        if visible_val is not None:
+            try:
+                visible_float = float(visible_val)
+            except (TypeError, ValueError):
+                visible_float = None
+            if visible_float is not None and np.isfinite(visible_float):
+                visible_values.append(visible_float)
 
     width_min, width_max = _median_mad_limits(width_values, multiplier=CLUB_STAT_LIMIT_MULTIPLIER)
     area_min, area_max = _median_mad_limits(area_values, multiplier=CLUB_STAT_LIMIT_MULTIPLIER)
     _, depth_max = _median_mad_limits(depth_values, multiplier=CLUB_STAT_LIMIT_MULTIPLIER)
+    visible_min, visible_max = _median_mad_limits(visible_values, multiplier=CLUB_STAT_LIMIT_MULTIPLIER)
 
     if width_min is not None:
         width_min = max(0.0, width_min * 0.9)
@@ -803,6 +815,10 @@ def filter_club_point_outliers(
         area_min = max(0.0, area_min * 0.85)
     if area_max is not None:
         area_max *= 1.08
+    if visible_min is not None:
+        visible_min = max(CLUB_ANNOTATION_MIN_VISIBLE_FRAC, visible_min * 0.8)
+    if visible_max is not None:
+        visible_max = min(1.0, visible_max * 1.2)
     baseline_depth_limit = _compute_depth_baseline_limit(points)
     if baseline_depth_limit is not None:
         if depth_max is None or baseline_depth_limit < depth_max:
@@ -844,6 +860,17 @@ def filter_club_point_outliers(
                 depth_float = None
             if depth_float is not None and np.isfinite(depth_float) and depth_float > depth_max:
                 remove = True
+        visible_val = entry.get("_visible_frac")
+        if visible_val is not None:
+            try:
+                visible_float = float(visible_val)
+            except (TypeError, ValueError):
+                visible_float = None
+            if visible_float is not None and np.isfinite(visible_float):
+                if visible_min is not None and visible_float < visible_min:
+                    remove = True
+                if visible_max is not None and visible_float > visible_max:
+                    remove = True
         if remove:
             removed += 1
             continue
@@ -868,6 +895,8 @@ def filter_club_point_outliers(
         "area_max": _round_limit(area_max),
         "depth_max": _round_limit(depth_max),
         "depth_baseline_limit": _round_limit(baseline_depth_limit),
+        "visible_min": _round_limit(visible_min),
+        "visible_max": _round_limit(visible_max),
     }
     return filtered, summary
 
@@ -3071,6 +3100,16 @@ def process_video(
     prev_club_depth: float | None = None
     impact_frame_idx: int | None = None
     impact_time: float | None = None
+    annotated_visible_fractions: dict[int, float] = {}
+    annotated_frame_sizes: dict[int, int] = {}
+    blackout_outlier_frames: set[int] = set()
+    blackout_filter_info: dict[str, object] = {
+        "applied": False,
+        "frames_removed": 0,
+        "club_samples_removed": 0,
+        "min_visible_frac": CLUB_ANNOTATION_MIN_VISIBLE_FRAC,
+        "min_file_bytes": CLUB_ANNOTATION_MIN_FILE_BYTES,
+    }
     # Tunables for shape consistency
     IOU_SELECT_THRESHOLD = 0.15
     OVERLAP_REQUIRED_FRAC = 0.25
@@ -3113,6 +3152,7 @@ def process_video(
         # No background modeling for club; we work off blackout-only
         if h is None:
             h, w = base_frame.shape[:2]
+        frame_pixel_count = float(h * w) if h is not None and w is not None else None
         # No IR toggling; use color frames only for club path
         t = frame_idx / video_fps
         in_window = inference_start <= frame_idx < inference_end
@@ -3314,6 +3354,7 @@ def process_video(
                 club_width_px: float | None = None
                 club_area_px: float | None = None
                 leftmost_x: float | None = None
+                club_visible_frac: float | None = None
                 u: float | None = None
                 v: float | None = None
                 try:
@@ -3327,6 +3368,8 @@ def process_video(
                     rightmost_x = float(xs.max())
                     club_width_px = float(max(1.0, rightmost_x - leftmost_x + 1.0))
                     club_area_px = float(xs.size)
+                    if frame_pixel_count and frame_pixel_count > 0.0:
+                        club_visible_frac = float(xs.size) / float(frame_pixel_count)
                     weights = np.ones_like(xs, dtype=np.float64)
                     if CLUB_LEFT_WEIGHT_BIAS > 0.0 and club_width_px > 1.0:
                         span = (xs - leftmost_x) / max(1.0, club_width_px)
@@ -3390,6 +3433,8 @@ def process_video(
                                 club_entry["_width_px"] = float(club_width_px)
                             if club_area_px is not None:
                                 club_entry["_area_px"] = float(club_area_px)
+                            if club_visible_frac is not None:
+                                club_entry["_visible_frac"] = float(club_visible_frac)
                             if leftmost_x is not None:
                                 club_entry["_left_edge_x"] = float(leftmost_x)
                             club_entry["_frame"] = frame_idx
@@ -3817,9 +3862,42 @@ def process_video(
             )
 
         if frames_dir and inference_start <= frame_idx < inference_end:
-            cv2.imwrite(
-                os.path.join(frames_dir, f"frame_{frame_idx:04d}.png"), output_frame
-            )
+            frame_path = os.path.join(frames_dir, f"frame_{frame_idx:04d}.png")
+            blackout_heavy = False
+            visible_fraction = 0.0
+            try:
+                gray_out = cv2.cvtColor(output_frame, cv2.COLOR_BGR2GRAY)
+                total_px = gray_out.size
+                if total_px > 0:
+                    non_black = int(np.count_nonzero(gray_out))
+                    visible_fraction = non_black / float(total_px)
+                    if visible_fraction < CLUB_ANNOTATION_MIN_VISIBLE_FRAC:
+                        blackout_heavy = True
+                else:
+                    blackout_heavy = True
+            except Exception:
+                blackout_heavy = True
+            write_ok = cv2.imwrite(frame_path, output_frame)
+            file_size = None
+            if write_ok:
+                try:
+                    file_size = os.path.getsize(frame_path)
+                except OSError:
+                    file_size = None
+                if file_size is not None and file_size < CLUB_ANNOTATION_MIN_FILE_BYTES:
+                    blackout_heavy = True
+            else:
+                blackout_heavy = True
+            if blackout_heavy:
+                blackout_outlier_frames.add(frame_idx)
+                try:
+                    os.remove(frame_path)
+                except OSError:
+                    pass
+            else:
+                annotated_visible_fractions[frame_idx] = visible_fraction
+                if file_size is not None:
+                    annotated_frame_sizes[frame_idx] = file_size
 
         # No IR state to carry across frames
         frame_idx += 1
@@ -3828,6 +3906,59 @@ def process_video(
     frame_loop_time = time.perf_counter() - frame_loop_start
     timings.add("frame_processing", frame_loop_time)
     post_start = time.perf_counter()
+
+    if blackout_outlier_frames:
+        removed_club_samples = 0
+        filtered_club_pixels: list[dict[str, object]] = []
+        for entry in club_pixels:
+            frame_tag = entry.get("_frame")
+            frame_key: int | None = None
+            if frame_tag is not None:
+                try:
+                    frame_key = int(frame_tag)
+                except (TypeError, ValueError):
+                    frame_key = None
+            if frame_key is not None and frame_key in blackout_outlier_frames:
+                removed_club_samples += 1
+                continue
+            filtered_club_pixels.append(entry)
+        if removed_club_samples:
+            club_pixels = filtered_club_pixels
+        blackout_filter_info["applied"] = True
+        blackout_filter_info["frames_removed"] = len(blackout_outlier_frames)
+        blackout_filter_info["club_samples_removed"] = removed_club_samples
+        frame_list = sorted(blackout_outlier_frames)
+        if frame_list:
+            preview = frame_list[:12]
+            detail = ", ".join(str(idx) for idx in preview)
+            if len(preview) < len(frame_list):
+                detail = f"{detail}, ..."
+        else:
+            detail = ""
+        message = (
+            f"Discarded {len(blackout_outlier_frames)} annotated frame(s) with excessive blackout"
+        )
+        if removed_club_samples:
+            message += f"; removed {removed_club_samples} club sample(s)"
+        if detail:
+            message += f" (frames: {detail})"
+        print(message)
+
+    if club_pixels and (annotated_visible_fractions or annotated_frame_sizes):
+        for entry in club_pixels:
+            frame_tag = entry.get("_frame")
+            if frame_tag is None:
+                continue
+            try:
+                frame_key = int(frame_tag)
+            except (TypeError, ValueError):
+                continue
+            visible_override = annotated_visible_fractions.get(frame_key)
+            if visible_override is not None and np.isfinite(visible_override):
+                entry["_visible_frac"] = float(visible_override)
+            size_override = annotated_frame_sizes.get(frame_key)
+            if size_override is not None:
+                entry["_frame_size_bytes"] = int(size_override)
 
     ball_coords.sort(key=lambda c: c["time"])
     # Persist simple pixel-space club trajectory
@@ -3873,6 +4004,8 @@ def process_video(
             area_max = club_filter_info.get("area_max")
             depth_max = club_filter_info.get("depth_max")
             depth_baseline_limit = club_filter_info.get("depth_baseline_limit")
+            visible_min = club_filter_info.get("visible_min")
+            visible_max = club_filter_info.get("visible_max")
             if width_min is not None:
                 parts.append(f"width<{width_min}")
             if width_max is not None:
@@ -3885,8 +4018,82 @@ def process_video(
                 parts.append(f"depth>{depth_max}")
             if depth_baseline_limit is not None and depth_baseline_limit != depth_max:
                 parts.append(f"depth>{depth_baseline_limit} vs baseline")
+            if visible_min is not None:
+                parts.append(f"visible_frac<{visible_min}")
+            if visible_max is not None and visible_max < 1.0:
+                parts.append(f"visible_frac>{visible_max}")
             clause = f" (limits: {', '.join(parts)})" if parts else ""
             print(f"Removed {removed} club outlier point(s){clause}")
+            if frames_dir:
+                remaining_frames: set[int] = set()
+                for entry in club_pixels:
+                    frame_tag = entry.get("_frame")
+                    if frame_tag is None:
+                        continue
+                    try:
+                        remaining_frames.add(int(frame_tag))
+                    except (TypeError, ValueError):
+                        continue
+                visible_threshold = club_filter_info.get("visible_min")
+                if visible_threshold is None:
+                    visible_threshold = CLUB_ANNOTATION_MIN_VISIBLE_FRAC
+                removed_frame_sample_counts: dict[int, int] = {}
+                for entry in original_club_pixels:
+                    frame_tag = entry.get("_frame")
+                    if frame_tag is None:
+                        continue
+                    try:
+                        frame_idx_local = int(frame_tag)
+                    except (TypeError, ValueError):
+                        continue
+                    if frame_idx_local in remaining_frames:
+                        continue
+                    visible_metric: float | None = None
+                    visible_val = entry.get("_visible_frac")
+                    if visible_val is not None:
+                        try:
+                            visible_metric = float(visible_val)
+                        except (TypeError, ValueError):
+                            visible_metric = None
+                    if visible_metric is None:
+                        continue
+                    if visible_threshold is not None and visible_metric > visible_threshold:
+                        continue
+                    removed_frame_sample_counts[frame_idx_local] = (
+                        removed_frame_sample_counts.get(frame_idx_local, 0) + 1
+                    )
+                removal_targets = [
+                    frame_idx_local
+                    for frame_idx_local in removed_frame_sample_counts.keys()
+                    if frame_idx_local not in blackout_outlier_frames
+                ]
+                if removal_targets:
+                    removal_targets.sort()
+                    preview = removal_targets[:12]
+                    detail = ", ".join(str(idx) for idx in preview)
+                    if len(preview) < len(removal_targets):
+                        detail = f"{detail}, ..."
+                    print(
+                        "Discarded annotated frame(s) after club outlier filtering: "
+                        f"{len(removal_targets)} frame(s)"
+                        + (f" (frames: {detail})" if detail else "")
+                    )
+                    for frame_idx_local in removal_targets:
+                        frame_path = os.path.join(frames_dir, f"frame_{frame_idx_local:04d}.png")
+                        try:
+                            os.remove(frame_path)
+                        except OSError:
+                            pass
+                    blackout_outlier_frames.update(removal_targets)
+                    removed_sample_total = sum(
+                        removed_frame_sample_counts[frame_idx_local]
+                        for frame_idx_local in removal_targets
+                    )
+                    blackout_filter_info["applied"] = True
+                    blackout_filter_info["frames_removed"] = len(blackout_outlier_frames)
+                    blackout_filter_info["club_samples_removed"] = (
+                        blackout_filter_info.get("club_samples_removed", 0) + removed_sample_total
+                    )
         frame_entries_map: dict[int, dict[str, object]] = {}
         frame_samples: list[int] = []
         for entry in club_pixels:
@@ -4174,6 +4381,8 @@ def process_video(
             entry.pop("_left_edge_x", None)
             entry.pop("_width_px", None)
             entry.pop("_area_px", None)
+            entry.pop("_visible_frac", None)
+            entry.pop("_frame_size_bytes", None)
             entry.pop("_frame", None)
             entry.pop("_interpolated", None)
             entry.pop("_raw_depth", None)
@@ -4224,6 +4433,7 @@ def process_video(
         "ball_points": len(ball_coords),
         "club_points": len(club_pixels),
         "club_filter": club_filter_info,
+        "club_blackout": blackout_filter_info,
         "club_interpolation": club_interpolation_info,
         "club_depth": club_depth_info,
         "club_trim": club_trim_info,
@@ -4259,7 +4469,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_2.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_10.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
