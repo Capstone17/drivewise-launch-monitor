@@ -215,6 +215,33 @@ CLUB_TAIL_CONCAVITY_WINDOW = 6
 CLUB_TAIL_CONCAVITY_MIN_SEGMENT = 1.5
 CLUB_TAIL_MIN_KEEP_RATIO = 0.6
 
+# Adaptive blackout relaxation for tough lighting (e.g., outdoor clips)
+CLUB_ALPHA_RELAX_STREAK = 5
+CLUB_ALPHA_RELAX_MAX = 4
+CLUB_ALPHA_RELAX_VISIBLE_STEP = 0.055
+CLUB_ALPHA_RELAX_VISIBLE_CAP = 0.32
+CLUB_ALPHA_RELAX_THRESHOLD_SCALE_MIN = 0.12
+CLUB_ALPHA_RELAX_THRESHOLD_SCALE_FACTOR = 0.52
+CLUB_ALPHA_RELAX_MIN_COVERAGE = 0.38
+CLUB_ALPHA_RELAX_COVERAGE_DROP = 0.14
+CLUB_ALPHA_RELAX_GUARD_MARGIN = 2.2
+CLUB_ALPHA_RELAX_VISIBLE_TRIGGER = 0.006
+CLUB_ALPHA_RELAX_DISABLE_BLACKOUT_LEVEL = 2
+CLUB_ALPHA_RELAX_BLEND_LEVELS = (0.22, 0.33, 0.44, 0.55)
+CLUB_ALPHA_RELAX_SAMPLE_TARGET = 6
+
+CLUB_DEPTH_ANCHOR_TARGET_CM = 150.0
+CLUB_DEPTH_ANCHOR_SAMPLES = 3
+
+CLUB_COMPONENT_MIN_AREA_PX = 420.0
+CLUB_COMPONENT_MIN_AREA_FRAC = 5.5e-4
+CLUB_COMPONENT_MIN_VISIBLE_FRAC = 0.001
+CLUB_COMPONENT_MIN_WIDTH_PX = 18.0
+CLUB_COMPONENT_MIN_MOVEMENT_PX = 3.2
+CLUB_COMPONENT_STATIONARY_MAX = 7
+CLUB_PATH_MIN_SPAN_X_PX = 22.0
+CLUB_PATH_MIN_SPAN_Y_PX = 12.0
+
 
 class TimingCollector:
     """Collect sequential timing measurements and preserve insertion order."""
@@ -3092,6 +3119,13 @@ def process_video(
     prev_club_mask: np.ndarray | None = None
     prev_centroid: tuple[float, float] | None = None
     prev_motion: tuple[float, float] | None = None
+    club_small_component_streak = 0
+    club_stationary_streak = 0
+    club_path_min_u: float | None = None
+    club_path_max_u: float | None = None
+    club_path_confirmed = False
+    club_path_min_v: float | None = None
+    club_path_max_v: float | None = None
     # Stationary blackout line (ball midpoint Y), set once when first available
     fixed_blackout_y: int | None = alpha_mapper.ball_mid_y if hasattr(alpha_mapper, "ball_mid_y") else None
     # Stop collecting club points once ball starts moving
@@ -3114,6 +3148,14 @@ def process_video(
         "club_samples_removed": 0,
         "min_visible_frac": CLUB_ANNOTATION_MIN_VISIBLE_FRAC,
         "min_file_bytes": CLUB_ANNOTATION_MIN_FILE_BYTES,
+    }
+    club_miss_streak = 0
+    alpha_relax_level = 0
+    alpha_relax_info: dict[str, object] = {
+        "level": 0,
+        "events": [],
+        "streak_threshold": CLUB_ALPHA_RELAX_STREAK,
+        "visible_trigger": CLUB_ALPHA_RELAX_VISIBLE_TRIGGER,
     }
     # Tunables for shape consistency
     IOU_SELECT_THRESHOLD = 0.15
@@ -3267,23 +3309,55 @@ def process_video(
                 fixed_blackout_y = int(np.clip(fixed_blackout_y, 0, h - 1))
             except Exception:
                 fixed_blackout_y = None
-        # Apply stationary blackout below that line every frame (does not move with ball)
-        if fixed_blackout_y is not None:
+
+        apply_blackout_line = (
+            fixed_blackout_y is not None and alpha_relax_level < CLUB_ALPHA_RELAX_DISABLE_BLACKOUT_LEVEL
+        )
+        if apply_blackout_line:
             output_frame[fixed_blackout_y + 1 :, :, :] = 0
+
+        if alpha_relax_level > 0:
+            blend_idx = min(alpha_relax_level, len(CLUB_ALPHA_RELAX_BLEND_LEVELS)) - 1
+            blend_ratio = float(CLUB_ALPHA_RELAX_BLEND_LEVELS[blend_idx])
+            blend_ratio = float(np.clip(blend_ratio, 0.0, 0.75))
+            output_frame = cv2.addWeighted(
+                output_frame,
+                float(max(0.0, 1.0 - blend_ratio)),
+                base_frame,
+                blend_ratio,
+                0.0,
+            )
+
+        gray_preview = cv2.cvtColor(output_frame, cv2.COLOR_BGR2GRAY)
+        total_preview = gray_preview.size
+        frame_visible_fraction = 0.0
+        if total_preview > 0:
+            frame_visible_fraction = float(np.count_nonzero(gray_preview)) / float(total_preview)
+
+        club_sample_created = False
+
         if in_window:
             club_stage_start = time.perf_counter()
-            gray_blk = cv2.cvtColor(output_frame, cv2.COLOR_BGR2GRAY)
-            _, nb = cv2.threshold(gray_blk, 10, 255, cv2.THRESH_BINARY)
+            gray_blk = gray_preview
+            threshold_val = max(3, 10 - alpha_relax_level * 2)
+            _, nb = cv2.threshold(gray_blk, threshold_val, 255, cv2.THRESH_BINARY)
             # Apply the same stationary cutoff on the binary mask
-            if fixed_blackout_y is not None:
+            if apply_blackout_line:
                 nb[fixed_blackout_y + 1 :, :] = 0
             if ball_bbox_for_mask is not None:
                 x1, y1, x2, y2 = map(int, map(round, ball_bbox_for_mask))
                 x1 = max(0, x1); y1 = max(0, y1); x2 = min(w-1, x2); y2 = min(h-1, y2)
                 if x2 > x1 and y2 > y1:
                     cv2.circle(nb, (int((x1+x2)/2), int((y1+y2)/2)), int(max(x2-x1,y2-y1)/2)+2, 0, -1, cv2.LINE_AA)
-            nb = cv2.morphologyEx(nb, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3)))
-            nb = cv2.morphologyEx(nb, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7)))
+            if alpha_relax_level <= 1:
+                nb = cv2.morphologyEx(nb, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3)))
+                nb = cv2.morphologyEx(nb, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7)))
+            else:
+                nb = cv2.morphologyEx(
+                    nb,
+                    cv2.MORPH_CLOSE,
+                    cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+                )
             club_mask = None
             if int(np.count_nonzero(nb)):
                 num, labels, stats, _ = cv2.connectedComponentsWithStats(nb)
@@ -3396,7 +3470,80 @@ def process_video(
                     if m["m00"] > 1e-6:
                         u = float(m["m10"] / m["m00"])
                         v = float(m["m01"] / m["m00"])
-                if u is not None and v is not None:
+                frame_area = frame_pixel_count if frame_pixel_count else (float(h * w) if h and w else None)
+                component_valid = True
+                if club_area_px is not None:
+                    min_area_req = CLUB_COMPONENT_MIN_AREA_PX
+                    if frame_area:
+                        min_area_req = max(min_area_req, float(frame_area) * CLUB_COMPONENT_MIN_AREA_FRAC)
+                    if club_area_px < min_area_req:
+                        component_valid = False
+                if club_visible_frac is not None and club_visible_frac < CLUB_COMPONENT_MIN_VISIBLE_FRAC:
+                    component_valid = False
+                if club_width_px is not None and club_width_px < CLUB_COMPONENT_MIN_WIDTH_PX:
+                    component_valid = False
+
+                movement = None
+                if prev_centroid is not None and u is not None and v is not None:
+                    movement = math.hypot(u - prev_centroid[0], v - prev_centroid[1])
+
+                reset_due_to_stationary = False
+                if component_valid and path_points:
+                    if movement is not None and movement >= CLUB_COMPONENT_MIN_MOVEMENT_PX:
+                        club_stationary_streak = 0
+                    else:
+                        club_stationary_streak += 1
+                    span_x = span_y = None
+                    if (
+                        club_path_min_u is not None
+                        and club_path_max_u is not None
+                        and club_path_min_v is not None
+                        and club_path_max_v is not None
+                        and u is not None
+                        and v is not None
+                    ):
+                        span_x = max(club_path_max_u, u) - min(club_path_min_u, u)
+                        span_y = max(club_path_max_v, v) - min(club_path_min_v, v)
+                    span_small = (
+                        span_x is not None
+                        and span_y is not None
+                        and len(path_points) >= CLUB_COMPONENT_STATIONARY_MAX
+                        and span_x < CLUB_PATH_MIN_SPAN_X_PX
+                        and span_y < CLUB_PATH_MIN_SPAN_Y_PX
+                    )
+                    if club_stationary_streak > CLUB_COMPONENT_STATIONARY_MAX and span_small:
+                        component_valid = False
+                        reset_due_to_stationary = True
+                elif movement is not None and movement >= CLUB_COMPONENT_MIN_MOVEMENT_PX:
+                    club_stationary_streak = 0
+
+                if not component_valid:
+                    club_small_component_streak += 1
+                else:
+                    club_small_component_streak = 0
+
+                if reset_due_to_stationary:
+                    if not club_path_confirmed:
+                        club_pixels.clear()
+                    path_points.clear()
+                    club_path_min_u = club_path_max_u = None
+                    club_path_min_v = club_path_max_v = None
+                    club_path_confirmed = False
+                    prev_centroid = None
+                    prev_motion = None
+                    prev_club_mask = None
+                    club_stationary_streak = 0
+                    club_small_component_streak = 0
+                    club_depth_offset = None
+                    club_depth_anchor_samples.clear()
+                    club_depth_anchor_samples_collected = 0
+                    club_sample_created = False
+                    continue
+
+                if not component_valid:
+                    continue
+
+                if u is not None and v is not None and component_valid:
                     accept = True
                     if path_points:
                         pu, pv = path_points[-1]
@@ -3463,7 +3610,24 @@ def process_video(
                             if leftmost_x is not None:
                                 club_entry["_left_edge_x"] = float(leftmost_x)
                             club_entry["_frame"] = frame_idx
+                            if u is not None and v is not None:
+                                u_float = float(u)
+                                v_float = float(v)
+                                if club_path_min_u is None or u_float < club_path_min_u:
+                                    club_path_min_u = u_float
+                                if club_path_max_u is None or u_float > club_path_max_u:
+                                    club_path_max_u = u_float
+                                if club_path_min_v is None or v_float < club_path_min_v:
+                                    club_path_min_v = v_float
+                                if club_path_max_v is None or v_float > club_path_max_v:
+                                    club_path_max_v = v_float
+                                span_x_now = club_path_max_u - club_path_min_u if club_path_min_u is not None and club_path_max_u is not None else None
+                                span_y_now = club_path_max_v - club_path_min_v if club_path_min_v is not None and club_path_max_v is not None else None
+                                if span_x_now is not None and span_y_now is not None:
+                                    if span_x_now >= CLUB_PATH_MIN_SPAN_X_PX or span_y_now >= CLUB_PATH_MIN_SPAN_Y_PX:
+                                        club_path_confirmed = True
                             club_pixels.append(club_entry)
+                            club_sample_created = True
                             path_points.append((int(round(u)), int(round(v))))
                         if prev_centroid is not None:
                             prev_motion = (u - prev_centroid[0], v - prev_centroid[1])
@@ -3886,22 +4050,12 @@ def process_video(
                 cv2.LINE_AA,
             )
 
+        frame_blackout_heavy = frame_visible_fraction < CLUB_ALPHA_RELAX_VISIBLE_TRIGGER
+
         if frames_dir and inference_start <= frame_idx < inference_end:
             frame_path = os.path.join(frames_dir, f"frame_{frame_idx:04d}.png")
-            blackout_heavy = False
-            visible_fraction = 0.0
-            try:
-                gray_out = cv2.cvtColor(output_frame, cv2.COLOR_BGR2GRAY)
-                total_px = gray_out.size
-                if total_px > 0:
-                    non_black = int(np.count_nonzero(gray_out))
-                    visible_fraction = non_black / float(total_px)
-                    if visible_fraction < CLUB_ANNOTATION_MIN_VISIBLE_FRAC:
-                        blackout_heavy = True
-                else:
-                    blackout_heavy = True
-            except Exception:
-                blackout_heavy = True
+            blackout_heavy = frame_visible_fraction < CLUB_ANNOTATION_MIN_VISIBLE_FRAC
+            visible_fraction = frame_visible_fraction
             write_ok = cv2.imwrite(frame_path, output_frame)
             file_size = None
             if write_ok:
@@ -3909,7 +4063,11 @@ def process_video(
                     file_size = os.path.getsize(frame_path)
                 except OSError:
                     file_size = None
-                if file_size is not None and file_size < CLUB_ANNOTATION_MIN_FILE_BYTES:
+                if (
+                    file_size is not None
+                    and file_size < CLUB_ANNOTATION_MIN_FILE_BYTES
+                    and frame_visible_fraction < (CLUB_ANNOTATION_MIN_VISIBLE_FRAC * 6.0)
+                ):
                     blackout_heavy = True
             else:
                 blackout_heavy = True
@@ -3923,6 +4081,84 @@ def process_video(
                 annotated_visible_fractions[frame_idx] = visible_fraction
                 if file_size is not None:
                     annotated_frame_sizes[frame_idx] = file_size
+
+        relax_applicable = (
+            in_window
+            and (
+                club_recording_enabled
+                or len(club_pixels) < CLUB_ALPHA_RELAX_SAMPLE_TARGET
+            )
+        )
+        if in_window and len(alpha_relax_info.setdefault("samples", [])) < 48:
+            alpha_relax_info["samples"].append(
+                {
+                    "frame": frame_idx,
+                    "visible": round(frame_visible_fraction, 6),
+                    "club_samples": len(club_pixels),
+                    "recording": bool(club_recording_enabled),
+                    "miss": bool((not club_sample_created) or frame_blackout_heavy),
+                    "relax_level": alpha_relax_level,
+                }
+            )
+        if relax_applicable:
+            miss_condition = (not club_sample_created) or frame_blackout_heavy
+            if miss_condition:
+                club_miss_streak += 1
+            else:
+                club_miss_streak = 0
+            if (
+                miss_condition
+                and club_miss_streak >= CLUB_ALPHA_RELAX_STREAK
+                and alpha_relax_level < CLUB_ALPHA_RELAX_MAX
+            ):
+                miss_count = club_miss_streak
+                club_miss_streak = 0
+                alpha_relax_level += 1
+                prev_min_visible = float(alpha_mapper.min_visible_fraction)
+                prev_threshold_scale = float(alpha_mapper.threshold_scale)
+                prev_coverage = float(alpha_mapper.target_coverage)
+                prev_guard = float(alpha_mapper.guard_margin)
+                alpha_mapper.min_visible_fraction = min(
+                    CLUB_ALPHA_RELAX_VISIBLE_CAP,
+                    alpha_mapper.min_visible_fraction + CLUB_ALPHA_RELAX_VISIBLE_STEP,
+                )
+                alpha_mapper.threshold_scale = max(
+                    CLUB_ALPHA_RELAX_THRESHOLD_SCALE_MIN,
+                    alpha_mapper.threshold_scale * CLUB_ALPHA_RELAX_THRESHOLD_SCALE_FACTOR,
+                )
+                alpha_mapper.target_coverage = max(
+                    CLUB_ALPHA_RELAX_MIN_COVERAGE,
+                    alpha_mapper.target_coverage - CLUB_ALPHA_RELAX_COVERAGE_DROP,
+                )
+                alpha_mapper.guard_margin = max(
+                    0.0, alpha_mapper.guard_margin - CLUB_ALPHA_RELAX_GUARD_MARGIN
+                )
+                alpha_relax_info["level"] = alpha_relax_level
+                event = {
+                    "frame": frame_idx,
+                    "miss_streak": miss_count,
+                    "visible_fraction": round(frame_visible_fraction, 6),
+                    "club_samples": len(club_pixels),
+                    "min_visible_before": round(prev_min_visible, 4),
+                    "min_visible_after": round(alpha_mapper.min_visible_fraction, 4),
+                    "threshold_scale_before": round(prev_threshold_scale, 4),
+                    "threshold_scale_after": round(alpha_mapper.threshold_scale, 4),
+                    "coverage_before": round(prev_coverage, 4),
+                    "coverage_after": round(alpha_mapper.target_coverage, 4),
+                    "guard_before": round(prev_guard, 4),
+                    "guard_after": round(alpha_mapper.guard_margin, 4),
+                    "level": alpha_relax_level,
+                }
+                alpha_relax_info["events"].append(event)
+                print(
+                    "Relaxed alpha mapping "
+                    f"(level {alpha_relax_level}, frame {frame_idx}): "
+                    f"visible_min {prev_min_visible:.3f}->{alpha_mapper.min_visible_fraction:.3f}, "
+                    f"threshold_scale {prev_threshold_scale:.2f}->{alpha_mapper.threshold_scale:.2f}, "
+                    f"coverage {prev_coverage:.2f}->{alpha_mapper.target_coverage:.2f}"
+                )
+        else:
+            club_miss_streak = 0
 
         # No IR state to carry across frames
         frame_idx += 1
@@ -3968,6 +4204,29 @@ def process_video(
         if detail:
             message += f" (frames: {detail})"
         print(message)
+
+    alpha_relax_info["applied"] = alpha_relax_level > 0
+    alpha_relax_info["final_level"] = alpha_relax_level
+    alpha_relax_info["final_min_visible_fraction"] = round(
+        float(alpha_mapper.min_visible_fraction), 4
+    )
+    alpha_relax_info["final_threshold_scale"] = round(
+        float(alpha_mapper.threshold_scale), 4
+    )
+    alpha_relax_info["final_target_coverage"] = round(
+        float(alpha_mapper.target_coverage), 4
+    )
+    alpha_relax_info["final_guard_margin"] = round(
+        float(alpha_mapper.guard_margin), 4
+    )
+    if alpha_relax_level > 0:
+        print(
+            "Alpha mapper relaxation summary: "
+            f"applied {alpha_relax_level} time(s), "
+            f"min_visible_fraction={alpha_relax_info['final_min_visible_fraction']}, "
+            f"threshold_scale={alpha_relax_info['final_threshold_scale']}, "
+            f"target_coverage={alpha_relax_info['final_target_coverage']}"
+        )
 
     if club_pixels and (annotated_visible_fractions or annotated_frame_sizes):
         for entry in club_pixels:
@@ -4464,6 +4723,7 @@ def process_video(
         "club_points": len(club_pixels),
         "club_filter": club_filter_info,
         "club_blackout": blackout_filter_info,
+        "alpha_relax": alpha_relax_info,
         "club_interpolation": club_interpolation_info,
         "club_depth": club_depth_info,
         "club_trim": club_trim_info,
@@ -4499,7 +4759,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_2.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
