@@ -207,6 +207,8 @@ CLUB_TARGET_ALIGN_BONUS = 0.05
 CLUB_LEFT_WEIGHT_BIAS = 1.8
 CLUB_ANNOTATION_MIN_VISIBLE_FRAC = 0.0015
 CLUB_ANNOTATION_MIN_FILE_BYTES = 10_240
+CLUB_DEPTH_ANCHOR_TARGET_CM = 130.0
+CLUB_DEPTH_ANCHOR_SAMPLES = 3
 CLUB_TAIL_CONCAVITY_THRESHOLD = 0.58
 CLUB_TAIL_CONCAVITY_MAX_REMOVALS = 4
 CLUB_TAIL_CONCAVITY_WINDOW = 6
@@ -3098,6 +3100,9 @@ def process_video(
     club_motion_pause_triggered = False
     club_recording_resume_delay = 0
     prev_club_depth: float | None = None
+    club_depth_offset: float | None = None
+    club_depth_anchor_samples: list[float] = []
+    club_depth_anchor_samples_collected = 0
     impact_frame_idx: int | None = None
     impact_time: float | None = None
     annotated_visible_fractions: dict[int, float] = {}
@@ -3415,20 +3420,40 @@ def process_video(
                             prev_club_depth = depth_cm
                         if club_recording_enabled:
                             raw_depth: float | None = None
+                            adjusted_depth: float | None = None
                             if depth_cm is not None and np.isfinite(depth_cm):
                                 raw_depth = float(depth_cm)
+                                if club_depth_offset is None:
+                                    club_depth_anchor_samples.append(raw_depth)
+                                    if len(club_depth_anchor_samples) >= CLUB_DEPTH_ANCHOR_SAMPLES:
+                                        anchor_subset = club_depth_anchor_samples[:CLUB_DEPTH_ANCHOR_SAMPLES]
+                                        anchor_value = float(np.median(anchor_subset))
+                                        club_depth_offset = CLUB_DEPTH_ANCHOR_TARGET_CM - anchor_value
+                                        club_depth_anchor_samples_collected = len(anchor_subset)
+                                if club_depth_offset is not None:
+                                    adjusted_depth = raw_depth + club_depth_offset
+                                else:
+                                    adjusted_depth = CLUB_DEPTH_ANCHOR_TARGET_CM
+                            elif club_depth_offset is not None and prev_club_depth is not None:
+                                # Reuse previous depth when current frame lacks measurements
+                                raw_depth = float(prev_club_depth)
+                                adjusted_depth = raw_depth + club_depth_offset
+                            if adjusted_depth is not None:
+                                adjusted_depth = float(max(0.0, adjusted_depth))
                             z_value: float | None = None
-                            if raw_depth is not None and CLUB_DEPTH_MIN_CM <= raw_depth <= CLUB_DEPTH_MAX_CM:
-                                z_value = round(raw_depth, 2)
+                            if adjusted_depth is not None and np.isfinite(adjusted_depth):
+                                z_value = float(np.clip(adjusted_depth, CLUB_DEPTH_MIN_CM, CLUB_DEPTH_MAX_CM))
                             club_entry = {
                                 "time": round(t, 3),
                                 "x": round(float(u), 2),
                                 "y": round(float(v), 2),
                             }
                             if z_value is not None:
-                                club_entry["z"] = z_value
+                                club_entry["z"] = round(float(z_value), 2)
                             if raw_depth is not None:
                                 club_entry["_raw_depth"] = round(raw_depth, 2)
+                            if adjusted_depth is not None:
+                                club_entry["_depth_adjusted"] = round(float(adjusted_depth), 2)
                             if club_width_px is not None:
                                 club_entry["_width_px"] = float(club_width_px)
                             if club_area_px is not None:
@@ -4349,6 +4374,13 @@ def process_video(
                 "Trimmed club samples outside frame window: "
                 f"removed={club_trim_info.get('removed')}" + detail
             )
+
+    anchor_used = club_depth_anchor_samples_collected or len(club_depth_anchor_samples)
+    club_depth_info["baseline_target"] = CLUB_DEPTH_ANCHOR_TARGET_CM
+    club_depth_info["baseline_offset"] = (
+        round(club_depth_offset, 2) if club_depth_offset is not None else None
+    )
+    club_depth_info["baseline_samples"] = int(anchor_used)
     smoothed_club_pixels, smoothing_info = smooth_sticker_pixels(club_pixels)
     if smoothing_info.get("applied"):
         club_pixels = smoothed_club_pixels
@@ -4358,24 +4390,21 @@ def process_video(
         )
     if club_pixels:
         for entry in club_pixels:
-            left_edge = entry.get("_left_edge_x")
-            ellipse_center = entry.get("ellipse_center")
-            z_value: float | None = None
-            if left_edge is not None and isinstance(ellipse_center, dict):
-                try:
-                    center_x = float(ellipse_center.get("x"))
-                    left_x = float(left_edge)
-                    z_value = left_x - center_x
-                except (TypeError, ValueError):
-                    z_value = None
-            if z_value is None:
-                z_existing = entry.get("z")
-                if _is_finite_number(z_existing):
-                    z_value = float(z_existing)
-            if z_value is not None:
-                entry["z"] = round(float(z_value), 2)
+            z_value = entry.get("z")
+            if not _is_finite_number(z_value):
+                raw_depth_val = entry.get("_raw_depth")
+                if _is_finite_number(raw_depth_val):
+                    adjusted = float(raw_depth_val)
+                    if club_depth_offset is not None:
+                        adjusted += club_depth_offset
+                    else:
+                        adjusted = CLUB_DEPTH_ANCHOR_TARGET_CM
+                    adjusted = max(0.0, adjusted)
+                    entry["z"] = round(float(adjusted), 2)
+                else:
+                    entry.pop("z", None)
             else:
-                entry.pop("z", None)
+                entry["z"] = round(float(z_value), 2)
         for entry in club_pixels:
             entry.pop("ellipse_center", None)
             entry.pop("_left_edge_x", None)
@@ -4386,6 +4415,7 @@ def process_video(
             entry.pop("_frame", None)
             entry.pop("_interpolated", None)
             entry.pop("_raw_depth", None)
+            entry.pop("_depth_adjusted", None)
     if frames_dir:
         _annotate_sticker_frames(frames_dir, club_pixels)
 
@@ -4469,7 +4499,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_10.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_2.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
