@@ -3491,13 +3491,55 @@ def process_video(
                 elif club_mask is None:
                     club_mask = nb
 
-                if club_mask is not None and ball_contact_active and ball_center_px is not None and ball_radius_px is not None:
-                    union_mask = club_mask.copy()
+                centroid_mask = club_mask.copy() if club_mask is not None else None
+                if (
+                    club_mask is not None
+                    and ball_contact_active
+                    and ball_center_px is not None
+                    and ball_radius_px is not None
+                ):
+                    ball_patch = np.zeros_like(club_mask)
                     cx_union = int(round(ball_center_px[0]))
                     cy_union = int(round(ball_center_px[1]))
-                    union_radius = max(1, int(round(ball_radius_px + CLUB_BALL_CONTACT_UNION_MARGIN_PX)))
-                    cv2.circle(union_mask, (cx_union, cy_union), union_radius, 255, -1, cv2.LINE_AA)
-                    club_mask = union_mask
+                    contact_radius = max(1, int(round(ball_radius_px)))
+                    cv2.circle(ball_patch, (cx_union, cy_union), contact_radius, 255, -1, cv2.LINE_AA)
+                    gate_mask: np.ndarray | None = None
+                    if last_ellipse_center is not None and last_ellipse_axes is not None:
+                        ellipse_gate = np.zeros_like(club_mask)
+                        gate_axes = (
+                            float(max(1.0, last_ellipse_axes[0] + 2.0 * CLUB_BALL_CONTACT_UNION_MARGIN_PX)),
+                            float(max(1.0, last_ellipse_axes[1] + 2.0 * CLUB_BALL_CONTACT_UNION_MARGIN_PX)),
+                        )
+                        cv2.ellipse(
+                            ellipse_gate,
+                            (
+                                (int(round(last_ellipse_center[0])), int(round(last_ellipse_center[1]))),
+                                gate_axes,
+                                float(last_ellipse_angle if last_ellipse_angle is not None else 0.0),
+                            ),
+                            255,
+                            -1,
+                            cv2.LINE_AA,
+                        )
+                        gate_mask = cv2.bitwise_and(ball_patch, ellipse_gate)
+                    elif prev_centroid is not None:
+                        centroid_gate = np.zeros_like(club_mask)
+                        local_radius = max(1, int(round(CLUB_BALL_CONTACT_UNION_MARGIN_PX)))
+                        cv2.circle(
+                            centroid_gate,
+                            (int(round(prev_centroid[0])), int(round(prev_centroid[1]))),
+                            local_radius,
+                            255,
+                            -1,
+                            cv2.LINE_AA,
+                        )
+                        gate_mask = cv2.bitwise_and(ball_patch, centroid_gate)
+                    elif centroid_mask is not None:
+                        gate_mask = cv2.bitwise_and(ball_patch, centroid_mask)
+                    else:
+                        gate_mask = ball_patch
+                    if gate_mask is not None:
+                        club_mask = cv2.bitwise_or(club_mask, gate_mask)
 
                 pending_sample: dict[str, object] | None = None
                 pending_path_point: tuple[int, int] | None = None
@@ -3512,8 +3554,9 @@ def process_video(
                 club_visible_frac: float | None = None
                 u: float | None = None
                 v: float | None = None
+                centroid_source = centroid_mask if centroid_mask is not None else club_mask
                 try:
-                    nz = np.column_stack(np.where(club_mask > 0))
+                    nz = np.column_stack(np.where(centroid_source > 0)) if centroid_source is not None else np.empty((0, 2), dtype=np.int32)
                 except Exception:
                     nz = np.empty((0, 2), dtype=np.int32)
                 if nz.size:
@@ -3542,10 +3585,21 @@ def process_video(
                     except Exception:
                         depth_cm = None
                 if u is None or v is None:
-                    m = cv2.moments(club_mask, binaryImage=True)
+                    m = cv2.moments(centroid_source, binaryImage=True) if centroid_source is not None else {"m00": 0.0}
                     if m["m00"] > 1e-6:
                         u = float(m["m10"] / m["m00"])
                         v = float(m["m01"] / m["m00"])
+                if (u is None or v is None) and ball_contact_active:
+                    fallback_center: tuple[float, float] | None = None
+                    if last_ellipse_center is not None:
+                        fallback_center = last_ellipse_center
+                    elif prev_centroid is not None:
+                        fallback_center = prev_centroid
+                    elif ball_center_px is not None:
+                        fallback_center = ball_center_px
+                    if fallback_center is not None:
+                        u = float(fallback_center[0])
+                        v = float(fallback_center[1])
                 frame_area = frame_pixel_count if frame_pixel_count else (float(h * w) if h and w else None)
                 component_valid = True
                 if club_area_px is not None:
@@ -4107,52 +4161,52 @@ def process_video(
                         else:
                             ellipse_candidate = (center_corr, axes_corr, angle_corr)
 
-                    if (
-                        tracking_valid
-                        and ellipse_candidate is None
-                        and last_ellipse_center is not None
-                        and last_ellipse_axes is not None
-                        and last_ellipse_frame_idx >= 0
-                        and (frame_idx - last_ellipse_frame_idx) <= CLUB_ELLIPSE_HOLD_FRAMES
-                    ):
-                        angle_keep = last_ellipse_angle if last_ellipse_angle is not None else 0.0
-                        ellipse_candidate = (
-                            (float(last_ellipse_center[0]), float(last_ellipse_center[1])),
-                            (float(max(1e-4, last_ellipse_axes[0])), float(max(1e-4, last_ellipse_axes[1]))),
-                            float(angle_keep),
-                        )
+                if (
+                    tracking_valid
+                    and ellipse_candidate is None
+                    and last_ellipse_center is not None
+                    and last_ellipse_axes is not None
+                    and last_ellipse_frame_idx >= 0
+                    and (frame_idx - last_ellipse_frame_idx) <= CLUB_ELLIPSE_HOLD_FRAMES
+                ):
+                    angle_keep = last_ellipse_angle if last_ellipse_angle is not None else 0.0
+                    ellipse_candidate = (
+                        (float(last_ellipse_center[0]), float(last_ellipse_center[1])),
+                        (float(max(1e-4, last_ellipse_axes[0])), float(max(1e-4, last_ellipse_axes[1]))),
+                        float(angle_keep),
+                    )
 
-                    if ellipse_candidate is not None and tracking_valid:
-                        last_ellipse_center = (
-                            float(ellipse_candidate[0][0]),
-                            float(ellipse_candidate[0][1]),
-                        )
-                        last_ellipse_axes = (
-                            float(max(1e-4, ellipse_candidate[1][0])),
-                            float(max(1e-4, ellipse_candidate[1][1])),
-                        )
-                        last_ellipse_angle = float(ellipse_candidate[2])
-                        last_ellipse_frame_idx = frame_idx
-                        ellipse_center_payload = {
-                            "x": round(float(ellipse_candidate[0][0]), 2),
-                            "y": round(float(ellipse_candidate[0][1]), 2),
-                        }
-                        cv2.ellipse(
-                            output_frame,
-                            ellipse_candidate,
-                            (0, 165, 255),
-                            2,
-                            cv2.LINE_AA,
-                        )
-                    elif (
-                        last_ellipse_center is not None
-                        and last_ellipse_frame_idx >= 0
-                        and (frame_idx - last_ellipse_frame_idx) > CLUB_ELLIPSE_HOLD_FRAMES
-                    ):
-                        last_ellipse_center = None
-                        last_ellipse_axes = None
-                        last_ellipse_angle = None
-                        last_ellipse_frame_idx = -1
+                if ellipse_candidate is not None and tracking_valid:
+                    last_ellipse_center = (
+                        float(ellipse_candidate[0][0]),
+                        float(ellipse_candidate[0][1]),
+                    )
+                    last_ellipse_axes = (
+                        float(max(1e-4, ellipse_candidate[1][0])),
+                        float(max(1e-4, ellipse_candidate[1][1])),
+                    )
+                    last_ellipse_angle = float(ellipse_candidate[2])
+                    last_ellipse_frame_idx = frame_idx
+                    ellipse_center_payload = {
+                        "x": round(float(ellipse_candidate[0][0]), 2),
+                        "y": round(float(ellipse_candidate[0][1]), 2),
+                    }
+                    cv2.ellipse(
+                        output_frame,
+                        ellipse_candidate,
+                        (0, 165, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
+                elif (
+                    last_ellipse_center is not None
+                    and last_ellipse_frame_idx >= 0
+                    and (frame_idx - last_ellipse_frame_idx) > CLUB_ELLIPSE_HOLD_FRAMES
+                ):
+                    last_ellipse_center = None
+                    last_ellipse_axes = None
+                    last_ellipse_angle = None
+                    last_ellipse_frame_idx = -1
                 else:
                     tracking_valid = False
 
@@ -4162,6 +4216,68 @@ def process_video(
                 if small_ellipse_precontact:
                     blackout_outlier_frames.add(frame_idx)
                     frame_blackout_heavy = True
+
+                if (
+                    not tracking_valid
+                    and ball_contact_active
+                    and last_ellipse_center is not None
+                    and last_ellipse_axes is not None
+                ):
+                    synthetic_angle = float(last_ellipse_angle if last_ellipse_angle is not None else 0.0)
+                    synthetic_axes = (
+                        float(max(1.0, last_ellipse_axes[0])),
+                        float(max(1.0, last_ellipse_axes[1])),
+                    )
+                    ellipse_candidate = (
+                        (float(last_ellipse_center[0]), float(last_ellipse_center[1])),
+                        synthetic_axes,
+                        synthetic_angle,
+                    )
+                    ellipse_center_payload = {
+                        "x": round(float(last_ellipse_center[0]), 2),
+                        "y": round(float(last_ellipse_center[1]), 2),
+                    }
+                    if pending_sample is None:
+                        pending_sample = {
+                            "time": float(t),
+                            "u": float(last_ellipse_center[0]),
+                            "v": float(last_ellipse_center[1]),
+                            "depth_cm": prev_club_depth if prev_club_depth is not None else None,
+                            "club_width_px": None,
+                            "club_area_px": None,
+                            "club_visible_frac": None,
+                            "left_edge_x": None,
+                            "frame_idx": frame_idx,
+                            "record": bool(club_recording_enabled),
+                        }
+                        pending_u = pending_sample["u"]
+                        pending_v = pending_sample["v"]
+                        pending_path_point = (
+                            int(round(pending_u)),
+                            int(round(pending_v)),
+                        )
+                    tracking_valid = bool(pending_sample.get("record", False))
+                    record_sample = bool(pending_sample.get("record", False))
+
+                if (
+                    ellipse_candidate is not None
+                    and pending_sample is not None
+                ):
+                    center_now = ellipse_candidate[0]
+                    pending_u = float(center_now[0])
+                    pending_v = float(center_now[1])
+                    pending_sample["u"] = pending_u
+                    pending_sample["v"] = pending_v
+                    if pending_path_point is not None:
+                        pending_path_point = (
+                            int(round(pending_u)),
+                            int(round(pending_v)),
+                        )
+                    else:
+                        pending_path_point = (
+                            int(round(pending_u)),
+                            int(round(pending_v)),
+                        )
 
                 commit_sample = (
                     tracking_valid
@@ -4253,7 +4369,10 @@ def process_video(
                     if prev_centroid is not None:
                         prev_motion = (pending_u - prev_centroid[0], pending_v - prev_centroid[1])
                     prev_centroid = (pending_u, pending_v)
-                    prev_club_mask = club_mask.copy()
+                    if centroid_mask is not None:
+                        prev_club_mask = centroid_mask.copy()
+                    else:
+                        prev_club_mask = club_mask.copy()
                 clubface_time += time.perf_counter() - club_stage_start
         if ball_overlay is not None:
             cx_i, cy_i = ball_overlay["center"]
@@ -4987,7 +5106,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "130cm_tst_1.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "outdoor_130cm_3.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
