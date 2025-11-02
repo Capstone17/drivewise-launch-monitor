@@ -181,14 +181,10 @@ CLUB_RESUME_DELAY_FRAMES = 6
 CLUB_STAT_LIMIT_MULTIPLIER = 4.5
 CLUB_DEPTH_BASELINE_FRAMES = 20
 CLUB_DEPTH_BASELINE_MULTIPLIER = 1.6
-CLUB_DEPTH_MIN_CM = 80.0
-CLUB_DEPTH_MAX_CM = 150.0
+CLUB_DEPTH_MIN_CM = 10.0
+CLUB_DEPTH_MAX_CM = 1500.0
 CLUB_MAX_FRAME_WINDOW = 34
 CLUB_ROUND_SELECT_RATIO = 0.6
-CLUB_CUSTOM_FRAME_WINDOWS: dict[str, tuple[int, int]] = {
-    "130cm_tst_1.mp4": (564, 597),
-    "130cm_tst_6.mp4": (506, 537),
-}
 CLUBFACE_ELLIPSE_CORE_FRACTION = 0.45
 CLUBFACE_ELLIPSE_CORE_MIN_PX = 2.5
 CLUBFACE_ELLIPSE_REQUIRED_PIXELS = 24
@@ -205,7 +201,15 @@ CLUBFACE_ELLIPSE_TOP_BAND_FRAC = 0.55
 CLUBFACE_ELLIPSE_TOPLEFT_CORE_PERCENTILE = 60.0
 CLUBFACE_ELLIPSE_BOTTOM_DIST_FRAC = 0.42
 CLUBFACE_ELLIPSE_BOTTOM_MIN_PX = 3.0
-CLUB_FINAL_TRIM_MARGIN = 12
+CLUB_FINAL_TRIM_MARGIN = 2
+CLUB_TARGET_ALIGN_MIN_COVERAGE = 0.55
+CLUB_TARGET_ALIGN_BONUS = 0.05
+CLUB_LEFT_WEIGHT_BIAS = 1.8
+CLUB_TAIL_CONCAVITY_THRESHOLD = 0.58
+CLUB_TAIL_CONCAVITY_MAX_REMOVALS = 4
+CLUB_TAIL_CONCAVITY_WINDOW = 6
+CLUB_TAIL_CONCAVITY_MIN_SEGMENT = 1.5
+CLUB_TAIL_MIN_KEEP_RATIO = 0.6
 
 
 class TimingCollector:
@@ -656,10 +660,108 @@ def trim_club_points_to_range(
     return kept, summary
 
 
+def trim_tail_concavity_outliers(
+    points: list[dict[str, object]],
+    *,
+    threshold: float = CLUB_TAIL_CONCAVITY_THRESHOLD,
+    max_removals: int = CLUB_TAIL_CONCAVITY_MAX_REMOVALS,
+    window: int = CLUB_TAIL_CONCAVITY_WINDOW,
+    min_segment: float = CLUB_TAIL_CONCAVITY_MIN_SEGMENT,
+    min_keep_ratio: float = CLUB_TAIL_MIN_KEEP_RATIO,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """Remove sharp concave bends near the tail of the club trajectory."""
+
+    summary: dict[str, object] = {
+        "removed": 0,
+        "threshold": threshold,
+        "max_score": 0.0,
+        "reverted": False,
+    }
+    if not points or max_removals <= 0 or threshold <= 0.0:
+        return points, summary
+
+    total_points = len(points)
+    ordered: list[tuple[int, float, int, float, float]] = []
+    for idx, entry in enumerate(points):
+        try:
+            x_val = float(entry["x"])
+            y_val = float(entry["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        try:
+            time_val = float(entry.get("time", 0.0))
+        except (TypeError, ValueError):
+            time_val = float(idx)
+        frame_val_raw = entry.get("_frame")
+        try:
+            frame_val = int(frame_val_raw) if frame_val_raw is not None else idx
+        except (TypeError, ValueError):
+            frame_val = idx
+        ordered.append((idx, time_val, frame_val, x_val, y_val))
+
+    if len(ordered) < 5:
+        return points, summary
+
+    ordered.sort(key=lambda item: (item[1], item[2], item[0]))
+    window = max(3, int(window))
+    removed_indices: set[int] = set()
+    removal_scores: list[float] = []
+
+    while len(ordered) >= 3 and len(removal_scores) < max_removals:
+        flag_idx = None
+        flag_score = 0.0
+        n = len(ordered)
+        lower_bound = max(2, n - window)
+        for pos in range(n - 1, lower_bound - 1, -1):
+            if pos < 2:
+                continue
+            ax, ay = ordered[pos - 2][3], ordered[pos - 2][4]
+            bx, by = ordered[pos - 1][3], ordered[pos - 1][4]
+            cx, cy = ordered[pos][3], ordered[pos][4]
+            v1x, v1y = bx - ax, by - ay
+            v2x, v2y = cx - bx, cy - by
+            len1 = math.hypot(v1x, v1y)
+            len2 = math.hypot(v2x, v2y)
+            if len1 < min_segment or len2 < min_segment:
+                continue
+            denom = len1 * len2
+            if denom <= 1e-5:
+                continue
+            cross = abs(v1x * v2y - v1y * v2x)
+            score = cross / denom
+            if score >= threshold and score > flag_score:
+                flag_idx = pos
+                flag_score = score
+        if flag_idx is None:
+            break
+        removal_scores.append(flag_score)
+        summary["max_score"] = max(summary["max_score"], flag_score)
+        removed_indices.add(ordered[flag_idx][0])
+        ordered.pop(flag_idx)
+
+    if not removed_indices:
+        return points, summary
+
+    filtered_points = [
+        entry for idx, entry in enumerate(points) if idx not in removed_indices
+    ]
+
+    min_keep = max(5, int(math.ceil(total_points * max(0.0, min_keep_ratio))))
+    if len(filtered_points) < min_keep:
+        summary["reverted"] = True
+        return points, summary
+
+    summary["removed"] = len(removed_indices)
+    summary["scores"] = [round(score, 3) for score in removal_scores]
+    summary["remaining"] = len(filtered_points)
+    return filtered_points, summary
+
+
 def filter_club_point_outliers(
     points: list[dict[str, object]],
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     """Trim club trajectory points with implausible sizes or distances."""
+    total_points = len(points)
     width_values: list[float] = []
     area_values: list[float] = []
     depth_values: list[float] = []
@@ -746,6 +848,12 @@ def filter_club_point_outliers(
             removed += 1
             continue
         filtered.append(entry)
+
+    if removed and total_points:
+        minimum_keep = max(5, int(math.ceil(total_points * 0.6)))
+        if len(filtered) < minimum_keep:
+            filtered = points
+            removed = 0
 
     def _round_limit(value: float | None) -> float | None:
         return round(float(value), 2) if value is not None else None
@@ -3202,32 +3310,61 @@ def process_video(
                     club_mask = nb
 
                 # Compute centroid and update motion
-                m = cv2.moments(club_mask, binaryImage=True)
-                if m['m00'] > 1e-6:
-                    u = float(m['m10']/m['m00'])
-                    v = float(m['m01']/m['m00'])
+                depth_cm: float | None = None
+                club_width_px: float | None = None
+                club_area_px: float | None = None
+                leftmost_x: float | None = None
+                u: float | None = None
+                v: float | None = None
+                try:
+                    nz = np.column_stack(np.where(club_mask > 0))
+                except Exception:
+                    nz = np.empty((0, 2), dtype=np.int32)
+                if nz.size:
+                    xs = nz[:, 1].astype(np.float64)
+                    ys = nz[:, 0].astype(np.float64)
+                    leftmost_x = float(xs.min())
+                    rightmost_x = float(xs.max())
+                    club_width_px = float(max(1.0, rightmost_x - leftmost_x + 1.0))
+                    club_area_px = float(xs.size)
+                    weights = np.ones_like(xs, dtype=np.float64)
+                    if CLUB_LEFT_WEIGHT_BIAS > 0.0 and club_width_px > 1.0:
+                        span = (xs - leftmost_x) / max(1.0, club_width_px)
+                        weights += float(CLUB_LEFT_WEIGHT_BIAS) * (1.0 - span)
+                    weight_sum = float(weights.sum())
+                    if weight_sum > 1e-6:
+                        u = float(np.dot(xs, weights) / weight_sum)
+                        v = float(np.dot(ys, weights) / weight_sum)
+                    else:
+                        u = float(xs.mean())
+                        v = float(ys.mean())
+                    baseline_px = max(1e-3, float(u) - leftmost_x)
+                    try:
+                        depth_cm = float(FOCAL_LENGTH * ACTUAL_BALL_RADIUS / baseline_px)
+                    except Exception:
+                        depth_cm = None
+                if u is None or v is None:
+                    m = cv2.moments(club_mask, binaryImage=True)
+                    if m["m00"] > 1e-6:
+                        u = float(m["m10"] / m["m00"])
+                        v = float(m["m01"] / m["m00"])
+                if u is not None and v is not None:
                     accept = True
                     if path_points:
                         pu, pv = path_points[-1]
                         if math.hypot(u - pu, v - pv) > MAX_TELEPORT_JUMP_PX:
                             accept = False
                     if accept:
-                        # Estimate depth and coarse size metrics from the selected island
-                        depth_cm: float | None = None
-                        club_width_px: float | None = None
-                        club_area_px: float | None = None
-                        try:
-                            nz = np.column_stack(np.where(club_mask > 0))
-                            if nz.size:
-                                xs = nz[:, 1]
-                                leftmost_x = float(xs.min())
-                                rightmost_x = float(xs.max())
-                                club_width_px = float(max(1.0, rightmost_x - leftmost_x + 1.0))
-                                club_area_px = float(nz.shape[0])
-                                baseline_px = max(1e-3, float(u) - leftmost_x)
-                                depth_cm = float(FOCAL_LENGTH * ACTUAL_BALL_RADIUS / baseline_px)
-                        except Exception:
-                            depth_cm = None
+                        if depth_cm is None:
+                            try:
+                                if leftmost_x is None and nz.size:
+                                    xs = nz[:, 1].astype(np.float64)
+                                    leftmost_x = float(xs.min())
+                                if leftmost_x is not None:
+                                    baseline_px = max(1e-3, float(u) - leftmost_x)
+                                    depth_cm = float(FOCAL_LENGTH * ACTUAL_BALL_RADIUS / baseline_px)
+                            except Exception:
+                                depth_cm = None
                         if depth_cm is None and prev_club_depth is not None:
                             depth_cm = prev_club_depth
                         if depth_cm is not None:
@@ -3253,6 +3390,8 @@ def process_video(
                                 club_entry["_width_px"] = float(club_width_px)
                             if club_area_px is not None:
                                 club_entry["_area_px"] = float(club_area_px)
+                            if leftmost_x is not None:
+                                club_entry["_left_edge_x"] = float(leftmost_x)
                             club_entry["_frame"] = frame_idx
                             club_pixels.append(club_entry)
                             path_points.append((int(round(u)), int(round(v))))
@@ -3396,8 +3535,8 @@ def process_video(
                             y_limit = min(max_y, min_y + top_height)
                             selector = (xs <= x_limit) & (ys <= y_limit)
                             if not selector.any():
-                                left_frac = min(0.8, left_frac + 0.08)
-                                top_frac = min(1.0, top_frac + 0.1)
+                                left_frac = min(0.65, left_frac + 0.06)
+                                top_frac = min(0.9, top_frac + 0.08)
                                 continue
                             rows = ys[selector]
                             cols = xs[selector]
@@ -3420,8 +3559,8 @@ def process_video(
                                         candidate[:] = 0
                                         candidate[rows, cols] = 255
                             if int(np.count_nonzero(candidate)) < 5:
-                                left_frac = min(0.8, left_frac + 0.08)
-                                top_frac = min(1.0, top_frac + 0.1)
+                                left_frac = min(0.65, left_frac + 0.06)
+                                top_frac = min(0.9, top_frac + 0.08)
                                 continue
                             band_kernel = cv2.getStructuringElement(
                                 cv2.MORPH_ELLIPSE,
@@ -3435,8 +3574,33 @@ def process_video(
                             if int(np.count_nonzero(candidate)) >= 5:
                                 top_left_mask = candidate
                                 break
-                            left_frac = min(0.8, left_frac + 0.08)
-                            top_frac = min(1.0, top_frac + 0.1)
+                            left_frac = min(0.65, left_frac + 0.06)
+                            top_frac = min(0.9, top_frac + 0.08)
+
+                        if top_left_mask is None and component_points.size:
+                            order = np.argsort(xs.astype(float) + 0.25 * ys.astype(float))
+                            count = max(5, int(math.ceil(order.size * 0.22)))
+                            selected = order[:count]
+                            slab_cols = xs[selected]
+                            slab_rows = ys[selected]
+                            left_edge = float(np.min(xs.astype(float)))
+                            right_cap = left_edge + max(2.0, float(width) * 0.4)
+                            mask_tmp = np.zeros_like(component_mask)
+                            for r, c in zip(slab_rows, slab_cols):
+                                if float(c) <= right_cap:
+                                    mask_tmp[r, c] = 255
+                            if int(np.count_nonzero(mask_tmp)) >= 5:
+                                band_kernel = cv2.getStructuringElement(
+                                    cv2.MORPH_ELLIPSE,
+                                    (
+                                        max(1, int(CLUBFACE_ELLIPSE_BORDER_KERNEL)),
+                                        max(1, int(CLUBFACE_ELLIPSE_BORDER_KERNEL)),
+                                    ),
+                                )
+                                mask_tmp = cv2.dilate(mask_tmp, band_kernel, iterations=1)
+                                mask_tmp = cv2.bitwise_and(mask_tmp, component_mask)
+                                if int(np.count_nonzero(mask_tmp)) >= 5:
+                                    top_left_mask = mask_tmp
 
                         if dist_component_vals is not None and dist_component_vals.size:
                             moment = cv2.moments(component_mask, binaryImage=True)
@@ -3541,6 +3705,9 @@ def process_video(
                         except cv2.error:
                             ellipse = None
 
+                    ellipse_from_anchors = False
+                    anchor_major_value: float | None = None
+                    anchor_minor_value: float | None = None
                     if ellipse is not None and anchor_left_point is not None and anchor_right_point is not None:
                         ax, ay = anchor_left_point
                         bx, by = anchor_right_point
@@ -3556,10 +3723,17 @@ def process_video(
                         if anchor_major < 4.0:
                             anchor_major = 4.0
                         if dist_max > 0.0:
-                            dist_for_minor = dist_max * 1.6
+                            dist_for_minor = dist_max * 1.25
                         else:
                             dist_for_minor = minor_existing
-                        anchor_minor = max(4.0, min(anchor_major, max(minor_existing, dist_for_minor)))
+                        max_minor_allowed = anchor_major * 0.75
+                        anchor_minor = max(
+                            4.0,
+                            min(
+                                max_minor_allowed,
+                                max(minor_existing, dist_for_minor),
+                            ),
+                        )
                         if anchor_minor > anchor_major:
                             anchor_minor, anchor_major = anchor_major, anchor_minor
                             anchor_angle = (anchor_angle + 90.0) % 180.0
@@ -3568,6 +3742,9 @@ def process_video(
                             (float(anchor_major), float(anchor_minor)),
                             float(anchor_angle),
                         )
+                        ellipse_from_anchors = True
+                        anchor_major_value = float(anchor_major)
+                        anchor_minor_value = float(anchor_minor)
 
                     if ellipse is not None:
                         axes = list(ellipse[1])
@@ -3576,6 +3753,12 @@ def process_video(
                                 CLUBFACE_ELLIPSE_BORDER_EXPAND_MAX,
                                 max(0.0, dist_max * CLUBFACE_ELLIPSE_BORDER_EXPAND_RATIO),
                             )
+                            if ellipse_from_anchors and anchor_major_value is not None and anchor_minor_value is not None:
+                                expand = min(
+                                    expand,
+                                    anchor_major_value * 0.2,
+                                    anchor_minor_value * 0.2,
+                                )
                             if expand > 0.0:
                                 axes[0] = max(1e-4, axes[0] + 2.0 * expand)
                                 axes[1] = max(1e-4, axes[1] + 2.0 * expand)
@@ -3594,6 +3777,23 @@ def process_video(
                             2,
                             cv2.LINE_AA,
                         )
+                        center_f = ellipse[0]
+                        center_payload = {
+                            "x": round(float(center_f[0]), 2),
+                            "y": round(float(center_f[1]), 2),
+                        }
+                        if club_pixels:
+                            for entry in reversed(club_pixels):
+                                frame_tag = entry.get("_frame")
+                                if frame_tag is None:
+                                    continue
+                                try:
+                                    tag_int = int(frame_tag)
+                                except (TypeError, ValueError):
+                                    continue
+                                if tag_int == frame_idx:
+                                    entry["ellipse_center"] = center_payload
+                                    break
             clubface_time += time.perf_counter() - club_stage_start
         if ball_overlay is not None:
             cx_i, cy_i = ball_overlay["center"]
@@ -3632,6 +3832,7 @@ def process_video(
     ball_coords.sort(key=lambda c: c["time"])
     # Persist simple pixel-space club trajectory
     club_pixels.sort(key=lambda c: c["time"])
+    original_club_pixels = [dict(entry) for entry in club_pixels]
     club_filter_info = {
         "applied": False,
         "total": len(club_pixels),
@@ -3784,13 +3985,32 @@ def process_video(
             good_start = next((idx for idx in frame_samples if idx >= best_start_candidate), frame_samples[0])
             good_end = next((idx for idx in reversed(frame_samples) if idx <= best_end_candidate), frame_samples[-1])
 
-        custom_window = CLUB_CUSTOM_FRAME_WINDOWS.get(os.path.basename(video_path))
-        if custom_window is not None and frame_samples:
-            custom_start, custom_end = custom_window
-            if custom_start is not None:
-                good_start = max(custom_start, frame_samples[0])
-            if custom_end is not None:
-                good_end = min(custom_end, frame_samples[-1])
+        if frame_samples and target_for_window is not None:
+            target_for_window = int(target_for_window)
+            span_limit = max(1, window_span)
+            align_start = max(
+                overall_min,
+                min(target_for_window - span_limit + 1, overall_max - span_limit + 1),
+            )
+            align_end = align_start + span_limit - 1
+            if align_end >= align_start:
+                coverage = [
+                    idx for idx in frame_samples if align_start <= idx <= align_end
+                ]
+                coverage_count = len(coverage)
+                required = max(1, int(math.ceil(span_limit * CLUB_TARGET_ALIGN_MIN_COVERAGE)))
+                if coverage_count >= required:
+                    sum_quality = sum(quality_by_frame.get(idx, 0.0) for idx in coverage)
+                    avg_quality = (sum_quality / coverage_count) if coverage_count else 0.0
+                    align_score = (
+                        avg_quality + CLUB_TARGET_ALIGN_BONUS,
+                        coverage_count,
+                        0.0,
+                        float(align_start),
+                    )
+                    if align_score > best_score:
+                        best_score = align_score
+                        best_start_candidate = align_start
 
         if good_start is None and frame_samples:
             good_start = frame_samples[0]
@@ -3841,6 +4061,42 @@ def process_video(
             adjusted_target = max(int(lower_bound), int(interp_target_frame) - int(CLUB_FINAL_TRIM_MARGIN))
             if adjusted_target < int(interp_target_frame):
                 interp_target_frame = adjusted_target
+
+        concavity_info = {
+            "removed": 0,
+            "max_score": 0.0,
+        }
+        if club_pixels:
+            club_pixels, concavity_info = trim_tail_concavity_outliers(
+                club_pixels,
+                threshold=CLUB_TAIL_CONCAVITY_THRESHOLD,
+                max_removals=CLUB_TAIL_CONCAVITY_MAX_REMOVALS,
+                window=CLUB_TAIL_CONCAVITY_WINDOW,
+                min_segment=CLUB_TAIL_CONCAVITY_MIN_SEGMENT,
+            )
+            if concavity_info.get("removed"):
+                removed_concavity = concavity_info.get("removed", 0)
+                club_trim_info["concavity_removed"] = removed_concavity
+                club_trim_info["removed"] += removed_concavity
+                print(
+                    "Removed tail concavity outlier point(s): "
+                    f"{removed_concavity} (max score {concavity_info.get('max_score', 0.0):.2f})"
+                )
+            if (
+                original_club_pixels
+                and len(club_pixels) <= 1
+                and len(original_club_pixels) > len(club_pixels)
+            ):
+                print(
+                    "Restoring raw club samples due to aggressive trimming; "
+                    f"raw_count={len(original_club_pixels)}"
+                )
+                club_pixels = [dict(entry) for entry in original_club_pixels]
+                club_trim_info["removed"] = 0
+                club_trim_info["initial_removed"] = 0
+                club_trim_info["final_removed"] = 0
+                club_trim_info.pop("concavity_removed", None)
+                concavity_info["reverted"] = True
 
         club_pixels, club_interpolation_info = interpolate_club_points(
             club_pixels,
@@ -3895,11 +4151,27 @@ def process_video(
         )
     if club_pixels:
         for entry in club_pixels:
-            z_val = entry.get("z")
-            if _is_finite_number(z_val):
-                clamped = float(np.clip(float(z_val), CLUB_DEPTH_MIN_CM, CLUB_DEPTH_MAX_CM))
-                entry["z"] = round(clamped, 2)
+            left_edge = entry.get("_left_edge_x")
+            ellipse_center = entry.get("ellipse_center")
+            z_value: float | None = None
+            if left_edge is not None and isinstance(ellipse_center, dict):
+                try:
+                    center_x = float(ellipse_center.get("x"))
+                    left_x = float(left_edge)
+                    z_value = left_x - center_x
+                except (TypeError, ValueError):
+                    z_value = None
+            if z_value is None:
+                z_existing = entry.get("z")
+                if _is_finite_number(z_existing):
+                    z_value = float(z_existing)
+            if z_value is not None:
+                entry["z"] = round(float(z_value), 2)
+            else:
+                entry.pop("z", None)
         for entry in club_pixels:
+            entry.pop("ellipse_center", None)
+            entry.pop("_left_edge_x", None)
             entry.pop("_width_px", None)
             entry.pop("_area_px", None)
             entry.pop("_frame", None)
