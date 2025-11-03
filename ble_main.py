@@ -681,7 +681,7 @@ class rpiAdvertisement(Advertisement):
 
         self.add_service_uuid(rpiService.rpi_SVC_UUID)
 
-        self.add_local_name("Company17_Rpi5")
+        self.add_local_name("group17rpi")
         self.include_tx_power = True
 
 
