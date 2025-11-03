@@ -730,7 +730,7 @@ def main():
     mainloop = MainLoop()
 
     agent_manager = dbus.Interface(obj, "org.bluez.AgentManager1")
-    agent_manager.RegisterAgent(AGENT_PATH, "DisplayYesNo")
+    agent_manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
 
     ad_manager.RegisterAdvertisement(
         advertisement.get_path(),
