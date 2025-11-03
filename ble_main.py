@@ -437,8 +437,19 @@ class SwingAnalysisCharacteristic(Characteristic):
         if self.notifying:
             self.notify_client()
         set_status_led_color("off")
+        self._cleanup_captured_videos()
         self.service.camera_event.clear()
         logger.info("Capture loop ended and event cleared")
+
+    def _cleanup_captured_videos(self):
+        output_dir = os.path.expanduser("~/Documents/webcamGolf")
+        for video_path in glob.glob(os.path.join(output_dir, "vid*.mp4")):
+            try:
+                os.remove(video_path)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                logger.warning("Video is used by another process %s: %s", video_path, exc)
 
 class GenerateFeedbackCharacteristic(Characteristic):
     uuid = "2c58a217-0a9b-445f-adac-0b37bd8635c3"
