@@ -172,7 +172,7 @@ class SwingAnalysisCharacteristic(Characteristic):
         logger.debug("Received write command")
         if not self.service.camera_event.is_set():
             self.service.camera_event.set()
-            threading.Thread(target=self.swingAnalysisLoop, daemon=True).start()
+            thread = threading.Thread(target=self.swingAnalysisLoop, args=(value),daemon=True).start()
             logger.info("started capture thread")
         else:
             logger.info("Capture already running")
@@ -254,7 +254,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                         self.end_loop()
                         return
 
-                logger.info("Ball detected! Turning on yellow LED...")
+                logger.info("Ball detected! Turning on green LED...")
 
                 logger.info("Starting full video capture...")
                 detector = getattr(self, "_ball_detector", None)
@@ -328,6 +328,11 @@ class SwingAnalysisCharacteristic(Characteristic):
                         logger.exception("High-rate ball detection failed; assuming ball exited frame.")
                         ball_detected_high = False
                         self._reset_shared_data("High-rate ball detection failed; assuming ball exited frame.")
+                        self.end_loop()
+                        return
+                    
+                    if(not self.service.camera_event.is_set()):
+                        logger.debug("Swing capture canceled by user")
                         self.end_loop()
                         return
 
