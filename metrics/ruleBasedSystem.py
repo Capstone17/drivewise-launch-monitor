@@ -229,7 +229,7 @@ def rule_based_system(club_selection):
             "attack angle": round(raw_data["attack_angle"], 2),
             "side angle": round(raw_data["side_angle"], 2)
         },
-        "feedback": feedback
+        "feedback":  feedback
     }
 
 
