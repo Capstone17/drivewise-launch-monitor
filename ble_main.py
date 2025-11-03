@@ -172,13 +172,13 @@ class SwingAnalysisCharacteristic(Characteristic):
         logger.debug("Received write command")
         if not self.service.camera_event.is_set():
             self.service.camera_event.set()
-            threading.Thread(target=self.swingAnalysisLoop, args=(value),daemon=True).start()
+            threading.Thread(target=self.swingAnalysisLoop,daemon=True).start()
             logger.info("started capture thread")
         else:
             logger.info("Capture already running")
 
 
-    def swingAnalysisLoop(self, value):
+    def swingAnalysisLoop(self):
         logger.info("swing analysis loop function entered")
 
         while self.service.camera_event.is_set():
