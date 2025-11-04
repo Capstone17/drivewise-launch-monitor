@@ -356,8 +356,8 @@ class SwingAnalysisCharacteristic(Characteristic):
                     )
 
                     logger.info("Running rule-based analysis...")
-                    self.service.shared_data = rule_based_system("mid-iron")
-                    self.value = self.service.shared_data["metrics"]
+                    self.value = rule_based_system("mid-iron")
+                    # self.value = self.service.shared_data["metrics"]
 
                 except (FileNotFoundError, RuntimeError) as e:
                     logger.exception(f"Video processing failed: {e}")
@@ -431,7 +431,7 @@ class SwingAnalysisCharacteristic(Characteristic):
         logger.debug("Resetting shared data because of failure: %s", feedback_message)
         self.value["metrics"] = None
         self.value["feedback"] = feedback_message
-        self.value = self.service.shared_data["metrics"]
+        # self.value = self.service.shared_data["metrics"]
 
     def end_loop(self):
         if self.notifying:
