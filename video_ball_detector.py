@@ -1,7 +1,6 @@
 import bisect
 import json
 import math
-import numbers
 import os
 import sys
 import time
@@ -39,23 +38,6 @@ try:
         cv2.ocl.setUseOpenCL(False)
 except Exception:
     pass
-
-
-def _serialize_with_time_precision(records: Sequence[dict[str, object]]) -> list[dict[str, object]]:
-    """Copy records while formatting any numeric 'time' fields to three decimal places."""
-    formatted_records: list[dict[str, object]] = []
-    for record in records:
-        record_copy = dict(record)
-        time_value = record_copy.get("time")
-        if isinstance(time_value, numbers.Real):
-            record_copy["time"] = f"{float(time_value):.3f}"
-        elif isinstance(time_value, str):
-            try:
-                record_copy["time"] = f"{float(time_value):.3f}"
-            except ValueError:
-                pass
-        formatted_records.append(record_copy)
-    return formatted_records
 
 ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
@@ -5044,9 +5026,9 @@ def process_video(
         _annotate_sticker_frames(frames_dir, club_pixels)
 
     with open(ball_path, "w", encoding="utf-8") as f:
-        json.dump(_serialize_with_time_precision(ball_coords), f, indent=2)
+        json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w", encoding="utf-8") as f:
-        json.dump(_serialize_with_time_precision(club_pixels), f, indent=2)
+        json.dump(club_pixels, f, indent=2)
     post_time = time.perf_counter() - post_start
     timings.add("post_process", post_time)
 
