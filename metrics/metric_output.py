@@ -488,26 +488,26 @@ def return_metrics() -> dict:
     # ---------------------------------
     marker_window, marker_frame_before_impact, marker_frame_after_impact = load_marker_poses_with_impact_time(sticker_coords_path, ball_pre_frame['time'])
 
-    # Compare the absolute time differences to find the frame closest to impact
-    if marker_frame_before_impact and marker_frame_after_impact:
+    # # Compare the absolute time differences to find the frame closest to impact
+    # if marker_frame_before_impact and marker_frame_after_impact:
 
-        # Compare absolute time differences
-        if abs(marker_frame_before_impact["time"] - ball_pre_frame["time"]) <= abs(marker_frame_after_impact["time"] - ball_pre_frame["time"]):
-            marker_target_time = marker_frame_before_impact["time"]
-        else:
-            marker_target_time = marker_frame_after_impact["time"]
-    elif marker_frame_before_impact:
-        marker_target_time = marker_frame_before_impact["time"]
-    elif marker_frame_after_impact:
-        marker_target_time = marker_frame_after_impact["time"]
+    #     # Compare absolute time differences
+    #     if abs(marker_frame_before_impact["time"] - ball_pre_frame["time"]) <= abs(marker_frame_after_impact["time"] - ball_pre_frame["time"]):
+    #         marker_target_time = marker_frame_before_impact["time"]
+    #     else:
+    #         marker_target_time = marker_frame_after_impact["time"]
+    # elif marker_frame_before_impact:
+    #     marker_target_time = marker_frame_before_impact["time"]
+    # elif marker_frame_after_impact:
+    #     marker_target_time = marker_frame_after_impact["time"]
 
-    for idx, frame in enumerate(ball_window):
-        print(f"Frame {idx}: time={frame['time']}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
+    # for idx, frame in enumerate(ball_window):
+    #     print(f"Frame {idx}: time={frame['time']}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
 
     # Print marker data
-    print("\nMarker Frames:")
-    for idx, frame in enumerate(marker_window):
-        print(f"Frame {idx}: time={frame['time']:.3f}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
+    # print("\nMarker Frames:")
+    # for idx, frame in enumerate(marker_window):
+    #     print(f"Frame {idx}: time={frame['time']:.3f}, x={frame['x']:.3f}, y={frame['y']:.3f}, z={frame['z']:.3f}")
 
     # ---------------------------------
     # Velocity Approximation
@@ -535,8 +535,8 @@ def return_metrics() -> dict:
     print(f"\nMinimum R²: {diag['r2_min']:.4f}")
 
     print(f"Ball dx: {ball_dx}, Ball dy: {ball_dy}, Ball dz: {ball_dz}")
-    marker_dx, marker_dy, marker_dz = finite_diff_velocity(marker_window, t_target=marker_target_time)
-    print(f"At time {marker_target_time}, Marker dx: {marker_dx}, Marker dy: {marker_dy}, Marker dz: {marker_dz}")
+    marker_dx, marker_dy, marker_dz = finite_diff_velocity(marker_window, t_target=impact_time)
+    print(f"At time {impact_time}, Marker dx: {marker_dx}, Marker dy: {marker_dy}, Marker dz: {marker_dz}")
 
     # Calculate the metrics
     metrics = metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz)
