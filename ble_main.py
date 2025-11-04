@@ -429,8 +429,8 @@ class SwingAnalysisCharacteristic(Characteristic):
 
     def _reset_shared_data(self, feedback_message):
         logger.debug("Resetting shared data because of failure: %s", feedback_message)
-        self.service.shared_data["metrics"] = None
-        self.service.shared_data["feedback"] = feedback_message
+        self.value["metrics"] = None
+        self.value["feedback"] = feedback_message
         self.value = self.service.shared_data["metrics"]
 
     def end_loop(self):
