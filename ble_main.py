@@ -133,18 +133,13 @@ class rpiService(Service):
 
     def __init__(self, bus, index):
         Service.__init__(self, bus, index, self.rpi_SVC_UUID, True)
-        self.shared_data = {
-            "metrics": None,
-            "feedback": None
-        }
         self.camera_event = threading.Event()
         self.exposure = "200"
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
-        self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
-        self.add_characteristic(FindIPCharacteristic(bus, 2, self))
-        self.add_characteristic(CalibrationCharacteristic(bus, 3, self))
-        self.add_characteristic(BatteryMonitorCharacteristic(bus, 4, self))
-        self.add_characteristic(CancelSwingCharacteristic(bus, 5, self))
+        self.add_characteristic(FindIPCharacteristic(bus, 1, self))
+        self.add_characteristic(CalibrationCharacteristic(bus, 2, self))
+        self.add_characteristic(BatteryMonitorCharacteristic(bus, 3, self))
+        self.add_characteristic(CancelSwingCharacteristic(bus, 4, self))
         # self.add_characteristic(PowerOffCharacteristic(bus, 3, self))
 
 
@@ -154,18 +149,15 @@ class SwingAnalysisCharacteristic(Characteristic):
 
     def __init__(self, bus, index, service):
         Characteristic.__init__(
-            self, bus, index, self.uuid, ["read", "write", "notify"], service,
+            self, bus, index, self.uuid, ["write", "notify"], service,
         )
         self.notifying = False
-        self.value = self.service.shared_data["metrics"] 
+        # self.value = self.service.shared_data["metrics"] 
+        self.value = {
+            "metrics": None,
+            "feedback": None
+        }
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 0, self))
-
-    def ReadValue(self, options):
-        # Run computer vision script here
-        # Run rule-based AI with all 3 json files to recieve 4 output metrics in dict + string message
-        logger.debug("Analysis finished, sending metrics: " + repr(self.value))
-        result_bytes = json.dumps(self.value).encode('utf-8')
-        return [dbus.Byte(b) for b in result_bytes]
         
         
     def WriteValue(self, value, options):
@@ -419,13 +411,21 @@ class SwingAnalysisCharacteristic(Characteristic):
             logger.debug("Not notifying, skipping notify_client")
             return
 
-        result_bytes = json.dumps(self.value).encode("utf-8")
-        logger.debug("Emitting PropertiesChanged with updated value")
+        result_bytes = json.dumps(self.value["metrics"]).encode("utf-8")
+        logger.debug("Notifying mobile app with metric values")
         self.PropertiesChanged(
             GATT_CHRC_IFACE,
             {"Value": [dbus.Byte(b) for b in result_bytes]},
             [],
         )
+        result_bytes = json.dumps(self.value["feedback"]).encode("utf-8")
+        logger.debug("Notifying mobile app with feedback values")
+        self.PropertiesChanged(
+            GATT_CHRC_IFACE,
+            {"Value": [dbus.Byte(b) for b in result_bytes]},
+            [],
+        )
+
 
     def _reset_shared_data(self, feedback_message):
         logger.debug("Resetting shared data because of failure: %s", feedback_message)
