@@ -3106,6 +3106,8 @@ def process_video(
     alpha_cal_time = 0.0
     alpha_cal_start = time.perf_counter()
     cap_cal: cv2.VideoCapture | None = None
+    alpha_cal_debug_frame: np.ndarray | None = None
+    alpha_cal_debug_index: int | None = None
     try:
         cap_cal = cv2.VideoCapture(video_path)
         if not cap_cal.isOpened():
@@ -3130,6 +3132,8 @@ def process_video(
                 frame_index=calib_idx,
                 save_dir=calib_dir,
             )
+            alpha_cal_debug_frame = enh_cal.copy()
+            alpha_cal_debug_index = calib_idx
     except Exception:
         # Non-fatal; we will fall back to green-only if calibration didn't initialize
         pass
@@ -3212,6 +3216,15 @@ def process_video(
             try:
                 os.remove(os.path.join(frames_dir, name))
             except OSError:
+                pass
+        if alpha_cal_debug_frame is not None:
+            try:
+                if alpha_cal_debug_index is not None:
+                    dbg_name = f"alpha_cal_{int(alpha_cal_debug_index):06d}.png"
+                else:
+                    dbg_name = "alpha_cal.png"
+                cv2.imwrite(os.path.join(frames_dir, dbg_name), alpha_cal_debug_frame)
+            except Exception:
                 pass
 
     ball_time = 0.0
@@ -5124,7 +5137,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "outdoor_130cm_3.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "noah_hugo_4_mirrored.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
