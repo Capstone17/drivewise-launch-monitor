@@ -184,7 +184,7 @@ def apply_calibration(calibration: dict[str, object] | None = None) -> dict[str,
 
 apply_calibration()
 
-MAX_MOTION_FRAMES = 80
+MAX_MOTION_FRAMES = 40
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
@@ -1202,7 +1202,7 @@ class AdaptiveAlphaMapper:
         self.target_coverage = float(max(0.5, min(0.98, target_coverage)))
         self.k_clusters = int(max(2, k_clusters))
         self.k_max = int(max(self.k_clusters, k_max))
-        self.silhouette_min = float(max(0.0, min(0.6, silhouette_min)))
+        self.silhouette_min = float(max(0.0, min(0.45, silhouette_min)))
         self.k_penalty = float(max(0.0, min(0.5, k_penalty)))
         self.max_samples = int(max(10_000, max_samples))
         self.min_radius = float(max(1.0, min_radius))
@@ -1227,6 +1227,7 @@ class AdaptiveAlphaMapper:
         self.guarded_indices: list[int] = []
         self.ball_mid_y: int | None = None
         self.calib_frame_index: int | None = None
+        self.foreground_hint: np.ndarray | None = None
         self.meta: dict[str, object] = {}
 
     @staticmethod
@@ -1321,7 +1322,7 @@ class AdaptiveAlphaMapper:
 
     def _select_k(self, samples: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         N = samples.shape[0]
-        if N < 400 or self.k_max <= 1:
+        if N < 200 or self.k_max <= 1:
             centers, labels, _, _ = self._kmeans_run(samples, 1)
             return centers, labels
         best_idx = 1
@@ -1532,6 +1533,16 @@ class AdaptiveAlphaMapper:
             except Exception:
                 pass
 
+    def set_foreground_hint(self, mask: np.ndarray | None) -> None:
+        """Store a foreground hint mask (areas that must not be blacked out)."""
+        if mask is None:
+            self.foreground_hint = None
+            return
+        mask_bool = np.asarray(mask, dtype=bool)
+        if mask_bool.ndim != 2:
+            mask_bool = mask_bool.reshape(mask_bool.shape[:2])
+        self.foreground_hint = mask_bool
+
     def apply(
         self,
         image: np.ndarray,
@@ -1567,6 +1578,14 @@ class AdaptiveAlphaMapper:
             below = None
             above = np.ones((h, w), dtype=bool)
             area_above = max(1, h * w)
+
+        hint_mask: np.ndarray | None = None
+        if self.foreground_hint is not None:
+            try:
+                if self.foreground_hint.shape == (h, w):
+                    hint_mask = self.foreground_hint.astype(bool)
+            except Exception:
+                hint_mask = None
 
         guard_total: np.ndarray | None = None
         guard_neighbors: np.ndarray | None = None
@@ -1630,6 +1649,8 @@ class AdaptiveAlphaMapper:
                 guarded = np.logical_and(guarded, np.logical_not(global_guard))
             if guard_total is not None:
                 guarded = np.logical_and(guarded, np.logical_not(guard_total))
+            if hint_mask is not None:
+                guarded = np.logical_and(guarded, np.logical_not(hint_mask))
             return guarded
 
         def compute_background_mask(scale: float) -> tuple[np.ndarray, np.ndarray]:
@@ -3108,6 +3129,8 @@ def process_video(
     cap_cal: cv2.VideoCapture | None = None
     alpha_cal_debug_frame: np.ndarray | None = None
     alpha_cal_debug_index: int | None = None
+    alpha_foreground_hint: np.ndarray | None = None
+    alpha_foreground_index: int | None = None
     try:
         cap_cal = cv2.VideoCapture(video_path)
         if not cap_cal.isOpened():
@@ -3117,6 +3140,8 @@ def process_video(
         ok_cal, calib_frame = cap_cal.read()
         if ok_cal and calib_frame is not None:
             enh_cal, _ = preprocess_frame(calib_frame)
+            alpha_cal_debug_frame = enh_cal.copy()
+            alpha_cal_debug_index = calib_idx
             dets_cal = detector.detect(enh_cal)
             ball_bbox_cal: tuple[float, float, float, float] | None = None
             if dets_cal:
@@ -3132,8 +3157,83 @@ def process_video(
                 frame_index=calib_idx,
                 save_dir=calib_dir,
             )
-            alpha_cal_debug_frame = enh_cal.copy()
-            alpha_cal_debug_index = calib_idx
+            # Derive a static foreground hint by comparing to a frame inside the motion window.
+            frame_count = int(cap_cal.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+            post_candidate = int(start_frame) + 20
+            post_idx = post_candidate
+            if frame_count > 0:
+                post_idx = min(frame_count - 1, max(calib_idx + 1, post_candidate))
+            if post_idx > calib_idx:
+                cap_cal.set(cv2.CAP_PROP_POS_FRAMES, post_idx)
+                ok_post, post_frame = cap_cal.read()
+                if ok_post and post_frame is not None:
+                    enh_post, _ = preprocess_frame(post_frame)
+                    post_cal_debug_frame = enh_post.copy()
+                    dets_post = detector.detect(enh_post)
+                    ball_bbox_post: tuple[float, float, float, float] | None = None
+                    if dets_post:
+                        best_det_post = max(dets_post, key=lambda d: d.get("score", 0.0))
+                        if best_det_post.get("score", 0.0) >= 0.01:
+                            bb_post = best_det_post.get("bbox")
+                            if bb_post and all(np.isfinite(bb_post)):
+                                ball_bbox_post = (
+                                    float(bb_post[0]),
+                                    float(bb_post[1]),
+                                    float(bb_post[2]),
+                                    float(bb_post[3]),
+                                )
+                    diff = cv2.absdiff(enh_post, enh_cal)
+                    diff_gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+                    diff_gray = cv2.GaussianBlur(diff_gray, (5, 5), 0)
+                    mid_y_hint = alpha_mapper.ball_mid_y
+                    region_mask = np.zeros_like(diff_gray, dtype=np.uint8)
+                    limit_row = diff_gray.shape[0]
+                    if mid_y_hint is not None:
+                        limit_row = min(limit_row, int(mid_y_hint) + 12)
+                    region_mask[:limit_row, :] = 255
+                    diff_gray = cv2.bitwise_and(diff_gray, diff_gray, mask=region_mask)
+                    diff_nonzero = diff_gray[diff_gray > 0]
+                    if diff_nonzero.size:
+                        thresh_val = float(np.percentile(diff_nonzero, 96.0))
+                        thresh_val = max(10.0, thresh_val)
+                        _, diff_mask = cv2.threshold(diff_gray, thresh_val, 255, cv2.THRESH_BINARY)
+                        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                        diff_mask = cv2.morphologyEx(diff_mask, cv2.MORPH_CLOSE, kernel)
+                        diff_mask = cv2.morphologyEx(diff_mask, cv2.MORPH_OPEN, kernel)
+                        diff_mask = cv2.dilate(diff_mask, kernel, iterations=1)
+
+                        def _erase_bbox(mask: np.ndarray, bbox: tuple[float, float, float, float] | None, pad: int = 6) -> None:
+                            if mask is None or bbox is None:
+                                return
+                            x1, y1, x2, y2 = bbox
+                            x1 = max(0, int(math.floor(x1)) - pad)
+                            y1 = max(0, int(math.floor(y1)) - pad)
+                            x2 = min(mask.shape[1], int(math.ceil(x2)) + pad)
+                            y2 = min(mask.shape[0], int(math.ceil(y2)) + pad)
+                            if x2 > x1 and y2 > y1:
+                                mask[y1:y2, x1:x2] = 0
+
+                        _erase_bbox(diff_mask, ball_bbox_cal, pad=6)
+                        _erase_bbox(diff_mask, ball_bbox_post, pad=8)
+
+                        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(diff_mask, connectivity=8)
+                        filtered = np.zeros_like(diff_mask, dtype=np.uint8)
+                        for label_id in range(1, num_labels):
+                            area = int(stats[label_id, cv2.CC_STAT_AREA])
+                            if area >= 140:
+                                filtered[labels == label_id] = 255
+                        filtered_bool = filtered > 0
+                        if np.count_nonzero(filtered_bool):
+                            post_a, post_b = alpha_mapper._to_lab_ab(enh_post)
+                            ab_post = np.dstack((post_a, post_b)).astype(np.float32)
+                            bg_chroma = np.sqrt(ab_post[:, :, 0] ** 2 + ab_post[:, :, 1] ** 2)
+                            guard_cutoff = alpha_mapper.guard_chroma_thresh + alpha_mapper.guard_margin
+                            filtered_bool &= (bg_chroma > guard_cutoff + 4.0)
+                            filtered = (filtered_bool.astype(np.uint8) * 255)
+                        if np.count_nonzero(filtered):
+                            alpha_foreground_hint = filtered > 0
+                            alpha_foreground_index = post_idx
+                            alpha_mapper.set_foreground_hint(alpha_foreground_hint)
     except Exception:
         # Non-fatal; we will fall back to green-only if calibration didn't initialize
         pass
@@ -3224,6 +3324,25 @@ def process_video(
                 else:
                     dbg_name = "alpha_cal.png"
                 cv2.imwrite(os.path.join(frames_dir, dbg_name), alpha_cal_debug_frame)
+            except Exception:
+                pass
+        if alpha_foreground_hint is not None:
+            try:
+                hint_u8 = (alpha_foreground_hint.astype(np.uint8) * 255)
+                if alpha_foreground_index is not None:
+                    hint_name = f"alpha_hint_{int(alpha_foreground_index):06d}.png"
+                else:
+                    hint_name = "alpha_hint.png"
+                cv2.imwrite(os.path.join(frames_dir, hint_name), hint_u8)
+            except Exception:
+                pass
+        if post_cal_debug_frame is not None:
+            try:
+                if alpha_foreground_index is not None:
+                    post_name = f"alpha_post_{int(alpha_foreground_index):06d}.png"
+                else:
+                    post_name = "alpha_post.png"
+                cv2.imwrite(os.path.join(frames_dir, post_name), post_cal_debug_frame)
             except Exception:
                 pass
 
@@ -5137,7 +5256,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "noah_hugo_4_mirrored.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "noah_hugo_9_mirrored.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
