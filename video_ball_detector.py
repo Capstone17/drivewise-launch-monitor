@@ -190,7 +190,7 @@ USE_BLUR = False
 
 CLUBFACE_MAX_JUMP_PX = 80.0
 CLUB_PRECONTACT_MIN_VISIBLE_FRAC = 0.012
-CLUB_PRECONTACT_MIN_COMPONENT_AREA_PX = 820.0
+CLUB_PRECONTACT_MIN_COMPONENT_AREA_PX = 560.0
 CLUB_PRECONTACT_MIN_ELLIPSE_MAJOR_PX = 24.0
 CLUB_PRECONTACT_MIN_ELLIPSE_MINOR_PX = 8.0
 CLUB_BALL_CONTACT_MARGIN_PX = 12.0
@@ -261,7 +261,7 @@ CLUB_ALPHA_RELAX_SAMPLE_TARGET = 6
 CLUB_DEPTH_ANCHOR_TARGET_CM = 150.0
 CLUB_DEPTH_ANCHOR_SAMPLES = 3
 
-CLUB_COMPONENT_MIN_AREA_PX = 420.0
+CLUB_COMPONENT_MIN_AREA_PX = 260.0
 CLUB_COMPONENT_MIN_AREA_FRAC = 5.5e-4
 CLUB_COMPONENT_MIN_VISIBLE_FRAC = 0.001
 CLUB_COMPONENT_MIN_WIDTH_PX = 18.0
@@ -5256,7 +5256,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "noah_hugo_9_mirrored.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "noah_hugo_20_mirrored.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
