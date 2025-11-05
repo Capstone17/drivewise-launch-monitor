@@ -28,6 +28,14 @@ def mirror_videos(base_dir: Path, indices: Iterable[int]) -> None:
             str(src),
             "-vf",
             "hflip",
+            "-fps_mode",
+            "passthrough",  # avoid duplicating frames at extreme fps
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
             str(dst),
         ]
 
