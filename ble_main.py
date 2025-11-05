@@ -23,6 +23,7 @@ from ble import (
 )
 
 import array
+import numpy as np
 import sys
 import subprocess
 import json
@@ -30,6 +31,7 @@ import os
 import glob
 import time
 from datetime import datetime
+import threading
 
 from video_ball_detector import process_video, TFLiteBallDetector, check_tail_for_ball
 from metrics.ruleBasedSystem import rule_based_system
@@ -56,6 +58,29 @@ logHandler.setFormatter(formatter)
 filelogHandler.setFormatter(formatter)
 logger.addHandler(filelogHandler)
 logger.addHandler(logHandler)
+
+CALIBRATION_PATH = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
+try:
+    with np.load(CALIBRATION_PATH) as calib_file:
+        _camera_matrix = calib_file["camera_matrix"]
+        _dist_coeffs = calib_file["dist_coeffs"]
+except Exception:
+    _camera_matrix = np.eye(3, dtype=np.float32)
+    _dist_coeffs = np.zeros((1, 5), dtype=np.float32)
+
+if _dist_coeffs.ndim == 1:
+    _dist_coeffs = _dist_coeffs.reshape(1, -1)
+
+CALIBRATION_PARAMS = {
+    "camera_matrix": _camera_matrix.astype(np.float32, copy=True),
+    "dist_coeffs": _dist_coeffs.astype(np.float32, copy=True),
+    "focal_length": float(_camera_matrix[0, 0]),
+    "ball_radius": 2.38,
+    "fx": float(_camera_matrix[0, 0]),
+    "fy": float(_camera_matrix[1, 1]),
+    "cx": float(_camera_matrix[0, 2]),
+    "cy": float(_camera_matrix[1, 2]),
+}
 
 
 BaseUrl = "XXXXXXXXXXXX"
@@ -112,12 +137,14 @@ class rpiService(Service):
             "metrics": None,
             "feedback": None
         }
+        self.camera_event = threading.Event()
         self.exposure = "200"
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
         self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
         self.add_characteristic(FindIPCharacteristic(bus, 2, self))
         self.add_characteristic(CalibrationCharacteristic(bus, 3, self))
         self.add_characteristic(BatteryMonitorCharacteristic(bus, 4, self))
+        self.add_characteristic(CancelSwingCharacteristic(bus, 5, self))
         # self.add_characteristic(PowerOffCharacteristic(bus, 3, self))
 
 
@@ -143,36 +170,93 @@ class SwingAnalysisCharacteristic(Characteristic):
         
     def WriteValue(self, value, options):
         logger.debug("Received write command")
+        if not self.service.camera_event.is_set():
+            self.service.camera_event.set()
+            thread = threading.Thread(target=self.swingAnalysisLoop, args=(value),daemon=True).start()
+            logger.info("started capture thread")
+        else:
+            logger.info("Capture already running")
 
-        try:
-            ball_detected = False
 
-            logger.info("STAGE1: before auto_capture is called")
+    def swingAnalysisLoop(self, value):
+        logger.info("swing analysis loop function entered")
 
-            while not ball_detected:
-                logger.info("Capturing short burst of frames to detect ball...")
-                try:
-                    subprocess.run(
-                        [
-                            'rpicam-vid',
-                            '-o', 'detect_ball.mp4',
-                            '--level', '4.2',
-                            '--camera', '0',
-                            '--width', '224',
-                            '--height', '128',
-                            '--no-raw',
-                            '-n',
-                            '--shutter', str(self.service.exposure),
-                            '--frames', '5',
-                        ],
-                        check=True,
-                        capture_output=True,
-                    )
-                except subprocess.CalledProcessError as e:
-                    logger.exception("Ball detection capture command failed")
-                    break
+        while self.service.camera_event.is_set():
+            try:
+                set_status_led_color("red")
+                ball_detected = False
 
-                logger.info("Processing frames to check for ball...")
+                logger.info("STAGE1: before auto_capture is called")
+
+                while not ball_detected:
+                    logger.info("Capturing short burst of frames to detect ball...")
+                    try:
+                        subprocess.run(
+                            [
+                                'rpicam-vid',
+                                '-o', 'detect_ball.mp4',
+                                '--level', '4.2',
+                                '--camera', '0',
+                                '--width', '224',
+                                '--height', '128',
+                                '--no-raw',
+                                '-n',
+                                '--shutter', str(self.service.exposure),
+                                '--frames', '5',
+                            ],
+                            check=True,
+                            capture_output=True,
+                        )
+                    except subprocess.CalledProcessError as e:
+                        logger.exception("Ball detection capture command failed")
+                        self._reset_shared_data("Could not capture the ball")
+                        self.end_loop()
+                        return
+
+                    logger.info("Processing frames to check for ball...")
+                    detector = getattr(self, "_ball_detector", None)
+                    if detector is None:
+                        try:
+                            detector = TFLiteBallDetector(
+                                "golf_ball_detector.tflite",
+                                conf_threshold=0.05,
+                            )
+                        except Exception:
+                            logger.exception("Failed to initialise ball detector")
+                            self._reset_shared_data("Could not initialize the ball detector")
+                            self.end_loop()
+                            return
+                        self._ball_detector = detector
+
+                    try:
+                        tail_check = check_tail_for_ball(
+                            "detect_ball.mp4",
+                            detector=detector,
+                            calibration=CALIBRATION_PARAMS,
+                            frames_to_check=5,
+                            stride=1,
+                            score_threshold=0.25,
+                            min_hits=1,
+                        )
+                        ball_detected = tail_check.ball_present
+                    except Exception:
+                        logger.exception("Low-rate ball detection failed")
+                        ball_detected = False
+                        self._reset_shared_data("Ball detection failed")
+                        self.end_loop()
+                        return
+
+                    logger.info("STAGE2: low freq video recording started STATE: %s", ball_detected)
+
+                    time.sleep(1.5)  # Wait before next attempt
+                    if(not self.service.camera_event.is_set()):
+                        logger.debug("Swing capture canceled by user")
+                        self.end_loop()
+                        return
+
+                logger.info("Ball detected! Turning on green LED...")
+
+                logger.info("Starting full video capture...")
                 detector = getattr(self, "_ball_detector", None)
                 if detector is None:
                     try:
@@ -181,162 +265,145 @@ class SwingAnalysisCharacteristic(Characteristic):
                             conf_threshold=0.05,
                         )
                     except Exception:
-                        logger.exception("Failed to initialise ball detector")
-                        break
+                        logger.exception("Failed to initialise ball detector for high-rate capture")
+                        self._reset_shared_data("Unable to initialise ball detector.")
+                        if self.notifying:
+                            self.notify_client()
+                        return
                     self._ball_detector = detector
 
-                try:
-                    tail_check = check_tail_for_ball(
-                        "detect_ball.mp4",
-                        detector=detector,
-                        frames_to_check=5,
-                        stride=1,
-                        score_threshold=0.25,
-                        min_hits=1,
+                output_dir = os.path.expanduser("~/Documents/webcamGolf")
+                ball_detected_high = True
+                latest_file = None
+                tail_check = None
+                high_attempt = 0
+                max_high_attempts = 20
+
+                while ball_detected_high and high_attempt < max_high_attempts:
+                    high_attempt += 1
+                    logger.info("STAGE3: high freq video recording started STATE: %s", ball_detected_high)
+                    set_status_led_color("green")
+
+                    try:
+
+                        # Get the current date and time for testing
+                        current_time = datetime.now()
+                        print(f"Time at video start: {current_time.time()}")
+
+                        subprocess.run(
+                            ["./embedded/rpicam_run.sh", "5s", str(self.service.exposure)],
+                            check=True,
+                            capture_output=True,
+                        )
+
+                        # Get the current date and time for testing
+                        current_time = datetime.now()
+                        print(f"Time at video end: {current_time.time()}")
+
+                    except subprocess.CalledProcessError:
+                        logger.exception("Full video capture failed")
+                        self._reset_shared_data("Script execution failed during capture")
+                        self.end_loop()
+                        return
+
+                    mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
+                    if not mp4_files:
+                        logger.error("No vid*.mp4 found in webcamGolf after high-rate capture")
+                        break
+
+                    latest_file = max(mp4_files, key=os.path.getmtime)
+
+                    try:
+                        tail_check = check_tail_for_ball(
+                            latest_file,
+                            detector=detector,
+                            calibration=CALIBRATION_PARAMS,
+                            frames_to_check=5,
+                            stride=1,
+                            score_threshold=0.25,
+                            min_hits=1,
+                        )
+                        ball_detected_high = tail_check.ball_present
+                    except Exception:
+                        logger.exception("High-rate ball detection failed; assuming ball exited frame.")
+                        ball_detected_high = False
+                        self._reset_shared_data("High-rate ball detection failed; assuming ball exited frame.")
+                        self.end_loop()
+                        return
+                    
+                    if(not self.service.camera_event.is_set()):
+                        logger.debug("Swing capture canceled by user")
+                        self.end_loop()
+                        return
+
+                if ball_detected_high and high_attempt >= max_high_attempts:
+                    logger.warning(
+                        "High-rate capture limit reached (%d attempts) with ball still detected",
+                        max_high_attempts,
                     )
-                    ball_detected = tail_check.ball_present
-                except Exception:
-                    logger.exception("Low-rate ball detection failed")
-                    ball_detected = False
-
-                logger.info("STAGE2: low freq video recording started STATE: %s", ball_detected)
-
-                time.sleep(1.5)  # Wait before next attempt
-
-            logger.info("Ball detected! Turning on yellow LED...")
-            # TODO: RYAN TO ADD LED CONTROL LOGIC HERE
-            set_status_led_color("yellow")
-
-            logger.info("Starting full video capture...")
-            detector = getattr(self, "_ball_detector", None)
-            if detector is None:
-                try:
-                    detector = TFLiteBallDetector(
-                        "golf_ball_detector.tflite",
-                        conf_threshold=0.05,
-                    )
-                except Exception:
-                    logger.exception("Failed to initialise ball detector for high-rate capture")
-                    self._reset_shared_data("Unable to initialise ball detector.")
-                    if self.notifying:
-                        self.notify_client()
-                    return
-                self._ball_detector = detector
-
-            output_dir = os.path.expanduser("~/Documents/webcamGolf")
-            ball_detected_high = True
-            latest_file = None
-            tail_check = None
-            high_attempt = 0
-            max_high_attempts = 10
-
-            while ball_detected_high and high_attempt < max_high_attempts:
-                high_attempt += 1
-                logger.info("STAGE3: high freq video recording started STATE: %s", ball_detected_high)
-                try:
-
-                    # Get the current date and time for testing
-                    current_time = datetime.now()
-                    print(f"Time at video start: {current_time.time()}")
-
-                    subprocess.run(
-                        ["./embedded/rpicam_run.sh", "5s", str(self.service.exposure)],
-                        check=True,
-                        capture_output=True,
+                    raise RuntimeError(
+                        f"High-rate capture limit reached after {max_high_attempts} attempts with ball still detected."
                     )
 
-                    # Get the current date and time for testing
-                    current_time = datetime.now()
-                    print(f"Time at video end: {current_time.time()}")
+                logger.info("STAGE4: STATE: %s latest video is sent to video_ball_detector.py", ball_detected_high)
+                
+                set_status_led_color("yellow")
 
-                except subprocess.CalledProcessError:
-                    logger.exception("Full video capture failed")
-                    self._reset_shared_data("Script execution failed during capture")
-                    if self.notifying:
-                        self.notify_client()
-                    return
-
-                mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
-                if not mp4_files:
-                    logger.error("No vid*.mp4 found in webcamGolf after high-rate capture")
-                    break
-
-                latest_file = max(mp4_files, key=os.path.getmtime)
-
+                logger.info("Processing video data...")
                 try:
-                    tail_check = check_tail_for_ball(
+                    if latest_file is None:
+                        raise FileNotFoundError("No vid*.mp4 found in webcamGolf")
+                    logger.info(f"Latest video file: {latest_file}")
+
+                    result = process_video(
                         latest_file,
-                        detector=detector,
-                        frames_to_check=5,
-                        stride=1,
-                        score_threshold=0.25,
-                        min_hits=1,
+                        "ball_coords.json",
+                        "sticker_coords.json",
+                        "ball_frames",
+                        calibration=CALIBRATION_PARAMS,
                     )
-                    ball_detected_high = tail_check.ball_present
-                except Exception:
-                    logger.exception("High-rate ball detection failed; assuming ball exited frame.")
-                    ball_detected_high = False
-                    break
 
-            if ball_detected_high and high_attempt >= max_high_attempts:
-                logger.warning(
-                    "High-rate capture limit reached (%d attempts) with ball still detected",
-                    max_high_attempts,
-                )
-                raise RuntimeError(
-                    f"High-rate capture limit reached after {max_high_attempts} attempts with ball still detected."
-                )
+                    logger.info("Running rule-based analysis...")
+                    self.service.shared_data = rule_based_system("mid-iron")
+                    self.value = self.service.shared_data["metrics"]
 
-            logger.info("STAGE4: STATE: %s latest video is sent to video_ball_detector.py", ball_detected_high)
+                except (FileNotFoundError, RuntimeError) as e:
+                    logger.exception(f"Video processing failed: {e}")
+                    self._reset_shared_data("Swing analysis failed! Please try again.")
+                    self.end_loop()
+                    return
+                else:
+                    logger.debug("Updated value after processing")
+                    if self.notifying:
+                        self.notify_client()
 
-            logger.info("Processing video data...")
-            try:
-                if latest_file is None:
-                    raise FileNotFoundError("No vid*.mp4 found in webcamGolf")
-                logger.info(f"Latest video file: {latest_file}")
+            except Exception:
+                logger.exception("Low-rate ball detection failed")
+                self.end_loop()
 
-                result = process_video(
-                    latest_file,
-                    "ball_coords.json",
-                    "sticker_coords.json",
-                    "ball_frames"
-                )
+        # except TimeoutError as e:
+        #     logger.warning(str(e))
+        #     self._reset_shared_data("Ball not detected in time.")
+        #     if self.notifying:
+        #         self.notify_client()
 
-                logger.info("Running rule-based analysis...")
-                self.service.shared_data = rule_based_system("mid-iron")
-                self.value = self.service.shared_data["metrics"]
+        # except Exception as e:
+        #     logger.exception(f"Unexpected failure in WriteValue: {e}")
+        #     self._reset_shared_data("Unexpected system error occurred.")
+        #     if self.notifying:
+        #         self.notify_client()
 
-            except (FileNotFoundError, RuntimeError) as e:
-                logger.exception(f"Video processing failed: {e}")
-                self._reset_shared_data("Swing analysis failed! Please try again.")
-            else:
-                logger.debug("Updated value after processing")
-                if self.notifying:
-                    self.notify_client()
-
-        except TimeoutError as e:
-            logger.warning(str(e))
-            self._reset_shared_data("Ball not detected in time.")
-            if self.notifying:
-                self.notify_client()
-
-        except Exception as e:
-            logger.exception(f"Unexpected failure in WriteValue: {e}")
-            self._reset_shared_data("Unexpected system error occurred.")
-            if self.notifying:
-                self.notify_client()
-
-        else:
-            # This block runs only if try block completes without exception
-            logger.debug("Updated value after script")
-            if self.notifying:
-                self.notify_client()
+        # else:
+        #     # This block runs only if try block completes without exception
+        #     logger.debug("Updated value after script")
+        #     if self.notifying:
+        #         self.notify_client()
 
     def StartNotify(self):
         if self.notifying:
             logger.debug("Already notifying")
             return
-        logger.debug("StartNotify called")
+        logger.debug("StartNotify called for analyze swing")
         self.notifying = True
         # self.notify_client()
 
@@ -365,6 +432,13 @@ class SwingAnalysisCharacteristic(Characteristic):
         self.service.shared_data["metrics"] = None
         self.service.shared_data["feedback"] = feedback_message
         self.value = self.service.shared_data["metrics"]
+
+    def end_loop(self):
+        if self.notifying:
+            self.notify_client()
+        set_status_led_color("off")
+        self.service.camera_event.clear()
+        logger.info("Capture loop ended and event cleared")
 
 class GenerateFeedbackCharacteristic(Characteristic):
     uuid = "2c58a217-0a9b-445f-adac-0b37bd8635c3"
@@ -416,7 +490,7 @@ class CalibrationCharacteristic(Characteristic):
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
 
     def WriteValue(self, value, options):
-        logger.debug("received write command")
+        logger.debug("received write command for ev calibration")
         try: 
             # Run calibration script
             logger.debug("Began calibration function")
@@ -453,7 +527,7 @@ class CalibrationCharacteristic(Characteristic):
         if self.notifying:
             logger.debug("Already notifying")
             return
-        logger.debug("StartNotify called")
+        logger.debug("StartNotify called for ev calibration")
         self.notifying = True
         # self.notify_client()
 
@@ -500,7 +574,7 @@ class BatteryMonitorCharacteristic(Characteristic):
         if self.notifying:
             logger.debug("Already notifying")
             return
-        logger.debug("StartNotify called")
+        logger.debug("StartNotify called for battery monitor")
         self.notifying = True
 
         self.value = return_battery_power()
@@ -543,6 +617,23 @@ class BatteryMonitorCharacteristic(Characteristic):
         self.notify_client()
 
         return True  # continue calling periodically
+    
+class CancelSwingCharacteristic(Characteristic):
+    uuid = "8f1a5ff0-399b-4afe-9cb4-280c8310e388"
+    description = b"Write to cancel swing analysis/camera operation"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["write"], service,
+        )
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 5, self))
+
+    def WriteValue(self, value, options):
+        logger.debug("received write command for cancel swing")
+        if hasattr(self.service, "camera_event"):
+            self.service.camera_event.clear()
+            logger.info("Stopped capture")
+
 
 
 # class PowerOffCharacteristic(Characteristic):
