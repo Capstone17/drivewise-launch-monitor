@@ -206,7 +206,7 @@ CLUB_TEMPLATE_RECOVERY_RATIO = 0.82
 CLUB_TEMPLATE_MIN_EXTENSION_PX = 4.0
 CLUB_TEMPLATE_MAX_EXTENSION_PX = 42.0
 CLUB_RESUME_DELAY_FRAMES = 6
-CLUB_STAT_LIMIT_MULTIPLIER = 4.5
+CLUB_STAT_LIMIT_MULTIPLIER = 7.5
 CLUB_DEPTH_BASELINE_FRAMES = 20
 CLUB_DEPTH_BASELINE_MULTIPLIER = 1.6
 CLUB_DEPTH_MIN_CM = 10.0
@@ -865,23 +865,23 @@ def filter_club_point_outliers(
     visible_min, visible_max = _median_mad_limits(visible_values, multiplier=CLUB_STAT_LIMIT_MULTIPLIER)
 
     if width_min is not None:
-        width_min = max(0.0, width_min * 0.9)
+        width_min = max(0.0, width_min * 0.5)
     if width_max is not None:
-        width_max *= 1.05
+        width_max *= 1.25
     if area_min is not None:
-        area_min = max(0.0, area_min * 0.85)
+        area_min = max(0.0, area_min * 0.5)
     if area_max is not None:
-        area_max *= 1.08
+        area_max *= 1.28
     if visible_min is not None:
-        visible_min = max(CLUB_ANNOTATION_MIN_VISIBLE_FRAC, visible_min * 0.8)
+        visible_min = max(CLUB_ANNOTATION_MIN_VISIBLE_FRAC, visible_min * 0.5)
     if visible_max is not None:
-        visible_max = min(1.0, visible_max * 1.2)
+        visible_max = min(1.0, visible_max * 1.45)
     baseline_depth_limit = _compute_depth_baseline_limit(points)
     if baseline_depth_limit is not None:
         if depth_max is None or baseline_depth_limit < depth_max:
             depth_max = baseline_depth_limit
     if depth_max is not None:
-        depth_max *= 1.05
+        depth_max *= 1.22
 
     filtered: list[dict[str, object]] = []
     removed = 0
@@ -934,8 +934,13 @@ def filter_club_point_outliers(
         filtered.append(entry)
 
     if removed and total_points:
-        minimum_keep = max(5, int(math.ceil(total_points * 0.6)))
-        if len(filtered) < minimum_keep:
+        minimum_keep = max(5, int(math.ceil(total_points * 0.8)))
+        revert = False
+        if removed > int(math.ceil(total_points * 0.35)):
+            revert = True
+        elif len(filtered) < minimum_keep:
+            revert = True
+        if revert:
             filtered = points
             removed = 0
 
@@ -5256,7 +5261,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "noah_hugo_9_mirrored.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "noah_hugo_3_mirrored.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
