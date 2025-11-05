@@ -2,6 +2,8 @@
 # from metric_output import return_metrics
 from .metric_output import return_metrics  # Use this until face angle can be accurately detected
 
+import random
+
 # -------------------------------
 # Output as a function (for bluetooth)
 # -------------------------------
@@ -78,14 +80,20 @@ def rule_based_system(club_selection):
             "name": "Pull Hook",
             "category": "all",
             "severity": 5,
-            "condition": lambda f: (f["face_slight_left"] and f["path_extreme_right"])   or   (f["face_extreme_left"] and (f["path_slight_right"] or f["path_extreme_right"])),
-            "action": lambda: "Pull hook: You're closing the clubface too much and swinging in-to-out. Try keeping your clubface more neutral and reducing how far right you're swinging."
+            "condition": lambda f: ((f["face_slight_left"] and f["path_extreme_right"]) or
+                                    (f["face_extreme_left"] and (f["path_slight_right"] or f["path_extreme_right"]))
+            ),
+            "action": lambda: random.choice([
+                "Pull hook: You're closing the clubface too much and swinging in-to-out. Try aligning your feet and shoulders parallel to the target before you swing.",
+                "Pull hook: You're closing the clubface too much and swinging in-to-out. Try leaving the clubface more open and weakening your grip."
+            ])    
         },
         {
             "name": "Pull Draw",
             "category": "all",
             "severity": 4,
-            "condition": lambda f: (f["face_slight_left"] and f["path_straight"])   or   (f["face_extreme_left"] and (f["path_straight"] or f["path_slight_left"])),
+            "condition": lambda f: (f["face_slight_left"] and f["path_straight"]) or 
+                                    (f["face_extreme_left"] and (f["path_straight"] or f["path_slight_left"])),
             "action": lambda: "Pull draw: Your clubface is slightly closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right."
         },
         {
