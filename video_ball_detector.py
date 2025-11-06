@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+import warnings
 
 import cv2
 import numpy as np
@@ -30,6 +31,7 @@ MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
 MOTION_WINDOW_FRAMES = 40  # number of frames kept in the motion window
+IMPACT_SPEED_THRESHOLD_PX = 6.0  # pixel distance that marks ball movement
 
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
     "1",
@@ -71,24 +73,6 @@ USE_BLUR = False
 MAX_REPROJECTION_ERROR = 2.0  # pixels
 MAX_TRANSLATION_DELTA = 30.0  # translation jump threshold
 MAX_ROTATION_DELTA = 45.0  # degrees
-
-
-def rvec_to_euler(rvec: np.ndarray) -> tuple[float, float, float]:
-    """Convert a rotation vector to roll, pitch and yaw in degrees."""
-    rotation_matrix, _ = cv2.Rodrigues(rvec)
-    flip = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]], dtype=float)
-    rotation_matrix = flip @ rotation_matrix
-    sy = np.sqrt(rotation_matrix[0, 0] ** 2 + rotation_matrix[1, 0] ** 2)
-    singular = sy < 1e-6
-    if not singular:
-        roll = np.arctan2(rotation_matrix[2, 1], rotation_matrix[2, 2])
-        pitch = np.arctan2(-rotation_matrix[2, 0], sy)
-        yaw = np.arctan2(rotation_matrix[1, 0], rotation_matrix[0, 0])
-    else:
-        roll = np.arctan2(-rotation_matrix[1, 2], rotation_matrix[1, 1])
-        pitch = np.arctan2(-rotation_matrix[2, 0], sy)
-        yaw = 0.0
-    return tuple(np.degrees([roll, pitch, yaw]))
 
 
 def bbox_to_ball_metrics(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
@@ -341,59 +325,103 @@ def quat_to_rvec(q: np.ndarray) -> np.ndarray:
     return rvec
 
 
-def slerp(q0: np.ndarray, q1: np.ndarray, alpha: float) -> np.ndarray:
-    """Spherical linear interpolation between two quaternions."""
-    cos_theta = np.dot(q0, q1)
-    if cos_theta < 0.0:
-        q1 = -q1
-        cos_theta = -cos_theta
-    if cos_theta > 0.9995:
-        q = q0 + alpha * (q1 - q0)
-        return q / np.linalg.norm(q)
-    theta = np.arccos(np.clip(cos_theta, -1.0, 1.0))
-    sin_theta = np.sin(theta)
-    w1 = np.sin((1.0 - alpha) * theta) / sin_theta
-    w2 = np.sin(alpha * theta) / sin_theta
-    return w1 * q0 + w2 * q1
+def predict_sticker_series(
+    measurements: list[dict[str, object]],
+    start_frame: int,
+    end_frame: int,
+    fps: float,
+) -> list[dict[str, float | int | str]]:
+    """Return per-frame sticker positions up to ``end_frame`` with gap filling."""
 
+    if not measurements or start_frame >= end_frame:
+        return []
 
-def interpolate_poses(
-    times: list[float],
-    last_rt: tuple[np.ndarray, np.ndarray],
-    curr_rt: tuple[np.ndarray, np.ndarray],
-    t0: float,
-    t1: float,
-    out_list: list[dict],
-) -> None:
-    rvec0, tvec0 = last_rt
-    rvec1, tvec1 = curr_rt
-    # Ensure translation vectors are 1D to avoid broadcasting issues during
-    # interpolation. The pose estimation functions sometimes return a column
-    # vector (shape (3, 1)), while other parts of the pipeline use a flat array
-    # (shape (3,)). Mixing these shapes causes numpy to broadcast the vectors
-    # into a larger matrix, resulting in more than three values when unpacking.
-    tvec0 = tvec0.reshape(3)
-    tvec1 = tvec1.reshape(3)
-    q0 = rvec_to_quat(rvec0)
-    q1 = rvec_to_quat(rvec1)
-    for tm in times:
-        alpha = (tm - t0) / (t1 - t0)
-        tvec = (1.0 - alpha) * tvec0 + alpha * tvec1
-        q = slerp(q0, q1, alpha)
-        rvec = quat_to_rvec(q)
-        roll, pitch, yaw = rvec_to_euler(rvec)
-        x, y, z = tvec.ravel()
-        out_list.append(
+    relevant = [m for m in measurements if m["frame"] < end_frame]
+    if not relevant:
+        return []
+
+    first_frame = min(m["frame"] for m in relevant)
+    series_start = max(start_frame, first_frame)
+    if series_start >= end_frame:
+        return []
+
+    times = np.array([float(m["time"]) for m in relevant], dtype=float)
+    positions = np.stack([np.array(m["position"], dtype=float) for m in relevant])
+
+    if times.size == 1:
+        degree = 0
+    elif times.size == 2:
+        degree = 1
+    else:
+        degree = 2  # capture acceleration
+
+    models = []
+    for axis in range(3):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", np.RankWarning)
+            coeffs = np.polyfit(times, positions[:, axis], deg=degree)
+        models.append(coeffs)
+
+    measured_lookup = {m["frame"]: m for m in relevant}
+    series = []
+    for frame in range(series_start, end_frame):
+        time = frame / fps
+        measurement = measured_lookup.get(frame)
+        if measurement is None:
+            xyz = [
+                float(np.polyval(models[axis], time)) for axis in range(3)
+            ]
+            source = "predicted"
+        else:
+            pos = np.array(measurement["position"], dtype=float)
+            xyz = [float(pos[0]), float(pos[1]), float(pos[2])]
+            source = "measured"
+        series.append(
             {
-                "time": round(tm, 3),
-                "x": round(float(x), 2),
-                "y": round(float(y), 2),
-                "z": round(float(z), 2),
-                "roll": round(float(roll), 2),
-                "pitch": round(float(pitch), 2),
-                "yaw": round(float(yaw), 2),
+                "frame": frame,
+                "time": time,
+                "x": xyz[0],
+                "y": xyz[1],
+                "z": xyz[2],
+                "source": source,
             }
         )
+    return series
+
+
+def annotate_interpolated_frames(
+    frame_paths: dict[int, str],
+    predictions: list[dict[str, float | int | str]],
+) -> None:
+    """Overlay interpolated sticker positions as points onto debug frames."""
+
+    if not predictions:
+        return
+    for entry in predictions:
+        frame_idx = entry["frame"]
+        path = frame_paths.get(frame_idx)
+        if not path or not os.path.exists(path):
+            continue
+        image = cv2.imread(path)
+        if image is None:
+            continue
+        h, w = image.shape[:2]
+        x = float(entry["x"])
+        y = float(entry["y"])
+        z = float(entry["z"])
+        if z <= 1e-3:
+            continue
+        fx = CAMERA_MATRIX[0, 0]
+        fy = CAMERA_MATRIX[1, 1]
+        cx = CAMERA_MATRIX[0, 2]
+        cy = CAMERA_MATRIX[1, 2]
+        px = int(round(fx * (x / z) + cx))
+        py = int(round(fy * (y / z) + cy))
+        if px < 0 or py < 0 or px >= w or py >= h:
+            continue
+        cv2.circle(image, (px, py), 6, (0, 165, 255), -1)
+        cv2.circle(image, (px, py), 9, (0, 0, 0), 2)
+        cv2.imwrite(path, image)
 
 
 def find_motion_window(
@@ -684,15 +712,15 @@ def process_video(
     ball_time = 0.0
     sticker_time = 0.0
     ball_coords = []
-    sticker_coords = []
-    last_dynamic_pose = None
+    sticker_measurements: list[dict[str, object]] = []
+    saved_frame_paths: dict[int, str] = {}
     last_dynamic_rt = None
     last_dynamic_quat = None
-    last_valid_time = None
     tracker_corners = None
     prev_gray = None
-    pending_times: list[float] = []
     missing_frames = 0
+    impact_frame_idx: int | None = None
+    impact_time: float | None = None
     # Tracking of last detected ball position and velocity
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
@@ -768,6 +796,10 @@ def process_video(
                         )
                         if last_ball_center is not None:
                             ball_velocity = center - last_ball_center
+                            speed = float(np.linalg.norm(ball_velocity))
+                            if impact_frame_idx is None and speed >= IMPACT_SPEED_THRESHOLD_PX:
+                                impact_frame_idx = frame_idx
+                                impact_time = t
                         last_ball_center = center
                         last_ball_radius = rad
                         detected_center = (cx, cy, rad)
@@ -785,114 +817,45 @@ def process_video(
                 break
 
 
-        sticker_start = time.perf_counter()
-        corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
-        sticker_time += time.perf_counter() - sticker_start
-        current_rt = None
-        current_pose = None
-        current_quat = None
-        dynamic_corner = None
-        if ids is not None and len(ids) > 0:
-            valid = [
-                corners[i]
-                for i in range(len(ids))
-                if ids[i][0] == DYNAMIC_ID
-            ]
-            if valid:
-                valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
-                cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
-                for corner in valid:
-                    rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                        [corner],
-                        DYNAMIC_MARKER_LENGTH,
-                        CAMERA_MATRIX,
-                        DIST_COEFFS,
-                    )
-                    rvec = rvecs[0, 0]
-                    # Flatten the translation vector to a 1D array for
-                    # consistency with solvePnP outputs.
-                    tvec = tvecs[0, 0].reshape(3)
-                    x, y, z = tvec
-                    curr_q = rvec_to_quat(rvec)
-                    if last_dynamic_rt is not None:
-                        prev_q = rvec_to_quat(last_dynamic_rt[0])
-                        if np.dot(curr_q, prev_q) < 0.0:
-                            curr_q = -curr_q
-                            rvec = quat_to_rvec(curr_q)
-                    roll, pitch, yaw = rvec_to_euler(rvec)
-                    current_rt = (rvec, tvec)
-                    current_pose = (x, y, z, roll, pitch, yaw)
-                    current_quat = curr_q
-                    dynamic_corner = corner
-                    cv2.drawFrameAxes(
-                        frame,
-                        CAMERA_MATRIX,
-                        DIST_COEFFS,
-                        rvec,
-                        tvec,
-                        DYNAMIC_MARKER_LENGTH * 0.5,
-                        2,
-                    )
-        if current_rt is None and tracker_corners is not None and prev_gray is not None:
-            new_corners, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
-            if st.sum() == 4:
-                object_pts = np.array(
-                    [
-                        [0.0, 0.0, 0.0],
-                        [DYNAMIC_MARKER_LENGTH, 0.0, 0.0],
-                        [DYNAMIC_MARKER_LENGTH, DYNAMIC_MARKER_LENGTH, 0.0],
-                        [0.0, DYNAMIC_MARKER_LENGTH, 0.0],
-                    ],
-                    dtype=np.float32,
-                )
-                ok, rvec, tvec = cv2.solvePnP(
-                    object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
-                )
-                if ok:
-                    # ``solvePnP`` returns a column vector; flatten it so that the
-                    # rest of the pipeline always works with a 1D translation
-                    # vector.
-                    tvec = tvec.reshape(3)
-                    x, y, z = tvec
-                    curr_q = rvec_to_quat(rvec)
-                    if last_dynamic_rt is not None:
-                        prev_q = rvec_to_quat(last_dynamic_rt[0])
-                        if np.dot(curr_q, prev_q) < 0.0:
-                            curr_q = -curr_q
-                            rvec = quat_to_rvec(curr_q)
-
-                    # Reprojection error check
-                    reproj, _ = cv2.projectPoints(
-                        object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS
-                    )
-                    reproj_err = np.linalg.norm(
-                        new_corners.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
-                    ).mean()
-
-                    pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
-
-                    # Motion delta check
-                    if pose_ok and last_dynamic_rt is not None:
-                        trans_delta = np.linalg.norm(tvec - last_dynamic_rt[1])
-                        ang_delta = 0.0
-                        if last_dynamic_quat is not None:
-                            ang_delta = np.degrees(
-                                2.0
-                                * np.arccos(
-                                    np.clip(np.dot(curr_q, last_dynamic_quat), -1.0, 1.0)
-                                )
-                            )
-                        if (
-                            trans_delta > MAX_TRANSLATION_DELTA
-                            or ang_delta > MAX_ROTATION_DELTA
-                        ):
-                            pose_ok = False
-
-                    if pose_ok:
-                        roll, pitch, yaw = rvec_to_euler(rvec)
+        allow_sticker = impact_frame_idx is None or frame_idx < impact_frame_idx
+        if allow_sticker:
+            sticker_start = time.perf_counter()
+            corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
+            sticker_time += time.perf_counter() - sticker_start
+            current_rt = None
+            current_quat = None
+            current_position: np.ndarray | None = None
+            dynamic_corner = None
+            if ids is not None and len(ids) > 0:
+                valid = [
+                    corners[i]
+                    for i in range(len(ids))
+                    if ids[i][0] == DYNAMIC_ID
+                ]
+                if valid:
+                    valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
+                    cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
+                    for corner in valid:
+                        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+                            [corner],
+                            DYNAMIC_MARKER_LENGTH,
+                            CAMERA_MATRIX,
+                            DIST_COEFFS,
+                        )
+                        rvec = rvecs[0, 0]
+                        # Flatten the translation vector to a 1D array for
+                        # consistency with solvePnP outputs.
+                        tvec = tvecs[0, 0].reshape(3)
+                        curr_q = rvec_to_quat(rvec)
+                        if last_dynamic_rt is not None:
+                            prev_q = rvec_to_quat(last_dynamic_rt[0])
+                            if np.dot(curr_q, prev_q) < 0.0:
+                                curr_q = -curr_q
+                                rvec = quat_to_rvec(curr_q)
                         current_rt = (rvec, tvec)
-                        current_pose = (x, y, z, roll, pitch, yaw)
                         current_quat = curr_q
+                        current_position = np.array(tvec, dtype=float)
+                        dynamic_corner = corner
                         cv2.drawFrameAxes(
                             frame,
                             CAMERA_MATRIX,
@@ -902,88 +865,145 @@ def process_video(
                             DYNAMIC_MARKER_LENGTH * 0.5,
                             2,
                         )
-                    else:
-                        current_rt = None
-                        current_pose = None
-                        current_quat = None
-                tracker_corners = new_corners
-                prev_gray = marker_gray
-            else:
-                tracker_corners = None
-                prev_gray = None
-        if current_rt is None:
-            pending_times.append(t)
-            if len(pending_times) > MAX_MISSING_FRAMES:
-                tracker_corners = None
-                prev_gray = None
-                last_dynamic_pose = None
-                last_dynamic_rt = None
-                last_dynamic_quat = None
-                last_valid_time = None
-                pending_times.clear()
-        else:
-            if pending_times:
-                if last_dynamic_rt is not None:
-                    interpolate_poses(
-                        pending_times,
-                        last_dynamic_rt,
-                        current_rt,
-                        last_valid_time,
-                        t,
-                        sticker_coords,
+            if current_rt is None and tracker_corners is not None and prev_gray is not None:
+                new_corners, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
+                if st.sum() == 4:
+                    object_pts = np.array(
+                        [
+                            [0.0, 0.0, 0.0],
+                            [DYNAMIC_MARKER_LENGTH, 0.0, 0.0],
+                            [DYNAMIC_MARKER_LENGTH, DYNAMIC_MARKER_LENGTH, 0.0],
+                            [0.0, DYNAMIC_MARKER_LENGTH, 0.0],
+                        ],
+                        dtype=np.float32,
                     )
-                pending_times.clear()
-            x, y, z, roll, pitch, yaw = current_pose
-            sticker_coords.append(
-                {
-                    "time": round(t, 3),
-                    "x": round(float(x), 2),
-                    "y": round(float(y), 2),
-                    "z": round(float(z), 2),
-                    "roll": round(float(roll), 2),
-                    "pitch": round(float(pitch), 2),
-                    "yaw": round(float(yaw), 2),
-                }
-            )
-            last_dynamic_pose = current_pose
-            last_dynamic_rt = current_rt
-            last_dynamic_quat = current_quat
-            last_valid_time = t
-            missing_frames = 0
-            if dynamic_corner is not None:
-                tracker_corners = dynamic_corner.reshape(4, 1, 2).astype(np.float32)
-            prev_gray = marker_gray
-        if current_rt is None:
-            missing_frames = len(pending_times)
+                    ok, rvec, tvec = cv2.solvePnP(
+                        object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
+                    )
+                    if ok:
+                        # ``solvePnP`` returns a column vector; flatten it so that the
+                        # rest of the pipeline always works with a 1D translation
+                        # vector.
+                        tvec = tvec.reshape(3)
+                        curr_q = rvec_to_quat(rvec)
+                        if last_dynamic_rt is not None:
+                            prev_q = rvec_to_quat(last_dynamic_rt[0])
+                            if np.dot(curr_q, prev_q) < 0.0:
+                                curr_q = -curr_q
+                                rvec = quat_to_rvec(curr_q)
+
+                        # Reprojection error check
+                        reproj, _ = cv2.projectPoints(
+                            object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS
+                        )
+                        reproj_err = np.linalg.norm(
+                            new_corners.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
+                        ).mean()
+
+                        pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
+
+                        # Motion delta check
+                        if pose_ok and last_dynamic_rt is not None:
+                            trans_delta = np.linalg.norm(tvec - last_dynamic_rt[1])
+                            ang_delta = 0.0
+                            if last_dynamic_quat is not None:
+                                ang_delta = np.degrees(
+                                    2.0
+                                    * np.arccos(
+                                        np.clip(np.dot(curr_q, last_dynamic_quat), -1.0, 1.0)
+                                    )
+                                )
+                            if (
+                                trans_delta > MAX_TRANSLATION_DELTA
+                                or ang_delta > MAX_ROTATION_DELTA
+                            ):
+                                pose_ok = False
+
+                        if pose_ok:
+                            current_rt = (rvec, tvec)
+                            current_quat = curr_q
+                            current_position = np.array(tvec, dtype=float)
+                            cv2.drawFrameAxes(
+                                frame,
+                                CAMERA_MATRIX,
+                                DIST_COEFFS,
+                                rvec,
+                                tvec,
+                                DYNAMIC_MARKER_LENGTH * 0.5,
+                                2,
+                            )
+                        else:
+                            current_rt = None
+                            current_quat = None
+                            current_position = None
+                    tracker_corners = new_corners
+                    prev_gray = marker_gray
+                else:
+                    tracker_corners = None
+                    prev_gray = None
+            if current_rt is None:
+                missing_frames += 1
+                if missing_frames > MAX_MISSING_FRAMES:
+                    tracker_corners = None
+                    prev_gray = None
+                    last_dynamic_rt = None
+                    last_dynamic_quat = None
+                    missing_frames = 0
+            else:
+                missing_frames = 0
+                sticker_measurements.append(
+                    {
+                        "frame": frame_idx,
+                        "time": t,
+                        "position": np.array(current_position, dtype=float),
+                    }
+                )
+                last_dynamic_rt = current_rt
+                last_dynamic_quat = current_quat
+                if dynamic_corner is not None:
+                    tracker_corners = dynamic_corner.reshape(4, 1, 2).astype(np.float32)
+                prev_gray = marker_gray
+        else:
+            tracker_corners = None
+            prev_gray = None
 
         if frames_dir and inference_start <= frame_idx < inference_end:
-            cv2.imwrite(
-                os.path.join(frames_dir, f"frame_{frame_idx:04d}.png"), frame
-            )
+            frame_path = os.path.join(frames_dir, f"frame_{frame_idx:04d}.png")
+            cv2.imwrite(frame_path, frame)
+            saved_frame_paths[frame_idx] = frame_path
         frame_idx += 1
 
     cap.release()
-    if pending_times and last_dynamic_rt is not None:
-        rvec, tvec = last_dynamic_rt
-        roll, pitch, yaw = rvec_to_euler(rvec)
-        x, y, z = tvec.ravel()
-        for tm in pending_times:
-            sticker_coords.append(
-                {
-                    "time": round(tm, 3),
-                    "x": round(float(x), 2),
-                    "y": round(float(y), 2),
-                    "z": round(float(z), 2),
-                    "roll": round(float(roll), 2),
-                    "pitch": round(float(pitch), 2),
-                    "yaw": round(float(yaw), 2),
-                }
-            )
-        pending_times.clear()
-    ball_coords.sort(key=lambda c: c["time"])
-    sticker_coords.sort(key=lambda c: c["time"])
-    if not sticker_coords:
+    sticker_measurements.sort(key=lambda m: m["frame"])
+    if impact_frame_idx is None:
+        sticker_cutoff_frame = inference_end
+    else:
+        sticker_cutoff_frame = min(impact_frame_idx, inference_end)
+    sticker_series = predict_sticker_series(
+        sticker_measurements,
+        inference_start,
+        sticker_cutoff_frame,
+        video_fps,
+    )
+    if not sticker_series:
         raise RuntimeError("No sticker detected in the video")
+    sticker_coords = [
+        {
+            "time": round(entry["time"], 3),
+            "x": round(float(entry["x"]), 2),
+            "y": round(float(entry["y"]), 2),
+            "z": round(float(entry["z"]), 2),
+        }
+        for entry in sticker_series
+    ]
+    if frames_dir:
+        annotate_interpolated_frames(
+            saved_frame_paths,
+            [entry for entry in sticker_series if entry["source"] == "predicted"],
+        )
+    if impact_frame_idx is not None and impact_time is not None:
+        print(f"Impact frame: {impact_frame_idx} (t={impact_time:.3f}s)")
+    ball_coords.sort(key=lambda c: c["time"])
     with open(ball_path, "w") as f:
         json.dump(ball_coords, f, indent=2)
     with open(sticker_path, "w") as f:
@@ -998,7 +1018,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "tst_skinny_240.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "tst_23.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
