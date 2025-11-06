@@ -3,13 +3,6 @@ import os
 import sys
 import time
 
-# Ensure Ultralytics can write its settings locally and skip auto-installation
-os.environ.setdefault(
-    "YOLO_CONFIG_DIR", os.path.join(os.path.dirname(__file__), ".yolo")
-)
-os.environ.setdefault("YOLO_AUTOINSTALL", "False")
-os.makedirs(os.environ["YOLO_CONFIG_DIR"], exist_ok=True)
-
 import cv2
 import numpy as np
 
@@ -26,9 +19,6 @@ try:
 except Exception:
     pass
 
-MODEL_IMG_H = 128
-MODEL_IMG_W = 192
-
 ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
 
@@ -39,6 +29,7 @@ BALL_SCORE_THRESHOLD = 0.4
 MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
+MOTION_WINDOW_FRAMES = 40  # number of frames kept in the motion window
 
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
     "1",
@@ -73,7 +64,6 @@ ARUCO_PARAMS.adaptiveThreshConstant = 7
 DYNAMIC_ID = 0
 
 MAX_MISSING_FRAMES = 12
-MAX_MOTION_FRAMES = 40  # maximum allowed motion window length in frames
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 USE_BLUR = False
 
@@ -410,8 +400,8 @@ def find_motion_window(
     video_path: str,
     detector: TFLiteBallDetector,
     *,
-    pad_frames: int = MAX_MOTION_FRAMES,
-    max_frames: int = MAX_MOTION_FRAMES,
+    pad_frames: int = MOTION_WINDOW_FRAMES,
+    max_frames: int = MOTION_WINDOW_FRAMES,
     confirm_radius: int = 3,
     score_threshold: float = MOTION_WINDOW_SCORE_THRESHOLD,
     debug: bool = False,
@@ -844,7 +834,7 @@ def process_video(
                         2,
                     )
         if current_rt is None and tracker_corners is not None and prev_gray is not None:
-            new_corners, st, err = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
+            new_corners, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
             if st.sum() == 4:
                 object_pts = np.array(
                     [
