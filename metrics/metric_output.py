@@ -4,7 +4,7 @@
 # ------------------------------
 
 
-from metric_calculation import *
+from .metric_calculation import *
 
 from pathlib import Path
 import json
@@ -445,9 +445,7 @@ def savgol_velocity(json_path, polyorder=2):
     y_deriv = savgol_filter(y_vals, window_length, polyorder, deriv=1, delta=dt)
     z_deriv = savgol_filter(z_vals, window_length, polyorder, deriv=1, delta=dt)
 
-    # Negate z_deriv: if z increases toward camera, we want negative velocity
-    # This makes z_vel consistent with "forward = negative Z direction" convention
-    return x_deriv[-1], y_deriv[-1], -z_deriv[-1]
+    return x_deriv[-1], y_deriv[-1], z_deriv[-1]
 
 
 # -------------------------
@@ -510,10 +508,10 @@ def return_metrics() -> dict:
     # Coordinate source paths
     src_coords_path = Path("~/Documents/webcamGolf").expanduser()
     src_coords = str(src_coords_path) + "/"
-    # ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
-    # sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
-    ball_coords_path = "../ball_coords.json"  # STANDALONE
-    sticker_coords_path = "../sticker_coords.json"  # STANDALONE
+    ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
+    sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
+    # ball_coords_path = "../ball_coords.json"  # STANDALONE
+    # sticker_coords_path = "../sticker_coords.json"  # STANDALONE
 
     # ---------------------------------
     # Find impact time
