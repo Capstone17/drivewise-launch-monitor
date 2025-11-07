@@ -104,8 +104,9 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
         data = json.load(f)
 
     # Filter
+    # The impact frame should be included, as the ball has already started moving
     def after_threshold(d, threshold):
-        return round(d['time'], 6) > round(threshold, 6)
+        return round(d['time'], 6) >= round(threshold, 6)
 
     frames = [d for d in data if after_threshold(d, time_threshold)]
     print('Frames found:', len(frames))
@@ -113,7 +114,7 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
     # Always use as many frames as possible
     available_frames = len(frames)
     if available_frames < 3:
-        raise ValueError("Need at least 3 frames after filtering for fit.")
+        return finite_difference_fallback(frames, verbose)
 
     t_vals = np.array([f['time'] for f in frames])
     x_vals = np.array([f['x'] for f in frames])
@@ -197,6 +198,57 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
         else:
             print(f"\nGood fit quality (all R² > {warn_threshold})")
 
+    return x_rate, y_rate, z_rate, diagnostics
+
+# Worst-case scenario: If we only have 2 frames, we must use finite difference
+def finite_difference_fallback(frames, verbose=True):
+    """
+    Calculate velocity using finite differences when fewer than 3 frames available.
+    
+    Args:
+        frames: List of 1-2 frames with 'time', 'x', 'y', 'z' keys
+        verbose: If True, print diagnostic information
+        
+    Returns:
+        tuple: (x_rate, y_rate, z_rate, diagnostics)
+    """
+    if len(frames) < 2:
+        raise ValueError("Need at least 2 frames for finite difference velocity estimation.")
+    
+    # Use last two frames for velocity estimate
+    dt = frames[-1]['time'] - frames[-2]['time']
+    if dt == 0:
+        raise ValueError("Last two frames have identical timestamps.")
+    
+    x_rate = (frames[-1]['x'] - frames[-2]['x']) / dt
+    y_rate = (frames[-1]['y'] - frames[-2]['y']) / dt
+    z_rate = (frames[-1]['z'] - frames[-2]['z']) / dt
+    
+    diagnostics = {
+        'r2_x': None,
+        'r2_y': None,
+        'r2_z': None,
+        'r2_min': None,
+        'rmse_x': None,
+        'rmse_y': None,
+        'rmse_z': None,
+        'num_frames': len(frames),
+        'filtered': False,
+        'window_length': None,
+        'poly_order': None,
+        'method': 'finite_difference'
+    }
+    
+    if verbose:
+        print(f"\n=== Velocity Finite Difference Estimation ===")
+        print(f"Frames used: {len(frames)} (insufficient for fitting)")
+        print(f"Method: Simple finite difference between last two frames")
+        print(f"\nVelocity components:")
+        print(f"  x_rate: {x_rate:+.3f} units/sec")
+        print(f"  y_rate: {y_rate:+.3f} units/sec")
+        print(f"  z_rate: {z_rate:+.3f} units/sec")
+        print(f"\nNote: No fit quality metrics available for finite difference method.")
+    
     return x_rate, y_rate, z_rate, diagnostics
 
 
@@ -322,10 +374,10 @@ def return_metrics() -> dict:
     # Coordinate source paths
     src_coords_path = Path("~/Documents/webcamGolf").expanduser()
     src_coords = str(src_coords_path) + "/"
-    ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
-    sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
-    # ball_coords_path = "../ball_coords.json"  # STANDALONE
-    # sticker_coords_path = "../sticker_coords.json"  # STANDALONE
+    # ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
+    # sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
+    ball_coords_path = "../ball_coords.json"  # STANDALONE
+    sticker_coords_path = "../sticker_coords.json"  # STANDALONE
 
     # ---------------------------------
     # Find impact time
@@ -354,8 +406,11 @@ def return_metrics() -> dict:
     #     verbose=True
     # )
 
-    # Access diagnostics
-    print(f"\nMinimum R²: {diag['r2_min']:.4f}")
+    # Access diagnostics robustly
+    if diag['r2_min'] is not None:
+        print(f"\nMinimum R²: {diag['r2_min']:.4f}")
+    else:
+        print("\nMinimum R²: Not available (finite difference method used)")
 
     print(f"Ball dx: {ball_dx}, Ball dy: {ball_dy}, Ball dz: {ball_dz}")
     marker_dx, marker_dy, marker_dz = savgol_velocity(sticker_coords_path)
