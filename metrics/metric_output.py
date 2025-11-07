@@ -269,7 +269,6 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
 
     return x_rate, y_rate, z_rate, diagnostics
 
-
 # Since we usually get some frames at the end where the ball is partially detected, this can mess up the dz calculation.
 # To avoid this we can remove these frames when we calcuate for dz.
 def remove_z_increasing_tail(frames, verbose=False, increase_threshold=5.0, min_consecutive=2):
@@ -389,6 +388,7 @@ def finite_difference_fallback(frames, verbose=True):
 # -------------------------
 # Club Velocity Calculation
 # -------------------------
+
 # Polyorder=2 gives a good balance of smoothness, adaptability to acceleration/deceleration, 
 #   and resistance to overfitting random noise for real-world motion estimation from short, 
 #   noisy time series.
@@ -403,12 +403,12 @@ def savgol_velocity(json_path, polyorder=2):
 
     Returns:
         tuple: (x_vel, y_vel, z_vel) at the last time point in units/sec.
+                z_vel is negated so that motion toward camera gives negative z_vel.
 
     Raises:
         ValueError: If fewer than 3 frames in the file.
     """
     # Load data from JSON file
-    
     with open(json_path, 'r') as f:
         frames = json.load(f)
     
@@ -445,8 +445,9 @@ def savgol_velocity(json_path, polyorder=2):
     y_deriv = savgol_filter(y_vals, window_length, polyorder, deriv=1, delta=dt)
     z_deriv = savgol_filter(z_vals, window_length, polyorder, deriv=1, delta=dt)
 
-    # Return velocities at the last frame
-    return x_deriv[-1], y_deriv[-1], z_deriv[-1]
+    # Negate z_deriv: if z increases toward camera, we want negative velocity
+    # This makes z_vel consistent with "forward = negative Z direction" convention
+    return x_deriv[-1], y_deriv[-1], -z_deriv[-1]
 
 
 # -------------------------
@@ -481,7 +482,8 @@ def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz
     if (abs(side_angle) > 25):
         print(f"Extreme side angle {side_angle}; using default of 0.00")
         side_angle = 0.00
-    if (abs(face_angle) > 25):
+    # Face angle can be more extreme, but still check
+    if (abs(face_angle) > 35):
         print(f"Extreme face angle {face_angle}; using default of 0.00")
         face_angle = 0.00
     if (abs(attack_angle) > 25):
