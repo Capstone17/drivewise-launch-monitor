@@ -1,6 +1,6 @@
 
 # from metric_output import return_metrics
-from metric_output import return_metrics  # Use this until face angle can be accurately detected
+from .metric_output import return_metrics  # Use this until face angle can be accurately detected
 
 import random
 
@@ -32,11 +32,11 @@ def rule_based_system(club_selection):
     # - Ideal numbers for face-to-path are from GolfWRX: https://www.golfwrx.com/342864/how-to-hit-a-push-draw-and-a-pull-fade/1000/
     # -------------------------------
     facts = {
-        "face_extreme_left": raw_data['face_angle'] < -4.0,
-        "face_slight_left": -4.0 <= raw_data['face_angle'] < -2.0,
-        "face_straight": -2.0 <= raw_data['face_angle'] < 2.0,
-        "face_slight_right": 2.0 <= raw_data['face_angle'] < 4.0,
-        "face_extreme_right": 4.0 <= raw_data['face_angle'],
+        "face_extreme_left": raw_data['face_angle'] < -6.0,
+        "face_slight_left": -6.0 <= raw_data['face_angle'] < -3.0,
+        "face_straight": -3.0 <= raw_data['face_angle'] < 3.0,
+        "face_slight_right": 3.0 <= raw_data['face_angle'] < 6.0,
+        "face_extreme_right": 6.0 <= raw_data['face_angle'],
 
         "path_extreme_left": raw_data['swing_path'] < -5.0,  # Slice
         "path_slight_left": -5.0 <= raw_data['swing_path'] < -2.0,  # Fade-bias
@@ -94,7 +94,7 @@ def rule_based_system(club_selection):
             "severity": 4,
             "condition": lambda f: (f["face_slight_left"] and f["path_straight"]) or 
                                     (f["face_extreme_left"] and (f["path_straight"] or f["path_slight_left"])),
-            "action": lambda: "Pull draw: Your clubface is slightly closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right."
+            "action": lambda: "Pull draw: Your clubface is closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right."
         },
         {
             "name": "Pull",
@@ -244,5 +244,5 @@ def rule_based_system(club_selection):
 # -------------------------------
 # Main function for testing
 # -------------------------------
-if __name__ == "__main__":
-    result = rule_based_system("mid-iron")
+# if __name__ == "__main__":
+#    result = rule_based_system("mid-iron")
