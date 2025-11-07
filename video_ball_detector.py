@@ -28,8 +28,9 @@ BALL_SCORE_THRESHOLD = 0.4
 MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
-MOTION_WINDOW_FRAMES = 40  # number of frames kept in the motion window
-IMPACT_SPEED_THRESHOLD_PX = 6.0  # pixel distance that marks ball movement
+MOTION_WINDOW_FRAMES = 40  
+IMPACT_SPEED_THRESHOLD_PX = 6.0  
+CLUB_IMPACT_Z_MARGIN = 1.0  # club slightly furtuer away during the impact
 
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
     "1",
@@ -328,8 +329,10 @@ def predict_sticker_series(
     start_frame: int,
     end_frame: int,
     fps: float,
+    *,
+    impact_frame: int | None = None,
+    impact_ball_z: float | None = None,
 ) -> list[dict[str, float | int | str]]:
-    """Return per-frame sticker positions up to ``end_frame`` with gap filling."""
 
     if not measurements or start_frame >= end_frame:
         return []
@@ -341,11 +344,15 @@ def predict_sticker_series(
     # Sort the measurements to guarantee monotonic time/frame order.
     relevant.sort(key=lambda m: m["frame"])
 
+    frames = np.array([int(m["frame"]) for m in relevant], dtype=int)
     times = np.array([float(m["time"]) for m in relevant], dtype=float)
     positions = np.stack([np.array(m["position"], dtype=float) for m in relevant])
 
     if np.any(np.diff(times) < 0):
         raise ValueError("Measurement times must be non-decreasing")
+
+    # Enforce monotonic decay along the Z axis at the measurement level.
+    positions[:, 2] = np.minimum.accumulate(positions[:, 2])
 
     def estimate_slopes(sample_times: np.ndarray, points: np.ndarray) -> np.ndarray:
         """Return per-sample velocity estimates derived from existing points."""
@@ -416,7 +423,32 @@ def predict_sticker_series(
             )
         return result
 
+    def enforce_non_increasing(values: np.ndarray) -> np.ndarray:
+        """Return a version of ``values`` that never rises as the index increases."""
+
+        if values.size == 0:
+            return values
+        return np.minimum.accumulate(values)
+
+    def blend_tail_toward_target(values: np.ndarray, start_idx: int, target: float) -> np.ndarray:
+        """Adjust the tail of ``values`` so that it smoothly lands on ``target``."""
+
+        if values.size == 0:
+            return values
+        corrected = values.copy()
+        start_idx = int(np.clip(start_idx, 0, corrected.size - 1))
+        tail = corrected[start_idx:]
+        if tail.size == 0:
+            return corrected
+        delta = tail[-1] - target
+        if abs(delta) < 1e-6:
+            return corrected
+        weights = np.linspace(0.0, 1.0, tail.size, endpoint=True)
+        corrected[start_idx:] = tail - delta * weights
+        return corrected
+
     slopes = estimate_slopes(times, positions)
+    slopes[:, 2] = np.minimum(slopes[:, 2], 0.0)
 
     frame_range = np.arange(max(start_frame, 0), end_frame, dtype=int)
     if frame_range.size == 0:
@@ -494,6 +526,26 @@ def predict_sticker_series(
             query_times[after_mask],
             fps,
         )
+
+    predicted[:, 2] = enforce_non_increasing(predicted[:, 2])
+
+    if impact_ball_z is not None and frame_range.size > 0:
+        target_idx = frame_range.size - 1
+        if impact_frame is not None:
+            target_idx = int(np.searchsorted(frame_range, impact_frame, side="right") - 1)
+            target_idx = int(np.clip(target_idx, 0, frame_range.size - 1))
+        target_z = float(impact_ball_z) + CLUB_IMPACT_Z_MARGIN
+        max_allowed = float(np.max(predicted[: target_idx + 1, 2]))
+        target_z = min(target_z, max_allowed)
+        last_measured_frame = int(frames[-1]) if frames.size > 0 else int(frame_range[0])
+        slice_for_anchor = frame_range[: target_idx + 1]
+        tail_start = int(np.searchsorted(slice_for_anchor, last_measured_frame, side="right"))
+        tail_start = int(np.clip(tail_start, 0, target_idx))
+        segment = predicted[: target_idx + 1, 2]
+        adjusted_segment = blend_tail_toward_target(segment, tail_start, target_z)
+        predicted[: target_idx + 1, 2] = adjusted_segment
+        predicted[:, 2] = enforce_non_increasing(predicted[:, 2])
+        predicted[target_idx, 2] = target_z
 
     measured_lookup = {int(m["frame"]): m for m in relevant}
     series: list[dict[str, float | int | str]] = []
@@ -843,6 +895,7 @@ def process_video(
     missing_frames = 0
     impact_frame_idx: int | None = None
     impact_time: float | None = None
+    impact_ball_z: float | None = None
     # Tracking of last detected ball position and velocity
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
@@ -922,6 +975,7 @@ def process_video(
                             if impact_frame_idx is None and speed >= IMPACT_SPEED_THRESHOLD_PX:
                                 impact_frame_idx = frame_idx
                                 impact_time = t
+                                impact_ball_z = bz
                         last_ball_center = center
                         last_ball_radius = rad
                         detected_center = (cx, cy, rad)
@@ -1100,12 +1154,14 @@ def process_video(
     if impact_frame_idx is None:
         sticker_cutoff_frame = inference_end
     else:
-        sticker_cutoff_frame = min(impact_frame_idx, inference_end)
+        sticker_cutoff_frame = min(impact_frame_idx + 1, inference_end)
     sticker_series = predict_sticker_series(
         sticker_measurements,
         inference_start,
         sticker_cutoff_frame,
         video_fps,
+        impact_frame=impact_frame_idx,
+        impact_ball_z=impact_ball_z,
     )
     if not sticker_series:
         raise RuntimeError("No sticker detected in the video")
