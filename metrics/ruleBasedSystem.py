@@ -1,6 +1,6 @@
 
 # from metric_output import return_metrics
-from .metric_output import return_metrics  # Use this until face angle can be accurately detected
+from metric_output import return_metrics  # Use this until face angle can be accurately detected
 
 import random
 
@@ -244,5 +244,5 @@ def rule_based_system(club_selection):
 # -------------------------------
 # Main function for testing
 # -------------------------------
-# if __name__ == "__main__":
-#     result = rule_based_system("mid-iron")
+if __name__ == "__main__":
+    result = rule_based_system("mid-iron")
