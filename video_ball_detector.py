@@ -335,15 +335,10 @@ def predict_sticker_series(
     *,
     impact_frame: int | None = None,
     impact_ball_z: float | None = None,
+    impact_ball_xy: tuple[float, float] | None = None,
+    impact_ball_radius: float | None = None,
     impact_z_offset: float = CLUB_IMPACT_Z_OFFSET,
 ) -> list[dict[str, float | int | str]]:
-    """Return per-frame sticker positions up to ``end_frame`` with gap filling.
-
-    When ``impact_frame``/``impact_ball_z`` are provided the extrapolated
-    geometry respects the ball height at impact (optionally nudged by
-    ``impact_z_offset``) by solving for the constant-acceleration motion that
-    bridges the last measured sticker pose and the desired impact height.
-    """
 
     if not measurements or start_frame >= end_frame:
         return []
@@ -375,37 +370,53 @@ def predict_sticker_series(
             coeffs = np.polyfit(times, positions[:, axis], deg=degree)
         models.append(coeffs)
 
-    z_override: dict[str, float] | None = None
-    if (
-        impact_frame is not None
-        and impact_ball_z is not None
-        and fps > 0.0
-        and relevant
-    ):
+    axis_overrides: dict[int, dict[str, float]] = {}
+    if impact_frame is not None and fps > 0.0 and relevant:
         target_time = impact_frame / fps
         last_idx = len(relevant) - 1
         last_time = times[last_idx]
-        if target_time - last_time > 1e-6:
-            last_z = positions[last_idx, 2]
+        duration = target_time - last_time
+        if duration > 1e-6:
+            last_position = positions[last_idx]
             if last_idx > 0:
                 prev_time = times[last_idx - 1]
-                prev_z = positions[last_idx - 1, 2]
                 dt = max(last_time - prev_time, 1e-6)
-                vz0 = (last_z - prev_z) / dt
+                last_velocity = (positions[last_idx] - positions[last_idx - 1]) / dt
             else:
-                vz0 = 0.0
-            duration = target_time - last_time
-            target_z = impact_ball_z + impact_z_offset
-            accel = 2.0 * (target_z - last_z - vz0 * duration) / (duration * duration)
-            z_override = {
-                "start_time": last_time,
-                "target_time": target_time,
-                "z0": last_z,
-                "vz0": vz0,
-                "duration": duration,
-                "accel": accel,
-                "target_z": target_z,
-            }
+                last_velocity = np.zeros(3, dtype=float)
+            target_xyz = np.array(
+                [float(np.polyval(models[axis], target_time)) for axis in range(3)],
+                dtype=float,
+            )
+            if impact_ball_xy is not None:
+                ball_center = np.array(impact_ball_xy, dtype=float)
+                ball_radius = (
+                    float(impact_ball_radius)
+                    if impact_ball_radius is not None
+                    else ACTUAL_BALL_RADIUS
+                )
+                ball_radius = max(ball_radius, 1e-3)
+                target_xyz[0] = float(
+                    np.clip(target_xyz[0], ball_center[0] - ball_radius, ball_center[0] + ball_radius)
+                )
+                target_xyz[1] = float(
+                    np.clip(target_xyz[1], ball_center[1] - ball_radius, ball_center[1] + ball_radius)
+                )
+            if impact_ball_z is not None:
+                target_xyz[2] = impact_ball_z + impact_z_offset
+            for axis in range(3):
+                if axis == 2 and impact_ball_z is None:
+                    continue
+                accel = 2.0 * (
+                    target_xyz[axis] - last_position[axis] - last_velocity[axis] * duration
+                ) / (duration * duration)
+                axis_overrides[axis] = {
+                    "start_time": last_time,
+                    "duration": duration,
+                    "pos0": last_position[axis],
+                    "vel0": last_velocity[axis],
+                    "accel": accel,
+                }
 
     measured_lookup = {m["frame"]: m for m in relevant}
     series = []
@@ -416,14 +427,15 @@ def predict_sticker_series(
             xyz: list[float] = []
             for axis in range(3):
                 value = float(np.polyval(models[axis], time))
-                if axis == 2 and z_override is not None and time >= z_override["start_time"]:
-                    dt = time - z_override["start_time"]
+                override = axis_overrides.get(axis)
+                if override is not None and time >= override["start_time"]:
+                    dt = time - override["start_time"]
                     if dt >= 0.0:
-                        dt = min(dt, z_override["duration"])
+                        dt = min(dt, override["duration"])
                         value = (
-                            z_override["z0"]
-                            + z_override["vz0"] * dt
-                            + 0.5 * z_override["accel"] * dt * dt
+                            override["pos0"]
+                            + override["vel0"] * dt
+                            + 0.5 * override["accel"] * dt * dt
                         )
                 xyz.append(value)
             source = "predicted"
@@ -777,6 +789,7 @@ def process_video(
     impact_frame_idx: int | None = None
     impact_time: float | None = None
     impact_ball_z: float | None = None
+    impact_ball_xy: tuple[float, float] | None = None
     # Tracking of last detected ball position and velocity
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
@@ -857,6 +870,7 @@ def process_video(
                                 impact_frame_idx = frame_idx
                                 impact_time = t
                                 impact_ball_z = bz
+                                impact_ball_xy = (bx, by)
                         last_ball_center = center
                         last_ball_radius = rad
                         detected_center = (cx, cy, rad)
@@ -1043,6 +1057,8 @@ def process_video(
         video_fps,
         impact_frame=impact_frame_idx,
         impact_ball_z=impact_ball_z,
+        impact_ball_xy=impact_ball_xy,
+        impact_ball_radius=ACTUAL_BALL_RADIUS,
     )
     if not sticker_series:
         raise RuntimeError("No sticker detected in the video")
