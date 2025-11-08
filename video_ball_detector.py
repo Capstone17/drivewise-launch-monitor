@@ -32,9 +32,6 @@ MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
 MOTION_WINDOW_FRAMES = 40  # number of frames kept in the motion window
 IMPACT_SPEED_THRESHOLD_PX = 6.0  # pixel distance that marks ball movement
-RIGHT_SIDE_AFFINITY_FRAMES = 7
-RIGHT_SIDE_AFFINITY_SLOW_FACTOR = 0.0002
-RIGHT_SIDE_AFFINITY_EPS = 1e-3
 
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
     "1",
@@ -456,38 +453,7 @@ def predict_sticker_series(
                 "source": source,
             }
         )
-    apply_right_side_affinity(series, impact_frame, impact_ball_xy)
     return series
-
-
-def apply_right_side_affinity(
-    series: list[dict[str, float | int | str]],
-    impact_frame: int | None,
-    impact_ball_xy: tuple[float, float] | None,
-) -> None:
-    """Bias predicted club motion to hug the right side of the ball near impact."""
-
-    if (
-        not series
-        or impact_frame is None
-        or impact_ball_xy is None
-        or RIGHT_SIDE_AFFINITY_FRAMES <= 0
-    ):
-        return
-    start_frame = impact_frame - RIGHT_SIDE_AFFINITY_FRAMES
-    ball_x = float(impact_ball_xy[0])
-        if entry.get("source") != "predicted":
-            continue
-        frame_idx = int(entry["frame"])
-        if frame_idx < start_frame or frame_idx >= impact_frame:
-            continue
-        x_val = float(entry["x"])
-        if x_val <= ball_x + RIGHT_SIDE_AFFINITY_EPS:
-            continue
-        frames_left = max(impact_frame - frame_idx, 1)
-        progression = RIGHT_SIDE_AFFINITY_FRAMES - frames_left + 1
-        slow_factor = RIGHT_SIDE_AFFINITY_SLOW_FACTOR ** progression
-        entry["x"] = ball_x + (x_val - ball_x) * slow_factor
 
 
 def annotate_interpolated_frames(
