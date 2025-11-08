@@ -2,6 +2,8 @@ import json
 import os
 import sys
 import time
+import warnings
+
 import cv2
 import numpy as np
 
@@ -28,9 +30,8 @@ BALL_SCORE_THRESHOLD = 0.4
 MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
-MOTION_WINDOW_FRAMES = 40  
-IMPACT_SPEED_THRESHOLD_PX = 6.0  
-CLUB_IMPACT_Z_MARGIN = 1.0  # club slightly furtuer away during the impact
+MOTION_WINDOW_FRAMES = 40  # number of frames kept in the motion window
+IMPACT_SPEED_THRESHOLD_PX = 6.0  # pixel distance that marks ball movement
 
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
     "1",
@@ -329,10 +330,8 @@ def predict_sticker_series(
     start_frame: int,
     end_frame: int,
     fps: float,
-    *,
-    impact_frame: int | None = None,
-    impact_ball_z: float | None = None,
 ) -> list[dict[str, float | int | str]]:
+    """Return per-frame sticker positions up to ``end_frame`` with gap filling."""
 
     if not measurements or start_frame >= end_frame:
         return []
@@ -341,223 +340,50 @@ def predict_sticker_series(
     if not relevant:
         return []
 
-    # Sort the measurements to guarantee monotonic time/frame order.
-    relevant.sort(key=lambda m: m["frame"])
+    first_frame = min(m["frame"] for m in relevant)
+    series_start = max(start_frame, first_frame)
+    if series_start >= end_frame:
+        return []
 
-    frames = np.array([int(m["frame"]) for m in relevant], dtype=int)
     times = np.array([float(m["time"]) for m in relevant], dtype=float)
     positions = np.stack([np.array(m["position"], dtype=float) for m in relevant])
 
-    if np.any(np.diff(times) < 0):
-        raise ValueError("Measurement times must be non-decreasing")
+    if times.size == 1:
+        degree = 0
+    elif times.size == 2:
+        degree = 1
+    else:
+        degree = 2  # capture acceleration
 
-    # Enforce monotonic decay along the Z axis at the measurement level.
-    positions[:, 2] = np.minimum.accumulate(positions[:, 2])
-
-    def estimate_slopes(sample_times: np.ndarray, points: np.ndarray) -> np.ndarray:
-        """Return per-sample velocity estimates derived from existing points."""
-
-        count = sample_times.size
-        slopes = np.zeros_like(points, dtype=float)
-        if count == 1:
-            return slopes
-        dt_forward = sample_times[1] - sample_times[0]
-        slopes[0] = (
-            (points[1] - points[0]) / dt_forward if dt_forward > 0.0 else 0.0
-        )
-        dt_backward = sample_times[-1] - sample_times[-2]
-        slopes[-1] = (
-            (points[-1] - points[-2]) / dt_backward if dt_backward > 0.0 else 0.0
-        )
-        for idx in range(1, count - 1):
-            span = sample_times[idx + 1] - sample_times[idx - 1]
-            if span <= 0.0:
-                slopes[idx] = slopes[idx - 1]
-            else:
-                slopes[idx] = (points[idx + 1] - points[idx - 1]) / span
-        return slopes
-
-    def evaluate_axis(
-        sample_times: np.ndarray,
-        values: np.ndarray,
-        slopes: np.ndarray,
-        query_times: np.ndarray,
-        fps: float,
-    ) -> np.ndarray:
-        """Evaluate Hermite interpolation with tailored extrapolation on the edges."""
-
-        result = np.empty_like(query_times)
-        if values.size == 1:
-            result.fill(values[0])
-            return result
-        before_mask = query_times < sample_times[0]
-        after_mask = query_times > sample_times[-1]
-        mid_mask = ~(before_mask | after_mask)
-        if np.any(before_mask):
-            dt = query_times[before_mask] - sample_times[0]
-            result[before_mask] = values[0] + slopes[0] * dt
-        if np.any(after_mask):
-            result[after_mask] = values[-1]
-        if np.any(mid_mask):
-            mids = query_times[mid_mask]
-            idx = np.searchsorted(sample_times, mids, side="right") - 1
-            idx = np.clip(idx, 0, sample_times.size - 2)
-            t0 = sample_times[idx]
-            t1 = sample_times[idx + 1]
-            h = t1 - t0
-            h = np.where(h == 0.0, 1e-6, h)
-            u = (mids - t0) / h
-            y0 = values[idx]
-            y1 = values[idx + 1]
-            m0 = slopes[idx]
-            m1 = slopes[idx + 1]
-            h00 = (2.0 * u**3) - (3.0 * u**2) + 1.0
-            h10 = (u**3) - (2.0 * u**2) + u
-            h01 = (-2.0 * u**3) + (3.0 * u**2)
-            h11 = (u**3) - (u**2)
-            result[mid_mask] = (
-                h00 * y0
-                + h10 * h * m0
-                + h01 * y1
-                + h11 * h * m1
-            )
-        return result
-
-    def enforce_non_increasing(values: np.ndarray) -> np.ndarray:
-        """Return a version of ``values`` that never rises as the index increases."""
-
-        if values.size == 0:
-            return values
-        return np.minimum.accumulate(values)
-
-    def blend_tail_toward_target(values: np.ndarray, start_idx: int, target: float) -> np.ndarray:
-        """Adjust the tail of ``values`` so that it smoothly lands on ``target``."""
-
-        if values.size == 0:
-            return values
-        corrected = values.copy()
-        start_idx = int(np.clip(start_idx, 0, corrected.size - 1))
-        tail = corrected[start_idx:]
-        if tail.size == 0:
-            return corrected
-        delta = tail[-1] - target
-        if abs(delta) < 1e-6:
-            return corrected
-        weights = np.linspace(0.0, 1.0, tail.size, endpoint=True)
-        corrected[start_idx:] = tail - delta * weights
-        return corrected
-
-    slopes = estimate_slopes(times, positions)
-    slopes[:, 2] = np.minimum(slopes[:, 2], 0.0)
-
-    frame_range = np.arange(max(start_frame, 0), end_frame, dtype=int)
-    if frame_range.size == 0:
-        return []
-    query_times = frame_range / fps
-
-    predicted = np.zeros((frame_range.size, 3), dtype=float)
+    models = []
     for axis in range(3):
-        predicted[:, axis] = evaluate_axis(
-            times,
-            positions[:, axis],
-            slopes[:, axis],
-            query_times,
-            fps,
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", np.RankWarning)
+            coeffs = np.polyfit(times, positions[:, axis], deg=degree)
+        models.append(coeffs)
 
-    after_mask = query_times > times[-1]
-    if np.any(after_mask):
-        def decelerating_vector_extrapolation(
-            sample_times: np.ndarray,
-            points: np.ndarray,
-            vel: np.ndarray,
-            targets: np.ndarray,
-            fps: float,
-        ) -> np.ndarray:
-            last_time = float(sample_times[-1])
-            last_pos = points[-1].astype(float)
-            last_vel = vel[-1].astype(float)
-            if sample_times.size >= 2:
-                prev_time = float(sample_times[-2])
-                prev_vel = vel[-2].astype(float)
-            else:
-                prev_time = last_time - max(1.0 / max(fps, 1e-6), 1e-3)
-                prev_vel = last_vel
-            base_dt = max(1.0 / max(fps, 1e-6), 1e-3)
-            dt_ref = max(last_time - prev_time, base_dt)
-            prev_speed = float(np.linalg.norm(prev_vel))
-            last_speed = float(np.linalg.norm(last_vel))
-            if prev_speed < 1e-6 and last_speed < 1e-6:
-                return np.repeat(last_pos[None, :], targets.size, axis=0)
-            if prev_speed < 1e-6:
-                prev_speed = max(last_speed, 1.0)
-            ratio = float(last_speed / max(prev_speed, 1e-6))
-            if not np.isfinite(ratio) or ratio <= 0.0:
-                ratio = 0.5
-            ratio = min(ratio, 0.999)
-            tau = dt_ref / max(-np.log(max(ratio, 1e-6)), 1e-6)
-            tau = float(np.clip(tau, 0.05, 1.5))
-            speed = last_speed if last_speed > 1e-6 else prev_speed
-            direction = last_vel if last_speed > 1e-6 else prev_vel
-            if np.linalg.norm(direction) < 1e-9:
-                direction = np.array([1.0, 0.0, 0.0], dtype=float)
-            direction = direction / max(np.linalg.norm(direction), 1e-9)
-            cursor_time = last_time
-            cursor_pos = last_pos.copy()
-            results = np.empty((targets.size, 3), dtype=float)
-            for idx, target in enumerate(targets):
-                target = float(target)
-                while cursor_time + 1e-9 < target:
-                    dt = min(base_dt, target - cursor_time)
-                    cursor_pos = cursor_pos + direction * speed * dt
-                    speed *= float(np.exp(-dt / tau))
-                    cursor_time += dt
-                    if speed <= 1e-6:
-                        speed = 0.0
-                        cursor_time = target
-                        break
-                results[idx] = cursor_pos
-            return results
-
-        predicted[after_mask, :] = decelerating_vector_extrapolation(
-            times,
-            positions,
-            slopes,
-            query_times[after_mask],
-            fps,
-        )
-
-    predicted[:, 2] = enforce_non_increasing(predicted[:, 2])
-
-    if impact_ball_z is not None and frame_range.size > 0:
-        target_idx = frame_range.size - 1
-        if impact_frame is not None:
-            target_idx = int(np.searchsorted(frame_range, impact_frame, side="right") - 1)
-            target_idx = int(np.clip(target_idx, 0, frame_range.size - 1))
-        target_z = float(impact_ball_z) + CLUB_IMPACT_Z_MARGIN
-        max_allowed = float(np.max(predicted[: target_idx + 1, 2]))
-        target_z = min(target_z, max_allowed)
-        last_measured_frame = int(frames[-1]) if frames.size > 0 else int(frame_range[0])
-        slice_for_anchor = frame_range[: target_idx + 1]
-        tail_start = int(np.searchsorted(slice_for_anchor, last_measured_frame, side="right"))
-        tail_start = int(np.clip(tail_start, 0, target_idx))
-        segment = predicted[: target_idx + 1, 2]
-        adjusted_segment = blend_tail_toward_target(segment, tail_start, target_z)
-        predicted[: target_idx + 1, 2] = adjusted_segment
-        predicted[:, 2] = enforce_non_increasing(predicted[:, 2])
-        predicted[target_idx, 2] = target_z
-
-    measured_lookup = {int(m["frame"]): m for m in relevant}
-    series: list[dict[str, float | int | str]] = []
-    for idx, frame in enumerate(frame_range):
+    measured_lookup = {m["frame"]: m for m in relevant}
+    series = []
+    for frame in range(series_start, end_frame):
+        time = frame / fps
+        measurement = measured_lookup.get(frame)
+        if measurement is None:
+            xyz = [
+                float(np.polyval(models[axis], time)) for axis in range(3)
+            ]
+            source = "predicted"
+        else:
+            pos = np.array(measurement["position"], dtype=float)
+            xyz = [float(pos[0]), float(pos[1]), float(pos[2])]
+            source = "measured"
         series.append(
             {
-                "frame": int(frame),
-                "time": float(query_times[idx]),
-                "x": float(predicted[idx, 0]),
-                "y": float(predicted[idx, 1]),
-                "z": float(predicted[idx, 2]),
-                "source": "measured" if frame in measured_lookup else "predicted",
+                "frame": frame,
+                "time": time,
+                "x": xyz[0],
+                "y": xyz[1],
+                "z": xyz[2],
+                "source": source,
             }
         )
     return series
@@ -895,7 +721,6 @@ def process_video(
     missing_frames = 0
     impact_frame_idx: int | None = None
     impact_time: float | None = None
-    impact_ball_z: float | None = None
     # Tracking of last detected ball position and velocity
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
@@ -975,7 +800,6 @@ def process_video(
                             if impact_frame_idx is None and speed >= IMPACT_SPEED_THRESHOLD_PX:
                                 impact_frame_idx = frame_idx
                                 impact_time = t
-                                impact_ball_z = bz
                         last_ball_center = center
                         last_ball_radius = rad
                         detected_center = (cx, cy, rad)
@@ -1154,14 +978,12 @@ def process_video(
     if impact_frame_idx is None:
         sticker_cutoff_frame = inference_end
     else:
-        sticker_cutoff_frame = min(impact_frame_idx + 1, inference_end)
+        sticker_cutoff_frame = min(impact_frame_idx, inference_end)
     sticker_series = predict_sticker_series(
         sticker_measurements,
         inference_start,
         sticker_cutoff_frame,
         video_fps,
-        impact_frame=impact_frame_idx,
-        impact_ball_z=impact_ball_z,
     )
     if not sticker_series:
         raise RuntimeError("No sticker detected in the video")
