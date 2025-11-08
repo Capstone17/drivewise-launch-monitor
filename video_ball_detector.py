@@ -75,6 +75,23 @@ MAX_TRANSLATION_DELTA = 30.0  # translation jump threshold
 MAX_ROTATION_DELTA = 45.0  # degrees
 
 CLUB_IMPACT_Z_OFFSET = float(os.environ.get("CLUB_IMPACT_Z_OFFSET", "0.0"))
+try:
+    _club_slowdown_frames_env = int(os.environ.get("CLUB_X_SLOWDOWN_FRAMES", "6"))
+except ValueError:
+    _club_slowdown_frames_env = 6
+CLUB_X_SLOWDOWN_FRAMES = max(1, _club_slowdown_frames_env)
+
+try:
+    _club_slowdown_power_env = float(os.environ.get("CLUB_X_SLOWDOWN_POWER", "3.0"))
+except ValueError:
+    _club_slowdown_power_env = 3.0
+CLUB_X_SLOWDOWN_POWER = max(1.0, _club_slowdown_power_env)
+
+try:
+    _club_slowdown_scale_env = float(os.environ.get("CLUB_X_SLOWDOWN_SCALE", "1.0"))
+except ValueError:
+    _club_slowdown_scale_env = 1.0
+CLUB_X_SLOWDOWN_SCALE = min(1.0, max(0.0, _club_slowdown_scale_env))
 
 
 def bbox_to_ball_metrics(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
@@ -325,6 +342,35 @@ def quat_to_rvec(q: np.ndarray) -> np.ndarray:
     R = quat_to_rotmat(q)
     rvec, _ = cv2.Rodrigues(R)
     return rvec
+
+
+def apply_club_x_slowdown(
+    series: list[dict[str, float | int | str]],
+    *,
+    frames: int = CLUB_X_SLOWDOWN_FRAMES,
+    ease_power: float = CLUB_X_SLOWDOWN_POWER,
+    scale: float = CLUB_X_SLOWDOWN_SCALE,
+) -> None:
+    """Flatten X movement for the final ``frames`` entries by easing toward the start of that window."""
+
+    if not series or frames <= 0 or scale <= 0.0:
+        return
+    window = min(frames, len(series))
+    if window < 2:
+        return
+    start_idx = len(series) - window
+    anchor_x = float(series[start_idx]["x"])
+    denom = window - 1
+    for offset in range(window):
+        idx = start_idx + offset
+        orig_x = float(series[idx]["x"])
+        if denom > 0:
+            progress = max(0.0, min(1.0, offset / denom))
+        else:
+            progress = 1.0
+        eased = pow(progress, ease_power)
+        clamp = max(0.0, min(1.0, 1.0 - scale * eased))
+        series[idx]["x"] = anchor_x + (orig_x - anchor_x) * clamp
 
 
 def predict_sticker_series(
@@ -1062,6 +1108,7 @@ def process_video(
     )
     if not sticker_series:
         raise RuntimeError("No sticker detected in the video")
+    apply_club_x_slowdown(sticker_series)
     sticker_coords = [
         {
             "time": round(entry["time"], 3),
