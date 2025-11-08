@@ -74,8 +74,6 @@ MAX_REPROJECTION_ERROR = 2.0  # pixels
 MAX_TRANSLATION_DELTA = 30.0  # translation jump threshold
 MAX_ROTATION_DELTA = 45.0  # degrees
 
-CLUB_IMPACT_Z_OFFSET = float(os.environ.get("CLUB_IMPACT_Z_OFFSET", "0.0"))
-
 
 def bbox_to_ball_metrics(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
     """Return center, radius and distance estimates for a bounding box."""
@@ -332,24 +330,13 @@ def predict_sticker_series(
     start_frame: int,
     end_frame: int,
     fps: float,
-    *,
-    impact_frame: int | None = None,
-    impact_ball_z: float | None = None,
-    impact_z_offset: float = CLUB_IMPACT_Z_OFFSET,
 ) -> list[dict[str, float | int | str]]:
-    """Return per-frame sticker positions up to ``end_frame`` with gap filling.
-
-    When ``impact_frame``/``impact_ball_z`` are provided the extrapolated
-    geometry respects the ball height at impact (optionally nudged by
-    ``impact_z_offset``) by solving for the constant-acceleration motion that
-    bridges the last measured sticker pose and the desired impact height.
-    """
+    """Return per-frame sticker positions up to ``end_frame`` with gap filling."""
 
     if not measurements or start_frame >= end_frame:
         return []
 
     relevant = [m for m in measurements if m["frame"] < end_frame]
-    relevant.sort(key=lambda m: m["frame"])
     if not relevant:
         return []
 
@@ -375,57 +362,15 @@ def predict_sticker_series(
             coeffs = np.polyfit(times, positions[:, axis], deg=degree)
         models.append(coeffs)
 
-    z_override: dict[str, float] | None = None
-    if (
-        impact_frame is not None
-        and impact_ball_z is not None
-        and fps > 0.0
-        and relevant
-    ):
-        target_time = impact_frame / fps
-        last_idx = len(relevant) - 1
-        last_time = times[last_idx]
-        if target_time - last_time > 1e-6:
-            last_z = positions[last_idx, 2]
-            if last_idx > 0:
-                prev_time = times[last_idx - 1]
-                prev_z = positions[last_idx - 1, 2]
-                dt = max(last_time - prev_time, 1e-6)
-                vz0 = (last_z - prev_z) / dt
-            else:
-                vz0 = 0.0
-            duration = target_time - last_time
-            target_z = impact_ball_z + impact_z_offset
-            accel = 2.0 * (target_z - last_z - vz0 * duration) / (duration * duration)
-            z_override = {
-                "start_time": last_time,
-                "target_time": target_time,
-                "z0": last_z,
-                "vz0": vz0,
-                "duration": duration,
-                "accel": accel,
-                "target_z": target_z,
-            }
-
     measured_lookup = {m["frame"]: m for m in relevant}
     series = []
     for frame in range(series_start, end_frame):
         time = frame / fps
         measurement = measured_lookup.get(frame)
         if measurement is None:
-            xyz: list[float] = []
-            for axis in range(3):
-                value = float(np.polyval(models[axis], time))
-                if axis == 2 and z_override is not None and time >= z_override["start_time"]:
-                    dt = time - z_override["start_time"]
-                    if dt >= 0.0:
-                        dt = min(dt, z_override["duration"])
-                        value = (
-                            z_override["z0"]
-                            + z_override["vz0"] * dt
-                            + 0.5 * z_override["accel"] * dt * dt
-                        )
-                xyz.append(value)
+            xyz = [
+                float(np.polyval(models[axis], time)) for axis in range(3)
+            ]
             source = "predicted"
         else:
             pos = np.array(measurement["position"], dtype=float)
@@ -776,7 +721,6 @@ def process_video(
     missing_frames = 0
     impact_frame_idx: int | None = None
     impact_time: float | None = None
-    impact_ball_z: float | None = None
     # Tracking of last detected ball position and velocity
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
@@ -856,7 +800,6 @@ def process_video(
                             if impact_frame_idx is None and speed >= IMPACT_SPEED_THRESHOLD_PX:
                                 impact_frame_idx = frame_idx
                                 impact_time = t
-                                impact_ball_z = bz
                         last_ball_center = center
                         last_ball_radius = rad
                         detected_center = (cx, cy, rad)
@@ -1041,8 +984,6 @@ def process_video(
         inference_start,
         sticker_cutoff_frame,
         video_fps,
-        impact_frame=impact_frame_idx,
-        impact_ball_z=impact_ball_z,
     )
     if not sticker_series:
         raise RuntimeError("No sticker detected in the video")
