@@ -351,7 +351,6 @@ def apply_club_x_slowdown(
     ease_power: float = CLUB_X_SLOWDOWN_POWER,
     scale: float = CLUB_X_SLOWDOWN_SCALE,
 ) -> None:
-    """Flatten X movement for the final ``frames`` entries by easing toward the start of that window."""
 
     if not series or frames <= 0 or scale <= 0.0:
         return
@@ -359,18 +358,21 @@ def apply_club_x_slowdown(
     if window < 2:
         return
     start_idx = len(series) - window
-    anchor_x = float(series[start_idx]["x"])
+    original = [float(series[start_idx + i]["x"]) for i in range(window)]
+    slowed_x = original[0]
+    series[start_idx]["x"] = slowed_x
     denom = window - 1
-    for offset in range(window):
+    for offset in range(1, window):
         idx = start_idx + offset
-        orig_x = float(series[idx]["x"])
+        orig_delta = original[offset] - original[offset - 1]
         if denom > 0:
             progress = max(0.0, min(1.0, offset / denom))
         else:
             progress = 1.0
-        eased = pow(progress, ease_power)
-        clamp = max(0.0, min(1.0, 1.0 - scale * eased))
-        series[idx]["x"] = anchor_x + (orig_x - anchor_x) * clamp
+        easing = pow(progress, ease_power)
+        slowdown = max(0.0, min(1.0, 1.0 - scale * easing))
+        slowed_x += orig_delta * slowdown
+        series[idx]["x"] = slowed_x
 
 
 def predict_sticker_series(
