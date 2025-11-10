@@ -440,25 +440,6 @@ class SwingAnalysisCharacteristic(Characteristic):
         self.service.camera_event.clear()
         logger.info("Capture loop ended and event cleared")
 
-class GenerateFeedbackCharacteristic(Characteristic):
-    uuid = "2c58a217-0a9b-445f-adac-0b37bd8635c3"
-    description = b"Generate feedback based on swing metrics!"
-
-    def __init__(self, bus, index, service):
-        Characteristic.__init__(
-            self, bus, index, self.uuid, ["read"], service,
-        )
-        self.value = self.service.shared_data["feedback"]
-        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 1, self))
-        logger.debug("Entered generatefeedback characteristic")
-
-
-    def ReadValue(self, options):
-        # take text from json file that has feedback
-        self.value = self.service.shared_data["feedback"]
-        logger.debug("sending feedback based on metrics: " + repr(self.value))
-        result_bytes = json.dumps(self.value).encode('utf-8')
-        return [dbus.Byte(b) for b in result_bytes]
     
 class FindIPCharacteristic(Characteristic):
     uuid = "2c75511d-11b8-407d-b275-a295ef2c199f"
