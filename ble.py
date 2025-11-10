@@ -361,13 +361,13 @@ class Agent(dbus.service.Object):
         # if self.exit_on_release:
         #   mainloop.quit()
 
-    @dbus.service.method(AGENT_INTERFACE, in_signature="os", out_signature="")
-    def AuthorizeService(self, device, uuid):
-        logger.info("AuthorizeService (%s, %s)" % (device, uuid))
-        authorize = ask("Authorize connection (yes/no): ")
-        if authorize == "yes":
-            return
-        raise Rejected("Connection rejected by user")
+    # @dbus.service.method(AGENT_INTERFACE, in_signature="os", out_signature="")
+    # def AuthorizeService(self, device, uuid):
+    #     logger.info("AuthorizeService (%s, %s)" % (device, uuid))
+    #     authorize = ask("Authorize connection (yes/no): ")
+    #     if authorize == "yes":
+    #         return
+    #     raise Rejected("Connection rejected by user")
 
     @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="s")
     def RequestPinCode(self, device):
@@ -390,14 +390,14 @@ class Agent(dbus.service.Object):
     def DisplayPinCode(self, device, pincode):
         logger.info("DisplayPinCode (%s, %s)" % (device, pincode))
 
-    @dbus.service.method(AGENT_INTERFACE, in_signature="ou", out_signature="")
-    def RequestConfirmation(self, device, passkey):
-        logger.info("RequestConfirmation (%s, %06d)" % (device, passkey))
-        confirm = ask("Confirm passkey (yes/no): ")
-        if confirm == "yes":
-            set_trusted(device)
-            return
-        raise Rejected("Passkey doesn't match")
+    # @dbus.service.method(AGENT_INTERFACE, in_signature="ou", out_signature="")
+    # def RequestConfirmation(self, device, passkey):
+    #     logger.info("RequestConfirmation (%s, %06d)" % (device, passkey))
+    #     confirm = ask("Confirm passkey (yes/no): ")
+    #     if confirm == "yes":
+    #         set_trusted(device)
+    #         return
+    #     raise Rejected("Passkey doesn't match")
 
     @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="")
     def RequestAuthorization(self, device):
