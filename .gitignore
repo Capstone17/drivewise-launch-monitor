@@ -2,7 +2,7 @@
 venv/
 .venv/
 
-#Ignore test videos
+# Ignore test videos
 embedded/video.mp4
 demo_400_144_387_5000_700
 exposure_test/
