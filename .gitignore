@@ -11,6 +11,10 @@ Indoor_Sim_0807/
 oldTestVids/
 ball_frames/
 alphamapping/
+cctag_repo/
+cctag_binding/
+deps/
+third_party/
 
 # Ignore JSON files genereated by image detection
 stationary_sticker.json

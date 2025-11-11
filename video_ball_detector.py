@@ -3,9 +3,12 @@ import os
 import sys
 import time
 import warnings
+from typing import Sequence
 
 import cv2
 import numpy as np
+
+from cctag_binding import CCTagDetector
 
 try:
     from tflite_runtime.interpreter import Interpreter
@@ -51,18 +54,22 @@ _calib_data = np.load(_calib_path)
 CAMERA_MATRIX = _calib_data["camera_matrix"]
 DIST_COEFFS = _calib_data["dist_coeffs"]
 
-ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
-ARUCO_PARAMS = cv2.aruco.DetectorParameters()
-ARUCO_PARAMS.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-ARUCO_PARAMS.adaptiveThreshWinSizeMin = 3
-ARUCO_PARAMS.adaptiveThreshWinSizeMax = 53
-ARUCO_PARAMS.adaptiveThreshWinSizeStep = 4
-ARUCO_PARAMS.minMarkerPerimeterRate = 0.02
-ARUCO_PARAMS.polygonalApproxAccuracyRate = 0.03
-ARUCO_PARAMS.cornerRefinementWinSize = 7
-ARUCO_PARAMS.cornerRefinementMinAccuracy = 0.01
-ARUCO_PARAMS.adaptiveThreshConstant = 7
-
+CCTAG_PARAM_FILE = os.environ.get("CCTAG_PARAMS_PATH", "")
+CCTAG_BANK_FILE = os.environ.get("CCTAG_BANK_PATH", "")
+CCTAG_RINGS = int(os.environ.get("CCTAG_RINGS", "3"))
+CCTAG_CANONICAL_DIAMETER = 200.0
+CCTAG_VALID_STATUS = 1
+CCTAG_SCALE = DYNAMIC_MARKER_LENGTH / CCTAG_CANONICAL_DIAMETER
+CCTAG_CANONICAL_HALF = CCTAG_CANONICAL_DIAMETER / 2.0
+CCTAG_OBJECT_POINTS = np.array(
+    [
+        [-DYNAMIC_MARKER_LENGTH / 2.0, -DYNAMIC_MARKER_LENGTH / 2.0, 0.0],
+        [DYNAMIC_MARKER_LENGTH / 2.0, -DYNAMIC_MARKER_LENGTH / 2.0, 0.0],
+        [DYNAMIC_MARKER_LENGTH / 2.0, DYNAMIC_MARKER_LENGTH / 2.0, 0.0],
+        [-DYNAMIC_MARKER_LENGTH / 2.0, DYNAMIC_MARKER_LENGTH / 2.0, 0.0],
+    ],
+    dtype=np.float32,
+)
 DYNAMIC_ID = 0
 
 MAX_MISSING_FRAMES = 12
@@ -104,6 +111,60 @@ def bbox_within_image(
         and x2 < width - margin
         and y2 < height - margin
     )
+
+
+def pose_from_cctag_homography(homography: Sequence[float]) -> tuple[np.ndarray, np.ndarray]:
+    """Convert a CCTag homography (image->canonical) into rotation and translation."""
+
+    H = np.asarray(homography, dtype=np.float64).reshape(3, 3)
+    if not np.all(np.isfinite(H)):
+        raise ValueError("Homography contains non-finite values")
+    det = float(np.linalg.det(H))
+    if abs(det) < 1e-9:
+        raise ValueError("Singular homography")
+    H_inv = np.linalg.inv(H)
+    K_inv = np.linalg.inv(CAMERA_MATRIX)
+    h1 = K_inv @ H_inv[:, 0]
+    h2 = K_inv @ H_inv[:, 1]
+    h3 = K_inv @ H_inv[:, 2]
+    norm = 1.0 / np.linalg.norm(h1)
+    r1 = norm * h1
+    r2 = norm * h2
+    r3 = np.cross(r1, r2)
+    R = np.column_stack((r1, r2, r3))
+    U, _, Vt = np.linalg.svd(R)
+    R = U @ Vt
+    if np.linalg.det(R) < 0:
+        R[:, 2] *= -1.0
+    t = norm * h3 * CCTAG_SCALE
+    rvec, _ = cv2.Rodrigues(R.astype(np.float64))
+    return rvec.reshape(3), t.reshape(3)
+
+
+def project_cctag_corners(homography: Sequence[float]) -> np.ndarray:
+    """Project canonical square corners into image space."""
+
+    H = np.asarray(homography, dtype=np.float64).reshape(3, 3)
+    det = float(np.linalg.det(H))
+    if abs(det) < 1e-9:
+        raise ValueError("Singular homography")
+    H_inv = np.linalg.inv(H)
+    canonical = np.array(
+        [
+            [-CCTAG_CANONICAL_HALF, -CCTAG_CANONICAL_HALF, 1.0],
+            [CCTAG_CANONICAL_HALF, -CCTAG_CANONICAL_HALF, 1.0],
+            [CCTAG_CANONICAL_HALF, CCTAG_CANONICAL_HALF, 1.0],
+            [-CCTAG_CANONICAL_HALF, CCTAG_CANONICAL_HALF, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    projected = []
+    for pt in canonical:
+        res = H_inv @ pt
+        if abs(res[2]) < 1e-9:
+            raise ValueError("Invalid homography projection")
+        projected.append((res[0] / res[2], res[1] / res[2]))
+    return np.asarray(projected, dtype=np.float32)
 
 
 def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -692,7 +753,7 @@ def process_video(
     )
 
     sticker_compile_start = time.perf_counter()
-    aruco_detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
+    cctag_detector = CCTagDetector(CCTAG_RINGS, CCTAG_PARAM_FILE, CCTAG_BANK_FILE)
     sticker_compile_time = time.perf_counter() - sticker_compile_start
 
     cap = cv2.VideoCapture(video_path)
@@ -716,8 +777,8 @@ def process_video(
     saved_frame_paths: dict[int, str] = {}
     last_dynamic_rt = None
     last_dynamic_quat = None
-    tracker_corners = None
-    prev_gray = None
+    tracker_corners: np.ndarray | None = None
+    prev_gray: np.ndarray | None = None
     missing_frames = 0
     impact_frame_idx: int | None = None
     impact_time: float | None = None
@@ -820,70 +881,68 @@ def process_video(
         allow_sticker = impact_frame_idx is None or frame_idx < impact_frame_idx
         if allow_sticker:
             sticker_start = time.perf_counter()
-            corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
+            marker_candidates = cctag_detector.detect(marker_gray)
             sticker_time += time.perf_counter() - sticker_start
             current_rt = None
             current_quat = None
             current_position: np.ndarray | None = None
-            dynamic_corner = None
-            if ids is not None and len(ids) > 0:
-                valid = [
-                    corners[i]
-                    for i in range(len(ids))
-                    if ids[i][0] == DYNAMIC_ID
-                ]
-                if valid:
-                    valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
-                    cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
-                    for corner in valid:
-                        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                            [corner],
-                            DYNAMIC_MARKER_LENGTH,
-                            CAMERA_MATRIX,
-                            DIST_COEFFS,
-                        )
-                        rvec = rvecs[0, 0]
-                        # Flatten the translation vector to a 1D array for
-                        # consistency with solvePnP outputs.
-                        tvec = tvecs[0, 0].reshape(3)
-                        curr_q = rvec_to_quat(rvec)
-                        if last_dynamic_rt is not None:
-                            prev_q = rvec_to_quat(last_dynamic_rt[0])
-                            if np.dot(curr_q, prev_q) < 0.0:
-                                curr_q = -curr_q
-                                rvec = quat_to_rvec(curr_q)
-                        current_rt = (rvec, tvec)
-                        current_quat = curr_q
-                        current_position = np.array(tvec, dtype=float)
-                        dynamic_corner = corner
-                        cv2.drawFrameAxes(
-                            frame,
-                            CAMERA_MATRIX,
-                            DIST_COEFFS,
-                            rvec,
-                            tvec,
-                            DYNAMIC_MARKER_LENGTH * 0.5,
-                            2,
-                        )
-            if current_rt is None and tracker_corners is not None and prev_gray is not None:
-                new_corners, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
-                if st.sum() == 4:
-                    object_pts = np.array(
-                        [
-                            [0.0, 0.0, 0.0],
-                            [DYNAMIC_MARKER_LENGTH, 0.0, 0.0],
-                            [DYNAMIC_MARKER_LENGTH, DYNAMIC_MARKER_LENGTH, 0.0],
-                            [0.0, DYNAMIC_MARKER_LENGTH, 0.0],
-                        ],
-                        dtype=np.float32,
+
+            best_marker = None
+            best_score = float("-inf")
+            for marker in marker_candidates:
+                if marker.get("status") != CCTAG_VALID_STATUS:
+                    continue
+                if DYNAMIC_ID is not None and marker.get("id") != DYNAMIC_ID:
+                    continue
+                quality = float(marker.get("quality", 0.0))
+                if quality > best_score:
+                    best_score = quality
+                    best_marker = marker
+
+            if best_marker is not None:
+                try:
+                    rvec, tvec = pose_from_cctag_homography(best_marker["homography"])
+                except (ValueError, KeyError):
+                    current_rt = None
+                else:
+                    curr_q = rvec_to_quat(rvec)
+                    if last_dynamic_rt is not None:
+                        prev_q = rvec_to_quat(last_dynamic_rt[0])
+                        if np.dot(curr_q, prev_q) < 0.0:
+                            curr_q = -curr_q
+                            rvec = quat_to_rvec(curr_q)
+                    current_rt = (rvec, tvec)
+                    current_quat = curr_q
+                    current_position = np.array(tvec, dtype=float)
+                    cv2.drawFrameAxes(
+                        frame,
+                        CAMERA_MATRIX,
+                        DIST_COEFFS,
+                        rvec.reshape(3, 1),
+                        tvec.reshape(3, 1),
+                        DYNAMIC_MARKER_LENGTH * 0.5,
+                        2,
                     )
+                    try:
+                        projected = project_cctag_corners(best_marker["homography"])
+                    except ValueError:
+                        tracker_corners = None
+                        prev_gray = None
+                    else:
+                        tracker_corners = projected.reshape(4, 1, 2).astype(np.float32)
+                        prev_gray = marker_gray.copy()
+
+            if current_rt is None and tracker_corners is not None and prev_gray is not None:
+                new_corners, status, _ = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
+                if status is not None and int(status.sum()) == 4:
                     ok, rvec, tvec = cv2.solvePnP(
-                        object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
+                        CCTAG_OBJECT_POINTS,
+                        new_corners.reshape(-1, 2),
+                        CAMERA_MATRIX,
+                        DIST_COEFFS,
+                        flags=cv2.SOLVEPNP_ITERATIVE,
                     )
                     if ok:
-                        # ``solvePnP`` returns a column vector; flatten it so that the
-                        # rest of the pipeline always works with a 1D translation
-                        # vector.
                         tvec = tvec.reshape(3)
                         curr_q = rvec_to_quat(rvec)
                         if last_dynamic_rt is not None:
@@ -891,18 +950,17 @@ def process_video(
                             if np.dot(curr_q, prev_q) < 0.0:
                                 curr_q = -curr_q
                                 rvec = quat_to_rvec(curr_q)
-
-                        # Reprojection error check
                         reproj, _ = cv2.projectPoints(
-                            object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS
+                            CCTAG_OBJECT_POINTS,
+                            rvec,
+                            tvec,
+                            CAMERA_MATRIX,
+                            DIST_COEFFS,
                         )
                         reproj_err = np.linalg.norm(
                             new_corners.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
                         ).mean()
-
                         pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
-
-                        # Motion delta check
                         if pose_ok and last_dynamic_rt is not None:
                             trans_delta = np.linalg.norm(tvec - last_dynamic_rt[1])
                             ang_delta = 0.0
@@ -918,7 +976,6 @@ def process_video(
                                 or ang_delta > MAX_ROTATION_DELTA
                             ):
                                 pose_ok = False
-
                         if pose_ok:
                             current_rt = (rvec, tvec)
                             current_quat = curr_q
@@ -927,8 +984,8 @@ def process_video(
                                 frame,
                                 CAMERA_MATRIX,
                                 DIST_COEFFS,
-                                rvec,
-                                tvec,
+                                rvec.reshape(3, 1),
+                                tvec.reshape(3, 1),
                                 DYNAMIC_MARKER_LENGTH * 0.5,
                                 2,
                             )
@@ -937,15 +994,14 @@ def process_video(
                             current_quat = None
                             current_position = None
                     tracker_corners = new_corners
-                    prev_gray = marker_gray
+                    prev_gray = marker_gray.copy()
                 else:
                     tracker_corners = None
                     prev_gray = None
+
             if current_rt is None:
                 missing_frames += 1
                 if missing_frames > MAX_MISSING_FRAMES:
-                    tracker_corners = None
-                    prev_gray = None
                     last_dynamic_rt = None
                     last_dynamic_quat = None
                     missing_frames = 0
@@ -960,10 +1016,10 @@ def process_video(
                 )
                 last_dynamic_rt = current_rt
                 last_dynamic_quat = current_quat
-                if dynamic_corner is not None:
-                    tracker_corners = dynamic_corner.reshape(4, 1, 2).astype(np.float32)
-                prev_gray = marker_gray
         else:
+            missing_frames = 0
+            last_dynamic_rt = None
+            last_dynamic_quat = None
             tracker_corners = None
             prev_gray = None
 
