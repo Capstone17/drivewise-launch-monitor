@@ -1176,15 +1176,19 @@ def process_video(
     if not sticker_series:
         raise RuntimeError("No sticker detected in the video")
     apply_club_x_slowdown(sticker_series)
-    sticker_coords = [
-        {
-            "time": round(entry["time"], 3),
-            "x": round(float(entry["x"]), 2),
-            "y": round(float(entry["y"]), 2),
-            "z": round(float(entry["z"]), 2),
-        }
-        for entry in sticker_series
-    ]
+    sticker_coords = []
+    for entry in sticker_series:
+        source = str(entry.get("source", "predicted"))
+        label = "measured" if source == "measured" else "extrapolated"
+        sticker_coords.append(
+            {
+                "time": round(entry["time"], 3),
+                "x": round(float(entry["x"]), 2),
+                "y": round(float(entry["y"]), 2),
+                "z": round(float(entry["z"]), 2),
+                "label": label,
+            }
+        )
     if frames_dir:
         annotate_interpolated_frames(
             saved_frame_paths,
