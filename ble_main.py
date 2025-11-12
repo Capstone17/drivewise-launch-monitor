@@ -720,7 +720,7 @@ def main():
     )
 
     agent_manager = dbus.Interface(obj, "org.bluez.AgentManager1")
-    agent_manager.RegisterAgent(AGENT_PATH, "DisplayYesNo")
+    agent_manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
 
     # Make sure Bluetooth is not pairable
     subprocess.run(["bluetoothctl", "pairable", "off"])
