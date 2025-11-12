@@ -450,7 +450,7 @@ class FindIPCharacteristic(Characteristic):
             self, bus, index, self.uuid, ["read"], service,
         )
         self.value = "IP Failed"
-        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 2, self))
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 1, self))
 
     def ReadValue(self, options):
         # 
@@ -468,7 +468,7 @@ class CalibrationCharacteristic(Characteristic):
             self, bus, index, self.uuid, ["write", "notify", "read"], service,
         )
         self.notifying = False
-        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 20, self))
 
     def WriteValue(self, value, options):
         logger.debug("received write command for ev calibration")
@@ -542,7 +542,7 @@ class BatteryMonitorCharacteristic(Characteristic):
             self, bus, index, self.uuid, ["read","notify"], service,
         )
         self.notifying = False
-        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 4, self))
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 40, self))
 
     def ReadValue(self, options):
         # 
