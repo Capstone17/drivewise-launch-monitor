@@ -137,8 +137,8 @@ class rpiService(Service):
         self.exposure = "200"
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
         self.add_characteristic(FindIPCharacteristic(bus, 1, self))
-        self.add_characteristic(CalibrationCharacteristic(bus, 2, self))
-        self.add_characteristic(BatteryMonitorCharacteristic(bus, 3, self))
+        # self.add_characteristic(CalibrationCharacteristic(bus, 2, self))
+        # self.add_characteristic(BatteryMonitorCharacteristic(bus, 3, self))
         self.add_characteristic(CancelSwingCharacteristic(bus, 4, self))
         # self.add_characteristic(PowerOffCharacteristic(bus, 3, self))
 
@@ -459,145 +459,145 @@ class FindIPCharacteristic(Characteristic):
         result_bytes = json.dumps(self.value).encode('utf-8')
         return [dbus.Byte(b) for b in result_bytes]
     
-class CalibrationCharacteristic(Characteristic):
-    uuid = "778c5d1a-315f-4baf-a23b-6429b84835e3"
-    description = b"Use to calibrate the exposure of the camera!"
+# class CalibrationCharacteristic(Characteristic):
+#     uuid = "778c5d1a-315f-4baf-a23b-6429b84835e3"
+#     description = b"Use to calibrate the exposure of the camera!"
 
-    def __init__(self, bus, index, service):
-        Characteristic.__init__(
-            self, bus, index, self.uuid, ["write", "notify", "read"], service,
-        )
-        self.notifying = False
-        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 20, self))
+#     def __init__(self, bus, index, service):
+#         Characteristic.__init__(
+#             self, bus, index, self.uuid, ["write", "notify", "read"], service,
+#         )
+#         self.notifying = False
+#         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 20, self))
 
-    def WriteValue(self, value, options):
-        logger.debug("received write command for ev calibration")
-        try: 
-            # Run calibration script
-            logger.debug("Began calibration function")
-            self.service.exposure = calibrate_exposure()
-            logger.info(f"Exposure from calibration: {self.service.exposure}")
-            # Run config script
-            logger.debug("Calibration successful. Now running GS_config")
-            subprocess.run(
-                [
-                    "./embedded/GS_config.sh",
-                    # , If we want to specify width or height we should do so here
-                    "224", # Width
-                    "128"  # Height
-                ],
-                check=True,
-            )
-        except Exception as e:
-            logger.error(f"Calibration function failed: {e}")
-            if self.notifying:
-                self.notify_client()
+#     def WriteValue(self, value, options):
+#         logger.debug("received write command for ev calibration")
+#         try: 
+#             # Run calibration script
+#             logger.debug("Began calibration function")
+#             self.service.exposure = calibrate_exposure()
+#             logger.info(f"Exposure from calibration: {self.service.exposure}")
+#             # Run config script
+#             logger.debug("Calibration successful. Now running GS_config")
+#             subprocess.run(
+#                 [
+#                     "./embedded/GS_config.sh",
+#                     # , If we want to specify width or height we should do so here
+#                     "224", # Width
+#                     "128"  # Height
+#                 ],
+#                 check=True,
+#             )
+#         except Exception as e:
+#             logger.error(f"Calibration function failed: {e}")
+#             if self.notifying:
+#                 self.notify_client()
 
-        except subprocess.CalledProcessError as e:
-            logger.error(f"GS crop script failed: {e}")
-            if self.notifying:
-                self.notify_client()
+#         except subprocess.CalledProcessError as e:
+#             logger.error(f"GS crop script failed: {e}")
+#             if self.notifying:
+#                 self.notify_client()
 
-        else:
-            # This block runs only if try block completes without exception
-            logger.debug("Calibration and GS_Crop successful")
-            if self.notifying:
-                self.notify_client()
+#         else:
+#             # This block runs only if try block completes without exception
+#             logger.debug("Calibration and GS_Crop successful")
+#             if self.notifying:
+#                 self.notify_client()
 
-    def StartNotify(self):
-        if self.notifying:
-            logger.debug("Already notifying")
-            return
-        logger.debug("StartNotify called for ev calibration")
-        self.notifying = True
-        # self.notify_client()
+#     def StartNotify(self):
+#         if self.notifying:
+#             logger.debug("Already notifying")
+#             return
+#         logger.debug("StartNotify called for ev calibration")
+#         self.notifying = True
+#         # self.notify_client()
 
-    def StopNotify(self):
-        if not self.notifying:
-            logger.debug("Not currently notifying")
-            return
-        logger.debug("StopNotify called")
-        self.notifying = False
+#     def StopNotify(self):
+#         if not self.notifying:
+#             logger.debug("Not currently notifying")
+#             return
+#         logger.debug("StopNotify called")
+#         self.notifying = False
 
-    def notify_client(self):
-        if not self.notifying:
-            logger.debug("Not notifying, skipping notify_client")
-            return
+#     def notify_client(self):
+#         if not self.notifying:
+#             logger.debug("Not notifying, skipping notify_client")
+#             return
 
-        self.value = "Calibration complete!"
-        result_bytes = json.dumps(self.value).encode('utf-8')
-        logger.debug("Notifying values changed")
-        self.PropertiesChanged(
-        GATT_CHRC_IFACE,
-        {"Value": [dbus.Byte(b) for b in result_bytes]},
-        []
-        )
+#         self.value = "Calibration complete!"
+#         result_bytes = json.dumps(self.value).encode('utf-8')
+#         logger.debug("Notifying values changed")
+#         self.PropertiesChanged(
+#         GATT_CHRC_IFACE,
+#         {"Value": [dbus.Byte(b) for b in result_bytes]},
+#         []
+#         )
 
-class BatteryMonitorCharacteristic(Characteristic):
-    uuid = "a834f0f7-89cc-453b-8be4-2905d27344bf"
-    description = b"Regularly send the battery status to the app!"
+# class BatteryMonitorCharacteristic(Characteristic):
+#     uuid = "a834f0f7-89cc-453b-8be4-2905d27344bf"
+#     description = b"Regularly send the battery status to the app!"
 
-    def __init__(self, bus, index, service):
-        Characteristic.__init__(
-            self, bus, index, self.uuid, ["read","notify"], service,
-        )
-        self.notifying = False
-        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 40, self))
+#     def __init__(self, bus, index, service):
+#         Characteristic.__init__(
+#             self, bus, index, self.uuid, ["read","notify"], service,
+#         )
+#         self.notifying = False
+#         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 40, self))
 
-    def ReadValue(self, options):
-        # 
-        self.value = return_battery_power()
-        logger.debug("reading battery power: " + repr(self.value))
-        result_bytes = json.dumps(self.value).encode('utf-8')
-        return [dbus.Byte(b) for b in result_bytes]
+#     def ReadValue(self, options):
+#         # 
+#         self.value = return_battery_power()
+#         logger.debug("reading battery power: " + repr(self.value))
+#         result_bytes = json.dumps(self.value).encode('utf-8')
+#         return [dbus.Byte(b) for b in result_bytes]
 
-    def StartNotify(self):
-        if self.notifying:
-            logger.debug("Already notifying")
-            return
-        logger.debug("StartNotify called for battery monitor")
-        self.notifying = True
+#     def StartNotify(self):
+#         if self.notifying:
+#             logger.debug("Already notifying")
+#             return
+#         logger.debug("StartNotify called for battery monitor")
+#         self.notifying = True
 
-        self.value = return_battery_power()
-        self.notify_client()
+#         self.value = return_battery_power()
+#         self.notify_client()
 
-        # start periodic updates every 5 seconds
-        self.notify_timer = GLib.timeout_add_seconds(60, self.check_battery)
+#         # start periodic updates every 5 seconds
+#         self.notify_timer = GLib.timeout_add_seconds(60, self.check_battery)
 
-    def StopNotify(self):
-        if not self.notifying:
-            logger.debug("Not currently notifying")
-            return
-        logger.debug("StopNotify called")
-        self.notifying = False
+#     def StopNotify(self):
+#         if not self.notifying:
+#             logger.debug("Not currently notifying")
+#             return
+#         logger.debug("StopNotify called")
+#         self.notifying = False
 
-        # stop the periodic update
-        if self.notify_timer:
-            GLib.source_remove(self.notify_timer)
-            self.notify_timer = None
+#         # stop the periodic update
+#         if self.notify_timer:
+#             GLib.source_remove(self.notify_timer)
+#             self.notify_timer = None
 
-    def notify_client(self):
-        if not self.notifying:
-            logger.debug("Not notifying, skipping notify_client")
-            return
+#     def notify_client(self):
+#         if not self.notifying:
+#             logger.debug("Not notifying, skipping notify_client")
+#             return
 
-        result_bytes = json.dumps(self.value).encode('utf-8')
-        logger.debug("Notifying values changed")
-        self.PropertiesChanged(
-        GATT_CHRC_IFACE,
-        {"Value": [dbus.Byte(b) for b in result_bytes]},
-        []
-        )
+#         result_bytes = json.dumps(self.value).encode('utf-8')
+#         logger.debug("Notifying values changed")
+#         self.PropertiesChanged(
+#         GATT_CHRC_IFACE,
+#         {"Value": [dbus.Byte(b) for b in result_bytes]},
+#         []
+#         )
 
-    def check_battery(self):
-        if not self.notifying:
-            return False  # stops the GLib timer
+#     def check_battery(self):
+#         if not self.notifying:
+#             return False  # stops the GLib timer
 
-        self.value = return_battery_power()
-        logger.debug("Battery updated: %s", self.value)
-        self.notify_client()
+#         self.value = return_battery_power()
+#         logger.debug("Battery updated: %s", self.value)
+#         self.notify_client()
 
-        return True  # continue calling periodically
+#         return True  # continue calling periodically
     
 class CancelSwingCharacteristic(Characteristic):
     uuid = "8f1a5ff0-399b-4afe-9cb4-280c8310e388"
