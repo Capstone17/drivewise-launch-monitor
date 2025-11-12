@@ -695,7 +695,7 @@ def main():
 
     # powered property on the controller to on
     adapter_props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(1))
-    # adapter_props.Set("org.bluez.Adapter1", "Pairable", dbus.Boolean(0))
+    adapter_props.Set("org.bluez.Adapter1", "Pairable", dbus.Boolean(0))
 
 
     # Get manager objs
@@ -723,7 +723,7 @@ def main():
     agent_manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
 
     # Make sure Bluetooth is not pairable
-    # subprocess.run(["bluetoothctl", "pairable", "off"])
+    subprocess.run(["bluetoothctl", "bondable", "off"])
 
     ad_manager.RegisterAdvertisement(
         advertisement.get_path(),
