@@ -179,7 +179,8 @@ def rule_based_system(club_selection):
             "name": "Straight Draw",
             "category": "all",
             "severity": 3,
-            "condition": lambda f: f["face_straight"] and f["path_slight_right"],
+            "condition": lambda f:  (f["face_straight"] and f["path_slight_right"]) or
+                                    (f["face_slight_left"] and f["path_slight_right"]),
             "action": lambda: "Straight draw: A gentle rightward path with a square face is causing a draw. If your shot is landing too far left of the target, try slightly weakening your grip or evening out your path."
         },
         {
@@ -194,7 +195,8 @@ def rule_based_system(club_selection):
             "name": "Straight Fade",
             "category": "all",
             "severity": 3,
-            "condition": lambda f: f["face_straight"] and f["path_slight_left"],
+            "condition": lambda f:  (f["face_straight"] and f["path_slight_left"]) or
+                                    (f["face_slight_right"] and f["path_slight_left"]),
             "action": lambda: "Straight fade: A mild leftward path with a square face produces this fade. To straighten the shot, shift your path slightly more right."
         },
         {
@@ -295,4 +297,4 @@ def rule_based_system(club_selection):
 # Main function for testing
 # -------------------------------
 # if __name__ == "__main__":
-#    result = rule_based_system("mid-iron")
+#   result = rule_based_system("mid-iron")
