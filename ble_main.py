@@ -149,7 +149,7 @@ class SwingAnalysisCharacteristic(Characteristic):
 
     def __init__(self, bus, index, service):
         Characteristic.__init__(
-            self, bus, index, self.uuid, ["write", "notify"], service,
+            self, bus, index, self.uuid, ["write", "notify", "read"], service,
         )
         self.notifying = False
         # self.value = self.service.shared_data["metrics"] 
@@ -465,7 +465,7 @@ class CalibrationCharacteristic(Characteristic):
 
     def __init__(self, bus, index, service):
         Characteristic.__init__(
-            self, bus, index, self.uuid, ["write", "notify"], service,
+            self, bus, index, self.uuid, ["write", "notify", "read"], service,
         )
         self.notifying = False
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
