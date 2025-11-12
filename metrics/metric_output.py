@@ -1,9 +1,3 @@
-# NOTES ------------------------
-# - Error checks should be added for extreme angles
-# - For first frame of movement, more reliable methods could be found
-# ------------------------------
-
-
 from .metric_calculation import *
 
 from pathlib import Path
@@ -414,7 +408,8 @@ def savgol_velocity(json_path, polyorder=2):
     
     N = len(frames)
     if N < 3:
-        raise ValueError(f"Need at least 3 frames for Savitzky-Golay velocity. Got {N}.")
+        print(f"Need at least 3 frames for Savitzky-Golay velocity. Got {N}.")
+        return None, None, None
 
     # Extract arrays and convert time to float (in case stored as string)
     t_vals = np.array([f['time'] for f in frames])
@@ -455,6 +450,16 @@ def savgol_velocity(json_path, polyorder=2):
 # Find the metrics using ball data
 def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz) -> dict:
 
+    if (marker_dx is None) or (marker_dy is None) or (marker_dz is None):
+        print("Error: Club not detected, returning zero case")
+        return {
+        "face_angle": 0.00,
+        "swing_path": 0.00,
+        "attack_angle": 0.00,
+        "side_angle": 0.00,
+        "face_to_path": 0.00
+        }
+
     swing_path = horizontal_movement_angle_from_rates(marker_dx, marker_dz)
     side_angle = horizontal_movement_angle_from_rates(ball_dx, ball_dy)
     face_angle = face_angle_calc(swing_path, side_angle)
@@ -473,23 +478,23 @@ def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz
     # - If any angles are very extreme, set them to zero
     # - This is worst-case scenario, and we don't want it to happen often!
     # ---------------------------------
-    
+    # Face-to-path should also be updated in this case
     if (abs(swing_path) > 25):
         print(f"Extreme swing path {swing_path}; using default of 0.00")
         swing_path = 0.00
+        face_to_path = face_angle - swing_path
     if (abs(side_angle) > 25):
         print(f"Extreme side angle {side_angle}; using default of 0.00")
         side_angle = 0.00
     # Face angle can be more extreme, but still check
+    # Face-to-path should also be updated in this case
     if (abs(face_angle) > 35):
         print(f"Extreme face angle {face_angle}; using default of 0.00")
         face_angle = 0.00
+        face_to_path = face_angle - swing_path
     if (abs(attack_angle) > 25):
         print(f"Extreme attack angle {attack_angle}; using default of 0.00")
         attack_angle = 0.00
-    if (abs(face_to_path) > 25):
-        print(f"Extreme face-to-path {face_to_path}; using default of 0.00")
-        face_to_path = 0.00
 
     return {
         "face_angle": face_angle,
