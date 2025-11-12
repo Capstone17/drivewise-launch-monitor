@@ -9,7 +9,6 @@ exposure_test/
 full_integration_vids/
 Indoor_Sim_0807/
 oldTestVids/
-ball_frames/
 alphamapping/
 
 # Ignore JSON files genereated by image detection
@@ -22,7 +21,7 @@ __pycache__/
 ball_coords.json
 stationary_sticker.json
 sticker_coords.json
-# ball_frames/
+ball_frames/
 
 # Ignore BLE logs
 *.log

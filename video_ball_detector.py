@@ -4,6 +4,18 @@ import sys
 import time
 import warnings
 
+warnings.filterwarnings(
+    "ignore",
+    message=r"Protobuf gencode version .* is exactly one major version older .*",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r".*tf\.lite\.Interpreter is deprecated.*",
+    category=UserWarning,
+    module=r"tensorflow(\.|$)",
+)
+
 import cv2
 import numpy as np
 
@@ -39,6 +51,21 @@ MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() 
     "yes",
 }
 
+try:  # NumPy < 2.0
+    POLYFIT_RANK_WARNING = np.RankWarning  # type: ignore[attr-defined]
+except AttributeError:  # NumPy >= 2.0
+    try:
+        from numpy.polynomial import polyutils as _polyutils
+
+        POLYFIT_RANK_WARNING = _polyutils.RankWarning
+    except (ImportError, AttributeError):
+        class _PolyfitRankWarning(RuntimeWarning):
+            """Fallback warning used when numpy.rankwarning is unavailable."""
+
+            pass
+
+        POLYFIT_RANK_WARNING = _PolyfitRankWarning
+
 try:
     _early_exit_env = int(os.environ.get("MOTION_WINDOW_EARLY_EXIT_MISSES", "0"))
 except ValueError:
@@ -62,6 +89,18 @@ ARUCO_PARAMS.polygonalApproxAccuracyRate = 0.03
 ARUCO_PARAMS.cornerRefinementWinSize = 7
 ARUCO_PARAMS.cornerRefinementMinAccuracy = 0.01
 ARUCO_PARAMS.adaptiveThreshConstant = 7
+
+_HAS_ARUCO_POSE_SINGLE = hasattr(cv2.aruco, "estimatePoseSingleMarkers")
+_SOLVEPNP_FLAG = getattr(cv2, "SOLVEPNP_IPPE_SQUARE", cv2.SOLVEPNP_ITERATIVE)
+_UNIT_SQUARE_OBJECT_POINTS = np.array(
+    [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ],
+    dtype=np.float32,
+)
 
 DYNAMIC_ID = 0
 
@@ -123,6 +162,46 @@ def bbox_within_image(
         and x2 < width - margin
         and y2 < height - margin
     )
+
+
+def marker_object_points(marker_length: float) -> np.ndarray:
+    """Return square marker object points scaled to ``marker_length``."""
+
+    return _UNIT_SQUARE_OBJECT_POINTS * float(marker_length)
+
+
+def estimate_single_marker_pose(
+    marker_corners: np.ndarray,
+    marker_length: float,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Estimate pose of a single ArUco marker with compatibility fallbacks."""
+
+    if marker_corners is None:
+        return None
+    if _HAS_ARUCO_POSE_SINGLE:
+        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+            [marker_corners],
+            marker_length,
+            CAMERA_MATRIX,
+            DIST_COEFFS,
+        )
+        if rvecs.size == 0 or tvecs.size == 0:
+            return None
+        return rvecs[0, 0], tvecs[0, 0].reshape(3)
+    pts_2d = marker_corners.reshape(-1, 2).astype(np.float32)
+    if pts_2d.shape[0] != 4:
+        return None
+    object_pts = marker_object_points(marker_length)
+    ok, rvec, tvec = cv2.solvePnP(
+        object_pts,
+        pts_2d,
+        CAMERA_MATRIX,
+        DIST_COEFFS,
+        flags=_SOLVEPNP_FLAG,
+    )
+    if not ok:
+        return None
+    return rvec.reshape(3), tvec.reshape(3)
 
 
 def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -414,7 +493,7 @@ def predict_sticker_series(
     models = []
     for axis in range(3):
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore", np.RankWarning)
+            warnings.simplefilter("ignore", POLYFIT_RANK_WARNING)
             coeffs = np.polyfit(times, positions[:, axis], deg=degree)
         models.append(coeffs)
 
@@ -955,16 +1034,10 @@ def process_video(
                     valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
                     cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
                     for corner in valid:
-                        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                            [corner],
-                            DYNAMIC_MARKER_LENGTH,
-                            CAMERA_MATRIX,
-                            DIST_COEFFS,
-                        )
-                        rvec = rvecs[0, 0]
-                        # Flatten the translation vector to a 1D array for
-                        # consistency with solvePnP outputs.
-                        tvec = tvecs[0, 0].reshape(3)
+                        pose = estimate_single_marker_pose(corner, DYNAMIC_MARKER_LENGTH)
+                        if pose is None:
+                            continue
+                        rvec, tvec = pose
                         curr_q = rvec_to_quat(rvec)
                         if last_dynamic_rt is not None:
                             prev_q = rvec_to_quat(last_dynamic_rt[0])
@@ -987,15 +1060,7 @@ def process_video(
             if current_rt is None and tracker_corners is not None and prev_gray is not None:
                 new_corners, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
                 if st.sum() == 4:
-                    object_pts = np.array(
-                        [
-                            [0.0, 0.0, 0.0],
-                            [DYNAMIC_MARKER_LENGTH, 0.0, 0.0],
-                            [DYNAMIC_MARKER_LENGTH, DYNAMIC_MARKER_LENGTH, 0.0],
-                            [0.0, DYNAMIC_MARKER_LENGTH, 0.0],
-                        ],
-                        dtype=np.float32,
-                    )
+                    object_pts = marker_object_points(DYNAMIC_MARKER_LENGTH)
                     ok, rvec, tvec = cv2.solvePnP(
                         object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
                     )
@@ -1142,7 +1207,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "tst_16.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "tst_37.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
