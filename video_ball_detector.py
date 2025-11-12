@@ -618,6 +618,19 @@ def enforce_monotonic_predicted_z(series: list[dict[str, float | int | str]]) ->
             series[idx]["z"] = new_z
             prev_z = new_z
 
+    # Trailing segment without future measurements: enforce monotonic caps too.
+    last_measured_idx = measured_indices[-1]
+    if last_measured_idx < len(series) - 1:
+        prev_z = start_anchor[last_measured_idx]
+        for idx in range(last_measured_idx + 1, len(series)):
+            if series[idx].get("source") == "measured":
+                prev_z = min(prev_z, float(series[idx]["z"]))
+                continue
+            original_z = float(series[idx]["z"])
+            new_z = min(original_z, prev_z)
+            series[idx]["z"] = new_z
+            prev_z = new_z
+
 
 def annotate_interpolated_frames(
     frame_paths: dict[int, str],
@@ -1247,7 +1260,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "tst_17.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "tst_16.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
