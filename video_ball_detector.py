@@ -580,7 +580,43 @@ def predict_sticker_series(
                 "source": source,
             }
         )
+    enforce_monotonic_predicted_z(series)
     return series
+
+
+def enforce_monotonic_predicted_z(series: list[dict[str, float | int | str]]) -> None:
+    """Clamp extrapolated Z segments to the last non-increasing measured value."""
+
+    measured_indices = [idx for idx, entry in enumerate(series) if entry.get("source") == "measured"]
+    if len(measured_indices) < 2:
+        return
+
+    last_non_increasing = float("inf")
+    start_anchor: dict[int, float] = {}
+    for idx in measured_indices:
+        entry_z = float(series[idx]["z"])
+        last_non_increasing = min(last_non_increasing, entry_z)
+        start_anchor[idx] = last_non_increasing
+
+    for left_idx, right_idx in zip(measured_indices, measured_indices[1:]):
+        if right_idx <= left_idx + 1:
+            continue
+        start_z = start_anchor[left_idx]
+        end_z = float(series[right_idx]["z"])
+        if end_z > start_z:
+            end_z = start_z
+        gap = right_idx - left_idx - 1
+        prev_z = start_z
+        for offset, idx in enumerate(range(left_idx + 1, right_idx)):
+            if series[idx].get("source") == "measured":
+                prev_z = float(series[idx]["z"])
+                continue
+            progress = (offset + 1) / (gap + 1)
+            monotone_cap = start_z + (end_z - start_z) * progress
+            original_z = float(series[idx]["z"])
+            new_z = min(original_z, prev_z, monotone_cap)
+            series[idx]["z"] = new_z
+            prev_z = new_z
 
 
 def annotate_interpolated_frames(
