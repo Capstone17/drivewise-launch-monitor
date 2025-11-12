@@ -695,6 +695,7 @@ def main():
 
     # powered property on the controller to on
     adapter_props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(1))
+    adapter_props.Set("org.bluez.Adapter1", "Bondable", dbus.Boolean(0))
     adapter_props.Set("org.bluez.Adapter1", "Pairable", dbus.Boolean(0))
 
 
