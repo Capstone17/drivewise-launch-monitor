@@ -1,8 +1,23 @@
+# ASSUMPTIONS -----------------------
+# - The 0, 0, 0, 0, 0 case means that there was a detection error.
+# - For production, this would need to be updated, but this assumption works for the purposes of our project.
+# -----------------------------------
 
-# from metric_output import return_metrics
-from .metric_output import return_metrics  # Use this until face angle can be accurately detected
+from .metric_output import return_metrics
 
 import random
+
+
+# Helper function for unsuccessful club detection
+def error_side_angle_alone(side_angle):
+
+    if side_angle < -2.0:
+        return "Pull: Both your face and path are left, causing a pull. Try aligning your stance and path more rightward and ensure the face matches the path."
+    elif side_angle > 2.0:
+        return "Push: A rightward path and open face are sending shots directly right. Work on squaring the clubface and adjusting alignment toward the target."
+    
+    # If there are no issues, return an encouraging message
+    return "Straight: Nice shot!"
 
 # -------------------------------
 # Output as a function (for bluetooth)
@@ -32,6 +47,21 @@ def rule_based_system(club_selection):
     # - Ideal numbers for face-to-path are from GolfWRX: https://www.golfwrx.com/342864/how-to-hit-a-push-draw-and-a-pull-fade/1000/
     # -------------------------------
     facts = {
+
+        # Error case: club was not detected
+        "detection_error": (raw_data['face_angle'] == 0.0 and 
+                            raw_data['swing_path'] == 0.0 and 
+                            raw_data['attack_angle'] == 0.0 and
+                            raw_data['side_angle'] == 0.0 and
+                            raw_data['face_to_path'] == 0.0),
+
+        # Error case: side angle alone was detected
+        "side_angle_alone": (raw_data['face_angle'] == 0.0 and 
+                            raw_data['swing_path'] == 0.0 and 
+                            raw_data['attack_angle'] == 0.0 and
+                            raw_data['face_to_path'] == 0.0 and
+                            raw_data['side_angle'] != 0.0),
+
         "face_extreme_left": raw_data['face_angle'] < -6.0,
         "face_slight_left": -6.0 <= raw_data['face_angle'] < -3.0,
         "face_straight": -3.0 <= raw_data['face_angle'] < 3.0,
@@ -53,17 +83,17 @@ def rule_based_system(club_selection):
         "attack_very_down": -10.0 < raw_data['attack_angle'] <= -5.0,  # Ideal for wedge shots
         "attack_extreme_down": raw_data['attack_angle'] <= -10.0,
 
-        "side_extreme_left": raw_data['side_angle'] < -4.0,
-        "side_slight_left": -4.0 <= raw_data['side_angle'] < -1.0,  # Ideal for a fade
-        "side_straight": -1.0 <= raw_data['side_angle'] < 1.0,  # Ideal for a straight shot
-        "side_slight_right": 1.0 <= raw_data['side_angle'] < 4.0,  # Ideal for hitting a draw
-        "side_extreme_right": 4.0 <= raw_data['side_angle'],
+        "side_extreme_left": raw_data['side_angle'] < -5.0,
+        "side_slight_left": -5.0 <= raw_data['side_angle'] < -2.0,  # Ideal for a fade
+        "side_straight": -2.0 <= raw_data['side_angle'] < 2.0,  # Ideal for a straight shot
+        "side_slight_right": 2.0 <= raw_data['side_angle'] < 5.0,  # Ideal for hitting a draw
+        "side_extreme_right": 5.0 <= raw_data['side_angle'],
 
-        "face_to_path_extreme_left": raw_data['side_angle'] < -4.0,
-        "face_to_path_slight_left": -4.0 <= raw_data['side_angle'] < -2.0,  # Ideal for a fade
-        "face_to_path_straight": -2.0 <= raw_data['side_angle'] < 2.0,  # Ideal for a straight shot
-        "face_to_path_slight_right": 2.0 <= raw_data['side_angle'] < 4.0,  # Ideal for hitting a draw
-        "face_to_path_extreme_right": 4.0 <= raw_data['side_angle']
+        "face_to_path_extreme_left": raw_data['face_to_path'] < -4.0,
+        "face_to_path_slight_left": -4.0 <= raw_data['face_to_path'] < -2.0,  # Ideal for a fade
+        "face_to_path_straight": -2.0 <= raw_data['face_to_path'] < 2.0,  # Ideal for a straight shot
+        "face_to_path_slight_right": 2.0 <= raw_data['face_to_path'] < 4.0,  # Ideal for hitting a draw
+        "face_to_path_extreme_right": 4.0 <= raw_data['face_to_path']
     }
 
     # -------------------------------
@@ -71,6 +101,26 @@ def rule_based_system(club_selection):
     # - The shot shaping diagnosis was taken from this Reddit post: https://www.reddit.com/r/GolfSwing/comments/1546tus/i_think_everyone_should_save_this_diagram_to_help/ 
     # -------------------------------
     rules = [
+        # -------------------------------
+        # Error Cases 
+        # - Severity is higher than any other result (6)
+        # - Club not detected: Return an error message
+        # - Only side angle detected: Base message solely off of side angle
+        # -------------------------------
+        {
+            "name": "Detection Error",
+            "category": "all",
+            "severity": 6,
+            "condition": lambda f: (f["detection_error"]),
+            "action": lambda: "Error: Club was not detected. Make sure your device is calibrated and placed on a flat surface."
+        },
+        {
+            "name": "Side Angle Alone",
+            "category": "all",
+            "severity": 6,
+            "condition": lambda f: (f["side_angle_alone"]),
+            "action": lambda: error_side_angle_alone(raw_data['side_angle'])
+        },
         # -------------------------------
         # Shot shaping
         # - Severity levels: 5=WORST, 1=BEST
