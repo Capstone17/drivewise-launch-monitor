@@ -723,7 +723,7 @@ def main():
     agent_manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
 
     # Make sure Bluetooth is not pairable
-    subprocess.run(["bluetoothctl", "bondable", "off"])
+    subprocess.run(["bluetoothctl", "pairable", "off"])
 
     ad_manager.RegisterAdvertisement(
         advertisement.get_path(),
