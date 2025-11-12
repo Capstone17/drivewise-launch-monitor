@@ -593,9 +593,15 @@ def enforce_monotonic_predicted_z(series: list[dict[str, float | int | str]]) ->
 
     last_non_increasing = float("inf")
     start_anchor: dict[int, float] = {}
+    minima_indices: list[int] = []
+    tolerance = 1e-6
     for idx in measured_indices:
         entry_z = float(series[idx]["z"])
-        last_non_increasing = min(last_non_increasing, entry_z)
+        if entry_z <= last_non_increasing - tolerance:
+            last_non_increasing = entry_z
+            minima_indices.append(idx)
+        else:
+            last_non_increasing = min(last_non_increasing, entry_z)
         start_anchor[idx] = last_non_increasing
 
     for left_idx, right_idx in zip(measured_indices, measured_indices[1:]):
@@ -618,18 +624,131 @@ def enforce_monotonic_predicted_z(series: list[dict[str, float | int | str]]) ->
             series[idx]["z"] = new_z
             prev_z = new_z
 
-    # Trailing segment without future measurements: enforce monotonic caps too.
     last_measured_idx = measured_indices[-1]
-    if last_measured_idx < len(series) - 1:
-        prev_z = start_anchor[last_measured_idx]
-        for idx in range(last_measured_idx + 1, len(series)):
-            if series[idx].get("source") == "measured":
-                prev_z = min(prev_z, float(series[idx]["z"]))
-                continue
-            original_z = float(series[idx]["z"])
-            new_z = min(original_z, prev_z)
-            series[idx]["z"] = new_z
-            prev_z = new_z
+    if last_measured_idx >= len(series) - 1:
+        return
+
+    trailing_predicted = [
+        idx for idx in range(last_measured_idx + 1, len(series)) if series[idx].get("source") != "measured"
+    ]
+    if not trailing_predicted:
+        return
+
+    start_cap = start_anchor[last_measured_idx]
+    tail_target_idx = trailing_predicted[-1]
+    raw_tail_target_z = float(series[tail_target_idx]["z"])
+    if raw_tail_target_z <= start_cap + tolerance:
+        target_z = raw_tail_target_z
+    else:
+        target_z = start_cap
+
+    start_time = float(series[last_measured_idx]["time"])
+    end_time = float(series[tail_target_idx]["time"])
+    duration = max(0.0, end_time - start_time)
+    slope = _estimate_tail_descent_slope(series, minima_indices)
+    min_drop = start_cap - target_z
+
+    if (
+        slope is None
+        or duration <= 1e-6
+        or min_drop <= 1e-4
+        or abs(slope) <= 1e-8
+    ):
+        _apply_flat_tail(series, trailing_predicted, start_cap, target_z)
+    else:
+        _apply_shaped_tail(
+            series,
+            trailing_predicted,
+            start_cap,
+            target_z,
+            start_time,
+            duration,
+            slope,
+        )
+
+    if raw_tail_target_z <= start_cap + tolerance:
+        series[tail_target_idx]["z"] = raw_tail_target_z
+
+
+def _estimate_tail_descent_slope(
+    series: list[dict[str, float | int | str]],
+    minima_indices: list[int],
+    max_points: int = 4,
+) -> float | None:
+    if len(minima_indices) < 2:
+        return None
+    count = min(max_points, len(minima_indices))
+    selected = minima_indices[-count:]
+    times = np.array([float(series[idx]["time"]) for idx in selected], dtype=float)
+    zs = np.array([float(series[idx]["z"]) for idx in selected], dtype=float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", POLYFIT_RANK_WARNING)
+        coeffs = np.polyfit(times, zs, deg=1)
+    slope = float(coeffs[0])
+    if slope >= -1e-6:
+        return None
+    return slope
+
+
+def _apply_flat_tail(
+    series: list[dict[str, float | int | str]],
+    indices: list[int],
+    start_cap: float,
+    target_z: float,
+) -> None:
+    floor = target_z
+    prev = max(start_cap, floor)
+    for idx in indices[:-1]:
+        original_z = float(series[idx]["z"])
+        new_z = min(original_z, prev)
+        new_z = max(new_z, floor)
+        series[idx]["z"] = new_z
+        prev = new_z
+    last_idx = indices[-1]
+    prev = max(prev, floor)
+    series[last_idx]["z"] = floor
+
+
+def _apply_shaped_tail(
+    series: list[dict[str, float | int | str]],
+    indices: list[int],
+    start_cap: float,
+    target_z: float,
+    start_time: float,
+    duration: float,
+    slope: float,
+) -> None:
+    floor = target_z
+    prev = max(start_cap, floor)
+    for idx in indices:
+        original_z = float(series[idx]["z"])
+        t = float(series[idx]["time"])
+        if duration > 0.0:
+            u = (t - start_time) / duration
+        else:
+            u = 1.0
+        u = max(0.0, min(1.0, u))
+        hermite_z = _cubic_hermite(start_cap, floor, slope, 0.0, duration, u)
+        new_z = min(original_z, prev, hermite_z)
+        new_z = max(new_z, floor)
+        series[idx]["z"] = new_z
+        prev = new_z
+    series[indices[-1]]["z"] = floor
+
+
+def _cubic_hermite(
+    start_val: float,
+    end_val: float,
+    start_slope: float,
+    end_slope: float,
+    duration: float,
+    u: float,
+) -> float:
+    h00 = 2.0 * u**3 - 3.0 * u**2 + 1.0
+    h10 = (u**3 - 2.0 * u**2 + u) * duration
+    h01 = -2.0 * u**3 + 3.0 * u**2
+    h11 = (u**3 - u**2) * duration
+    return h00 * start_val + h10 * start_slope + h01 * end_val + h11 * end_slope
 
 
 def annotate_interpolated_frames(
