@@ -719,8 +719,8 @@ def main():
         error_handler=register_app_error_cb,
     )
 
-    # agent_manager = dbus.Interface(obj, "org.bluez.AgentManager1")
-    # agent_manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
+    agent_manager = dbus.Interface(obj, "org.bluez.AgentManager1")
+    agent_manager.RegisterAgent(AGENT_PATH, "DisplayYesNo")
 
     # Make sure Bluetooth is not pairable
     subprocess.run(["bluetoothctl", "pairable", "off"])
@@ -735,7 +735,7 @@ def main():
     logger.info("Registering GATT application...")
 
 
-    # agent_manager.RequestDefaultAgent(AGENT_PATH)
+    agent_manager.RequestDefaultAgent(AGENT_PATH)
 
     try:
         mainloop.run()
