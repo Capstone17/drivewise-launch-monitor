@@ -697,9 +697,6 @@ def main():
     adapter_props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(1))
     adapter_props.Set("org.bluez.Adapter1", "Pairable", dbus.Boolean(0))
 
-    # Make sure Bluetooth is not pairable
-    subprocess.run(["bluetoothctl", "pairable", "off"])
-
 
     # Get manager objs
     service_manager = dbus.Interface(adapter_obj, GATT_MANAGER_IFACE)
@@ -724,6 +721,10 @@ def main():
 
     agent_manager = dbus.Interface(obj, "org.bluez.AgentManager1")
     agent_manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
+
+    # Make sure Bluetooth is not pairable
+    subprocess.run(["bluetoothctl", "pairable", "off"])
+    
     ad_manager.RegisterAdvertisement(
         advertisement.get_path(),
         {},
