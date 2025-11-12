@@ -591,12 +591,21 @@ def enforce_monotonic_predicted_z(series: list[dict[str, float | int | str]]) ->
     if len(measured_indices) < 2:
         return
 
+    EPS = 1e-6
     last_non_increasing = float("inf")
     start_anchor: dict[int, float] = {}
+    minima_indices: list[int] = []
+    prev_anchor = float("inf")
     for idx in measured_indices:
         entry_z = float(series[idx]["z"])
         last_non_increasing = min(last_non_increasing, entry_z)
         start_anchor[idx] = last_non_increasing
+        if last_non_increasing < prev_anchor - EPS:
+            minima_indices.append(idx)
+            prev_anchor = last_non_increasing
+
+    if not minima_indices:
+        minima_indices.append(measured_indices[0])
 
     for left_idx, right_idx in zip(measured_indices, measured_indices[1:]):
         if right_idx <= left_idx + 1:
@@ -620,6 +629,27 @@ def enforce_monotonic_predicted_z(series: list[dict[str, float | int | str]]) ->
 
     # Trailing segment without future measurements: enforce monotonic caps too.
     last_measured_idx = measured_indices[-1]
+    tail_slope = None
+    tail_intercept = None
+    TAIL_SLOPE_POINTS = 4
+    if len(minima_indices) >= 2:
+        fit_count = min(TAIL_SLOPE_POINTS, len(minima_indices))
+        fit_indices = minima_indices[-fit_count:]
+        times = np.array([float(series[idx]["time"]) for idx in fit_indices], dtype=float)
+        zs = np.array([start_anchor[idx] for idx in fit_indices], dtype=float)
+        span = float(times[-1] - times[0])
+        slope = 0.0
+        if span > EPS:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", POLYFIT_RANK_WARNING)
+                coeffs = np.polyfit(times, zs, 1)
+            slope = float(coeffs[0])
+        if slope < -EPS:
+            baseline_time = float(series[last_measured_idx]["time"])
+            baseline_z = start_anchor[last_measured_idx]
+            tail_slope = slope
+            tail_intercept = baseline_z - slope * baseline_time
+
     if last_measured_idx < len(series) - 1:
         prev_z = start_anchor[last_measured_idx]
         for idx in range(last_measured_idx + 1, len(series)):
@@ -627,7 +657,11 @@ def enforce_monotonic_predicted_z(series: list[dict[str, float | int | str]]) ->
                 prev_z = min(prev_z, float(series[idx]["z"]))
                 continue
             original_z = float(series[idx]["z"])
-            new_z = min(original_z, prev_z)
+            target_z = prev_z
+            if tail_slope is not None and tail_intercept is not None:
+                slope_cap = tail_slope * float(series[idx]["time"]) + tail_intercept
+                target_z = min(target_z, slope_cap)
+            new_z = min(original_z, prev_z, target_z)
             series[idx]["z"] = new_z
             prev_z = new_z
 
