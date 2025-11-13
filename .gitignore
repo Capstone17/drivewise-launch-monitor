@@ -30,3 +30,4 @@ sticker_coords.json
 
 # Ignore BLE logs
 *.log
+vcpkg/
