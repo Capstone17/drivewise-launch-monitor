@@ -364,7 +364,6 @@ class Agent(dbus.service.Object):
     @dbus.service.method(AGENT_INTERFACE, in_signature="os", out_signature="")
     def AuthorizeService(self, device, uuid):
         logger.info("AuthorizeService (%s, %s)" % (device, uuid))
-        return
         authorize = ask("Authorize connection (yes/no): ")
         if authorize == "yes":
             return
