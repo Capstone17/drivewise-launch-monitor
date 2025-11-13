@@ -1,4 +1,4 @@
-from .metric_calculation import *
+from metric_calculation import *
 
 from pathlib import Path
 import json
@@ -461,7 +461,7 @@ def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz
         }
 
     swing_path = horizontal_movement_angle_from_rates(marker_dx, marker_dz)
-    side_angle = horizontal_movement_angle_from_rates(ball_dx, ball_dy)
+    side_angle = horizontal_movement_angle_from_rates(ball_dx, ball_dz)
     face_angle = face_angle_calc(swing_path, side_angle)
     attack_angle = vertical_movement_angle_from_rates(marker_dy, marker_dz)
     face_to_path = face_angle - swing_path
@@ -513,10 +513,10 @@ def return_metrics() -> dict:
     # Coordinate source paths
     src_coords_path = Path("~/Documents/webcamGolf").expanduser()
     src_coords = str(src_coords_path) + "/"
-    ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
-    sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
-    # ball_coords_path = "../ball_coords.json"  # STANDALONE
-    # sticker_coords_path = "../sticker_coords.json"  # STANDALONE
+    # ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
+    # sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
+    ball_coords_path = "../ball_coords.json"  # STANDALONE
+    sticker_coords_path = "../sticker_coords.json"  # STANDALONE
 
     # ---------------------------------
     # Find impact time
