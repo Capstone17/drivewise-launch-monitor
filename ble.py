@@ -365,49 +365,49 @@ class Agent(dbus.service.Object):
     def AuthorizeService(self, device, uuid):
         logger.info("AuthorizeService (%s, %s)" % (device, uuid))
         return
-        # authorize = ask("Authorize connection (yes/no): ")
-        # if authorize == "yes":
-        #     return
-        # raise Rejected("Connection rejected by user")
+        authorize = ask("Authorize connection (yes/no): ")
+        if authorize == "yes":
+            return
+        raise Rejected("Connection rejected by user")
 
-    # @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="s")
-    # def RequestPinCode(self, device):
-    #     logger.info("RequestPinCode (%s)" % (device))
-    #     set_trusted(device)
-    #     return ask("Enter PIN Code: ")
+    @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="s")
+    def RequestPinCode(self, device):
+        logger.info("RequestPinCode (%s)" % (device))
+        set_trusted(device)
+        return ask("Enter PIN Code: ")
 
-    # @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="u")
-    # def RequestPasskey(self, device):
-    #     logger.info("RequestPasskey (%s)" % (device))
-    #     set_trusted(device)
-    #     passkey = ask("Enter passkey: ")
-    #     return dbus.UInt32(passkey)
+    @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="u")
+    def RequestPasskey(self, device):
+        logger.info("RequestPasskey (%s)" % (device))
+        set_trusted(device)
+        passkey = ask("Enter passkey: ")
+        return dbus.UInt32(passkey)
 
-    # @dbus.service.method(AGENT_INTERFACE, in_signature="ouq", out_signature="")
-    # def DisplayPasskey(self, device, passkey, entered):
-    #     logger.info("DisplayPasskey (%s, %06u entered %u)" % (device, passkey, entered))
+    @dbus.service.method(AGENT_INTERFACE, in_signature="ouq", out_signature="")
+    def DisplayPasskey(self, device, passkey, entered):
+        logger.info("DisplayPasskey (%s, %06u entered %u)" % (device, passkey, entered))
 
-    # @dbus.service.method(AGENT_INTERFACE, in_signature="os", out_signature="")
-    # def DisplayPinCode(self, device, pincode):
-    #     logger.info("DisplayPinCode (%s, %s)" % (device, pincode))
+    @dbus.service.method(AGENT_INTERFACE, in_signature="os", out_signature="")
+    def DisplayPinCode(self, device, pincode):
+        logger.info("DisplayPinCode (%s, %s)" % (device, pincode))
 
-    # @dbus.service.method(AGENT_INTERFACE, in_signature="ou", out_signature="")
-    # def RequestConfirmation(self, device, passkey):
-    #     logger.info("RequestConfirmation (%s, %06d)" % (device, passkey))
-    #     confirm = ask("Confirm passkey (yes/no): ")
-    #     if confirm == "yes":
-    #         set_trusted(device)
-    #         return
-    #     raise Rejected("Passkey doesn't match")
+    @dbus.service.method(AGENT_INTERFACE, in_signature="ou", out_signature="")
+    def RequestConfirmation(self, device, passkey):
+        logger.info("RequestConfirmation (%s, %06d)" % (device, passkey))
+        confirm = ask("Confirm passkey (yes/no): ")
+        if confirm == "yes":
+            set_trusted(device)
+            return
+        raise Rejected("Passkey doesn't match")
 
-    # @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="")
-    # def RequestAuthorization(self, device):
-    #     logger.info("RequestAuthorization (%s)" % (device))
-    #     auth = ask("Authorize? (yes/no): ")
-    #     if auth == "yes":
-    #         logger.info("Authorized")
-    #         return
-    #     raise Rejected("Pairing rejected")
+    @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="")
+    def RequestAuthorization(self, device):
+        logger.info("RequestAuthorization (%s)" % (device))
+        auth = ask("Authorize? (yes/no): ")
+        if auth == "yes":
+            logger.info("Authorized")
+            return
+        raise Rejected("Pairing rejected")
 
     @dbus.service.method(AGENT_INTERFACE, in_signature="", out_signature="")
     def Cancel(self):
