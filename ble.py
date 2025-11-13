@@ -402,11 +402,12 @@ class Agent(dbus.service.Object):
     @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="")
     def RequestAuthorization(self, device):
         logger.info("RequestAuthorization (%s)" % (device))
-        auth = ask("Authorize? (yes/no): ")
-        if auth == "yes":
-            logger.info("Authorized")
-            return
-        raise Rejected("Pairing rejected")
+        return
+        # auth = ask("Authorize? (yes/no): ")
+        # if auth == "yes":
+        #     logger.info("Authorized")
+        #     return
+        # raise Rejected("Pairing rejected")
 
     @dbus.service.method(AGENT_INTERFACE, in_signature="", out_signature="")
     def Cancel(self):
