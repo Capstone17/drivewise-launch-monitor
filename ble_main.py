@@ -679,14 +679,6 @@ def main():
     agent_manager = dbus.Interface(obj, "org.bluez.AgentManager1")
     agent_manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
 
-    ad_manager.RegisterAdvertisement(
-        advertisement.get_path(),
-        {},
-        reply_handler=register_ad_cb,
-        error_handler=register_ad_error_cb,
-    )
-
-    logger.info("Registering GATT application...")
 
     service_manager.RegisterApplication(
         app.get_path(),
@@ -695,6 +687,15 @@ def main():
         error_handler=register_app_error_cb,
     )
 
+    ad_manager.RegisterAdvertisement(
+        advertisement.get_path(),
+        {},
+        reply_handler=register_ad_cb,
+        error_handler=register_ad_error_cb,
+    )
+
+    logger.info("Registering GATT application...")
+    
     agent_manager.RequestDefaultAgent(AGENT_PATH)
 
     try:
