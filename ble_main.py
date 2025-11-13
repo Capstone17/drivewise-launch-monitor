@@ -581,6 +581,22 @@ class BatteryMonitorCharacteristic(Characteristic):
         return True  # continue calling periodically
         
 
+class CancelSwingCharacteristic(Characteristic):
+    uuid = "8f1a5ff0-399b-4afe-9cb4-280c8310e388"
+    description = b"Write to cancel swing analysis/camera operation"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["write"], service,
+        )
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 5, self))
+
+    def WriteValue(self, value, options):
+        logger.debug("received write command for cancel swing")
+        if hasattr(self.service, "camera_event"):
+            self.service.camera_event.clear()
+            logger.info("Stopped capture")
+
 
 class CharacteristicUserDescriptionDescriptor(Descriptor):
     """
