@@ -504,7 +504,7 @@ class CalibrationCharacteristic(Characteristic):
             logger.debug("Not notifying, skipping notify_client")
             return
 
-        self.value = "Calibration complete!"
+        self.value = "success"
         result_bytes = json.dumps(self.value).encode('utf-8')
         logger.debug("Notifying values changed")
         self.PropertiesChanged(
