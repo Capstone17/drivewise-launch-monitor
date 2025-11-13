@@ -1,6 +1,9 @@
 import json
 import os
+import platform
+import subprocess
 import sys
+import tempfile
 import time
 import warnings
 
@@ -36,6 +39,10 @@ except Exception:
 
 ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CCTAG_NUM_RINGS = int(os.environ.get("CCTAG_NUM_RINGS", "3"))
+CCTAG_TARGET_ID = int(os.environ.get("CCTAG_MARKER_ID", "-1"))
 
 DYNAMIC_MARKER_LENGTH = 2.38
 DYNAMIC_MARKER_RADIUS = DYNAMIC_MARKER_LENGTH * 0.5
@@ -76,7 +83,7 @@ except ValueError:
 MOTION_WINDOW_EARLY_EXIT_MISSES = _early_exit_env if _early_exit_env > 0 else None
 
 # Load camera calibration parameters
-_calib_path = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
+_calib_path = os.path.join(BASE_DIR, "calibration", "camera_calib.npz")
 _calib_data = np.load(_calib_path)
 CAMERA_MATRIX = _calib_data["camera_matrix"]
 DIST_COEFFS = _calib_data["dist_coeffs"]
@@ -90,20 +97,101 @@ class EllipseCandidate:
     major: float
     minor: float
     angle_deg: float
-    score: float
-    support: int = 0
+    score: float = 0.0
 
 
-CCTAG_CANNY_LOW = 30
-CCTAG_CANNY_HIGH = 120
-CCTAG_MIN_CONTOUR_AREA = 220.0
-CCTAG_MIN_RADIUS_PX = 6.0
-CCTAG_MAX_RADIUS_RATIO = 2.5
-CCTAG_SUPPORT_CENTER_TOLERANCE = 12.0
-CCTAG_MIN_SUPPORT = 1
-CCTAG_KERNEL = np.ones((3, 3), dtype=np.uint8)
+@dataclass
+class CCTagMarkerMeasurement:
+    marker_id: int
+    status: int
+    candidate: EllipseCandidate
+    quality: float = 0.0
 
-DYNAMIC_ID = 0
+
+def _cctag_binary_path() -> str:
+    """Return path to the compiled CCTag JSON detector."""
+
+    subdir = f"{platform.system()}-{platform.machine()}"
+    candidates = [
+        os.path.join(BASE_DIR, "CCTag", "build", subdir, "cctag_json"),
+        os.path.join(BASE_DIR, "CCTag", "build", "Linux-x86_64", "cctag_json"),
+        os.path.join(BASE_DIR, "CCTag", "build", "cctag_json"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    raise FileNotFoundError(
+        "CCTag binary not found. Build it with:\n"
+        "  cmake -S CCTag -B CCTag/build -DCCTAG_WITH_CUDA=OFF && "
+        "cmake --build CCTag/build"
+    )
+
+
+def run_cctag_detector(
+    video_path: str,
+    *,
+    n_rings: int = CCTAG_NUM_RINGS,
+) -> dict[int, list[CCTagMarkerMeasurement]]:
+    """Run the compiled CCTag detector and return per-frame measurements."""
+
+    binary = _cctag_binary_path()
+    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tmp:
+        json_path = tmp.name
+    cmd = [
+        binary,
+        "--input",
+        video_path,
+        "--output",
+        json_path,
+        "--nbrings",
+        str(n_rings),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        os.unlink(json_path)
+        raise
+    if result.stdout:
+        print(result.stdout.strip())
+    if result.stderr:
+        print(result.stderr.strip(), file=sys.stderr)
+
+    measurements: dict[int, list[CCTagMarkerMeasurement]] = {}
+    try:
+        with open(json_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                frame_idx = int(record.get("frame", 0))
+                raw_markers = record.get("markers", [])
+                frame_entries: list[CCTagMarkerMeasurement] = []
+                for marker in raw_markers:
+                    center = np.array(marker.get("center", [0.0, 0.0]), dtype=float)
+                    candidate = EllipseCandidate(
+                        center=center,
+                        major=float(marker.get("a", 0.0)),
+                        minor=float(marker.get("b", 0.0)),
+                        angle_deg=float(marker.get("angle", 0.0)),
+                    )
+                    entry = CCTagMarkerMeasurement(
+                        marker_id=int(marker.get("id", -1)),
+                        status=int(marker.get("status", -1)),
+                        candidate=candidate,
+                        quality=float(marker.get("quality", 0.0)),
+                    )
+                    frame_entries.append(entry)
+                if frame_entries:
+                    measurements[frame_idx] = frame_entries
+    finally:
+        os.unlink(json_path)
+    return measurements
 
 MAX_MISSING_FRAMES = 12
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -196,50 +284,6 @@ def _ellipse_image_points(candidate: EllipseCandidate) -> np.ndarray:
         ],
         dtype=np.float32,
     )
-
-
-def detect_cctag_ellipse(gray: np.ndarray) -> EllipseCandidate | None:
-    """Return the best ellipse matching a CCTag ring pattern or ``None`` if not found."""
-
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blurred, CCTAG_CANNY_LOW, CCTAG_CANNY_HIGH)
-    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, CCTAG_KERNEL)
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    candidates: list[EllipseCandidate] = []
-    for contour in contours:
-        if contour.shape[0] < 5:
-            continue
-        area = cv2.contourArea(contour)
-        if area < CCTAG_MIN_CONTOUR_AREA:
-            continue
-        (cx, cy), (width, height), angle = cv2.fitEllipse(contour)
-        major = max(width, height) / 2.0
-        minor = min(width, height) / 2.0
-        if minor < CCTAG_MIN_RADIUS_PX or major < CCTAG_MIN_RADIUS_PX:
-            continue
-        ratio = major / (minor + 1e-6)
-        if ratio > CCTAG_MAX_RADIUS_RATIO:
-            continue
-        angle_deg = angle if width >= height else angle + 90.0
-        angle_deg = (angle_deg + 720.0) % 360.0
-        center = np.array([cx, cy], dtype=float)
-        score = major * minor
-        candidates.append(EllipseCandidate(center, major, minor, angle_deg, score))
-
-    if not candidates:
-        return None
-
-    for candidate in candidates:
-        candidate.support = sum(
-            1
-            for other in candidates
-            if other is not candidate
-            and np.linalg.norm(candidate.center - other.center) <= CCTAG_SUPPORT_CENTER_TOLERANCE
-        )
-
-    supported = [c for c in candidates if c.support >= CCTAG_MIN_SUPPORT]
-    best_pool = supported if supported else candidates
-    return max(best_pool, key=lambda c: (c.score, c.major + c.minor))
 
 
 def estimate_cctag_pose(
@@ -1112,6 +1156,12 @@ def process_video(
     )
 
     sticker_compile_time = 0.0
+    cctag_start = time.perf_counter()
+    try:
+        cctag_measurements = run_cctag_detector(video_path, n_rings=CCTAG_NUM_RINGS)
+    except FileNotFoundError as exc:
+        raise RuntimeError(str(exc)) from exc
+    sticker_time = time.perf_counter() - cctag_start
 
     cap = cv2.VideoCapture(video_path)
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -1128,7 +1178,6 @@ def process_video(
             except OSError:
                 pass
     ball_time = 0.0
-    sticker_time = 0.0
     ball_coords = []
     sticker_measurements: list[dict[str, object]] = []
     saved_frame_paths: dict[int, str] = {}
@@ -1241,15 +1290,23 @@ def process_video(
 
         allow_sticker = impact_frame_idx is None or frame_idx < impact_frame_idx
         if allow_sticker:
-            sticker_start = time.perf_counter()
-            candidate = detect_cctag_ellipse(marker_gray)
-            sticker_time += time.perf_counter() - sticker_start
+            frame_measurements = cctag_measurements.get(frame_idx, [])
+            selected = None
+            if frame_measurements:
+                reliable = [m for m in frame_measurements if m.status == 1] or frame_measurements
+                if CCTAG_TARGET_ID >= 0:
+                    for measurement in reliable:
+                        if measurement.marker_id == CCTAG_TARGET_ID:
+                            selected = measurement
+                            break
+                if selected is None:
+                    selected = reliable[0]
             current_rt = None
             current_quat = None
             current_position: np.ndarray | None = None
             dynamic_corner = None
-            if candidate is not None:
-                pose = estimate_cctag_pose(candidate, DYNAMIC_MARKER_RADIUS)
+            if selected is not None:
+                pose = estimate_cctag_pose(selected.candidate, DYNAMIC_MARKER_RADIUS)
                 if pose is not None:
                     rvec, tvec, image_points = pose
                     curr_q = rvec_to_quat(rvec)
