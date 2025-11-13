@@ -18,6 +18,8 @@ warnings.filterwarnings(
 
 import cv2
 import numpy as np
+import math
+from dataclasses import dataclass
 
 try:
     from tflite_runtime.interpreter import Interpreter
@@ -36,6 +38,7 @@ ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
 
 DYNAMIC_MARKER_LENGTH = 2.38
+DYNAMIC_MARKER_RADIUS = DYNAMIC_MARKER_LENGTH * 0.5
 MIN_BALL_RADIUS_PX = 9  # pixels
 EDGE_MARGIN_PX = 1
 BALL_SCORE_THRESHOLD = 0.4
@@ -78,29 +81,27 @@ _calib_data = np.load(_calib_path)
 CAMERA_MATRIX = _calib_data["camera_matrix"]
 DIST_COEFFS = _calib_data["dist_coeffs"]
 
-ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
-ARUCO_PARAMS = cv2.aruco.DetectorParameters()
-ARUCO_PARAMS.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-ARUCO_PARAMS.adaptiveThreshWinSizeMin = 3
-ARUCO_PARAMS.adaptiveThreshWinSizeMax = 53
-ARUCO_PARAMS.adaptiveThreshWinSizeStep = 4
-ARUCO_PARAMS.minMarkerPerimeterRate = 0.02
-ARUCO_PARAMS.polygonalApproxAccuracyRate = 0.03
-ARUCO_PARAMS.cornerRefinementWinSize = 7
-ARUCO_PARAMS.cornerRefinementMinAccuracy = 0.01
-ARUCO_PARAMS.adaptiveThreshConstant = 7
-
-_HAS_ARUCO_POSE_SINGLE = hasattr(cv2.aruco, "estimatePoseSingleMarkers")
 _SOLVEPNP_FLAG = getattr(cv2, "SOLVEPNP_IPPE_SQUARE", cv2.SOLVEPNP_ITERATIVE)
-_UNIT_SQUARE_OBJECT_POINTS = np.array(
-    [
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [1.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-    ],
-    dtype=np.float32,
-)
+
+
+@dataclass
+class EllipseCandidate:
+    center: np.ndarray
+    major: float
+    minor: float
+    angle_deg: float
+    score: float
+    support: int = 0
+
+
+CCTAG_CANNY_LOW = 30
+CCTAG_CANNY_HIGH = 120
+CCTAG_MIN_CONTOUR_AREA = 220.0
+CCTAG_MIN_RADIUS_PX = 6.0
+CCTAG_MAX_RADIUS_RATIO = 2.5
+CCTAG_SUPPORT_CENTER_TOLERANCE = 12.0
+CCTAG_MIN_SUPPORT = 1
+CCTAG_KERNEL = np.ones((3, 3), dtype=np.uint8)
 
 DYNAMIC_ID = 0
 
@@ -164,44 +165,101 @@ def bbox_within_image(
     )
 
 
-def marker_object_points(marker_length: float) -> np.ndarray:
-    """Return square marker object points scaled to ``marker_length``."""
+def circle_marker_object_points(radius: float) -> np.ndarray:
+    """Return four equidistant points on a circle in marker space."""
 
-    return _UNIT_SQUARE_OBJECT_POINTS * float(marker_length)
+    r = float(radius)
+    return np.array(
+        [
+            [r, 0.0, 0.0],
+            [0.0, r, 0.0],
+            [-r, 0.0, 0.0],
+            [0.0, -r, 0.0],
+        ],
+        dtype=np.float32,
+    )
 
 
-def estimate_single_marker_pose(
-    marker_corners: np.ndarray,
-    marker_length: float,
-) -> tuple[np.ndarray, np.ndarray] | None:
-    """Estimate pose of a single ArUco marker with compatibility fallbacks."""
+def _ellipse_image_points(candidate: EllipseCandidate) -> np.ndarray:
+    theta = math.radians(candidate.angle_deg)
+    cos_t = math.cos(theta)
+    sin_t = math.sin(theta)
+    major_vec = np.array([cos_t, sin_t], dtype=float) * candidate.major
+    minor_vec = np.array([-sin_t, cos_t], dtype=float) * candidate.minor
+    center = candidate.center
+    return np.array(
+        [
+            center + major_vec,
+            center + minor_vec,
+            center - major_vec,
+            center - minor_vec,
+        ],
+        dtype=np.float32,
+    )
 
-    if marker_corners is None:
+
+def detect_cctag_ellipse(gray: np.ndarray) -> EllipseCandidate | None:
+    """Return the best ellipse matching a CCTag ring pattern or ``None`` if not found."""
+
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, CCTAG_CANNY_LOW, CCTAG_CANNY_HIGH)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, CCTAG_KERNEL)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    candidates: list[EllipseCandidate] = []
+    for contour in contours:
+        if contour.shape[0] < 5:
+            continue
+        area = cv2.contourArea(contour)
+        if area < CCTAG_MIN_CONTOUR_AREA:
+            continue
+        (cx, cy), (width, height), angle = cv2.fitEllipse(contour)
+        major = max(width, height) / 2.0
+        minor = min(width, height) / 2.0
+        if minor < CCTAG_MIN_RADIUS_PX or major < CCTAG_MIN_RADIUS_PX:
+            continue
+        ratio = major / (minor + 1e-6)
+        if ratio > CCTAG_MAX_RADIUS_RATIO:
+            continue
+        angle_deg = angle if width >= height else angle + 90.0
+        angle_deg = (angle_deg + 720.0) % 360.0
+        center = np.array([cx, cy], dtype=float)
+        score = major * minor
+        candidates.append(EllipseCandidate(center, major, minor, angle_deg, score))
+
+    if not candidates:
         return None
-    if _HAS_ARUCO_POSE_SINGLE:
-        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-            [marker_corners],
-            marker_length,
-            CAMERA_MATRIX,
-            DIST_COEFFS,
+
+    for candidate in candidates:
+        candidate.support = sum(
+            1
+            for other in candidates
+            if other is not candidate
+            and np.linalg.norm(candidate.center - other.center) <= CCTAG_SUPPORT_CENTER_TOLERANCE
         )
-        if rvecs.size == 0 or tvecs.size == 0:
-            return None
-        return rvecs[0, 0], tvecs[0, 0].reshape(3)
-    pts_2d = marker_corners.reshape(-1, 2).astype(np.float32)
-    if pts_2d.shape[0] != 4:
-        return None
-    object_pts = marker_object_points(marker_length)
+
+    supported = [c for c in candidates if c.support >= CCTAG_MIN_SUPPORT]
+    best_pool = supported if supported else candidates
+    return max(best_pool, key=lambda c: (c.score, c.major + c.minor))
+
+
+def estimate_cctag_pose(
+    candidate: EllipseCandidate,
+    radius: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Estimate pose using four sampled points on the detected ellipse."""
+
+    object_pts = circle_marker_object_points(radius)
+    image_pts = _ellipse_image_points(candidate)
     ok, rvec, tvec = cv2.solvePnP(
         object_pts,
-        pts_2d,
+        image_pts,
         CAMERA_MATRIX,
         DIST_COEFFS,
         flags=_SOLVEPNP_FLAG,
     )
     if not ok:
         return None
-    return rvec.reshape(3), tvec.reshape(3)
+    return rvec.reshape(3), tvec.reshape(3), image_pts
 
 
 def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -1053,9 +1111,7 @@ def process_video(
         f"{start_frame}-{end_frame} (" + ", ".join(parts) + ")"
     )
 
-    sticker_compile_start = time.perf_counter()
-    aruco_detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
-    sticker_compile_time = time.perf_counter() - sticker_compile_start
+    sticker_compile_time = 0.0
 
     cap = cv2.VideoCapture(video_path)
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -1186,49 +1242,39 @@ def process_video(
         allow_sticker = impact_frame_idx is None or frame_idx < impact_frame_idx
         if allow_sticker:
             sticker_start = time.perf_counter()
-            corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
+            candidate = detect_cctag_ellipse(marker_gray)
             sticker_time += time.perf_counter() - sticker_start
             current_rt = None
             current_quat = None
             current_position: np.ndarray | None = None
             dynamic_corner = None
-            if ids is not None and len(ids) > 0:
-                valid = [
-                    corners[i]
-                    for i in range(len(ids))
-                    if ids[i][0] == DYNAMIC_ID
-                ]
-                if valid:
-                    valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
-                    cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
-                    for corner in valid:
-                        pose = estimate_single_marker_pose(corner, DYNAMIC_MARKER_LENGTH)
-                        if pose is None:
-                            continue
-                        rvec, tvec = pose
-                        curr_q = rvec_to_quat(rvec)
-                        if last_dynamic_rt is not None:
-                            prev_q = rvec_to_quat(last_dynamic_rt[0])
-                            if np.dot(curr_q, prev_q) < 0.0:
-                                curr_q = -curr_q
-                                rvec = quat_to_rvec(curr_q)
-                        current_rt = (rvec, tvec)
-                        current_quat = curr_q
-                        current_position = np.array(tvec, dtype=float)
-                        dynamic_corner = corner
-                        cv2.drawFrameAxes(
-                            frame,
-                            CAMERA_MATRIX,
-                            DIST_COEFFS,
-                            rvec,
-                            tvec,
-                            DYNAMIC_MARKER_LENGTH * 0.5,
-                            2,
-                        )
+            if candidate is not None:
+                pose = estimate_cctag_pose(candidate, DYNAMIC_MARKER_RADIUS)
+                if pose is not None:
+                    rvec, tvec, image_points = pose
+                    curr_q = rvec_to_quat(rvec)
+                    if last_dynamic_rt is not None:
+                        prev_q = rvec_to_quat(last_dynamic_rt[0])
+                        if np.dot(curr_q, prev_q) < 0.0:
+                            curr_q = -curr_q
+                            rvec = quat_to_rvec(curr_q)
+                    current_rt = (rvec, tvec)
+                    current_quat = curr_q
+                    current_position = np.array(tvec, dtype=float)
+                    dynamic_corner = image_points.reshape(4, 1, 2).astype(np.float32)
+                    cv2.drawFrameAxes(
+                        frame,
+                        CAMERA_MATRIX,
+                        DIST_COEFFS,
+                        rvec,
+                        tvec,
+                        DYNAMIC_MARKER_RADIUS,
+                        2,
+                    )
             if current_rt is None and tracker_corners is not None and prev_gray is not None:
                 new_corners, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
                 if st.sum() == 4:
-                    object_pts = marker_object_points(DYNAMIC_MARKER_LENGTH)
+                    object_pts = circle_marker_object_points(DYNAMIC_MARKER_RADIUS)
                     ok, rvec, tvec = cv2.solvePnP(
                         object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
                     )
@@ -1281,7 +1327,7 @@ def process_video(
                                 DIST_COEFFS,
                                 rvec,
                                 tvec,
-                                DYNAMIC_MARKER_LENGTH * 0.5,
+                                DYNAMIC_MARKER_RADIUS,
                                 2,
                             )
                         else:
