@@ -364,10 +364,11 @@ class Agent(dbus.service.Object):
     @dbus.service.method(AGENT_INTERFACE, in_signature="os", out_signature="")
     def AuthorizeService(self, device, uuid):
         logger.info("AuthorizeService (%s, %s)" % (device, uuid))
-        authorize = ask("Authorize connection (yes/no): ")
-        if authorize == "yes":
-            return
-        raise Rejected("Connection rejected by user")
+        return
+        # authorize = ask("Authorize connection (yes/no): ")
+        # if authorize == "yes":
+        #     return
+        # raise Rejected("Connection rejected by user")
 
     @dbus.service.method(AGENT_INTERFACE, in_signature="o", out_signature="s")
     def RequestPinCode(self, device):
