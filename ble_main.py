@@ -136,11 +136,10 @@ class rpiService(Service):
         self.camera_event = threading.Event()
         self.exposure = "200"
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
-        self.add_characteristic(FindIPCharacteristic(bus, 1, self))
-        self.add_characteristic(CalibrationCharacteristic(bus, 2, self))
-        self.add_characteristic(BatteryMonitorCharacteristic(bus, 3, self))
-        self.add_characteristic(CancelSwingCharacteristic(bus, 4, self))
-        # self.add_characteristic(PowerOffCharacteristic(bus, 3, self))
+        self.add_characteristic(FindIPCharacteristic(bus, 2, self))
+        self.add_characteristic(CalibrationCharacteristic(bus, 3, self))
+        self.add_characteristic(BatteryMonitorCharacteristic(bus, 4, self))
+        self.add_characteristic(CancelSwingCharacteristic(bus, 5, self))
 
 
 class SwingAnalysisCharacteristic(Characteristic):
@@ -149,10 +148,9 @@ class SwingAnalysisCharacteristic(Characteristic):
 
     def __init__(self, bus, index, service):
         Characteristic.__init__(
-            self, bus, index, self.uuid, ["write", "notify", "read"], service,
+            self, bus, index, self.uuid, ["write", "notify"], service,
         )
         self.notifying = False
-        # self.value = self.service.shared_data["metrics"] 
         self.value = {
             "metrics": None,
             "feedback": None
@@ -168,7 +166,6 @@ class SwingAnalysisCharacteristic(Characteristic):
             logger.info("started capture thread")
         else:
             logger.info("Capture already running")
-
 
     def swingAnalysisLoop(self):
         logger.info("swing analysis loop function entered")
@@ -373,24 +370,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                 logger.exception("Low-rate ball detection failed")
                 self.end_loop()
 
-        # except TimeoutError as e:
-        #     logger.warning(str(e))
-        #     self._reset_shared_data("Ball not detected in time.")
-        #     if self.notifying:
-        #         self.notify_client()
-
-        # except Exception as e:
-        #     logger.exception(f"Unexpected failure in WriteValue: {e}")
-        #     self._reset_shared_data("Unexpected system error occurred.")
-        #     if self.notifying:
-        #         self.notify_client()
-
-        # else:
-        #     # This block runs only if try block completes without exception
-        #     logger.debug("Updated value after script")
-        #     if self.notifying:
-        #         self.notify_client()
-
+        
     def StartNotify(self):
         if self.notifying:
             logger.debug("Already notifying")
@@ -403,7 +383,7 @@ class SwingAnalysisCharacteristic(Characteristic):
         if not self.notifying:
             logger.debug("Not currently notifying")
             return
-        logger.debug("StopNotify called")
+        logger.debug("StopNotify called for analyze swing")
         self.notifying = False
 
     def notify_client(self):
@@ -425,7 +405,6 @@ class SwingAnalysisCharacteristic(Characteristic):
             {"Value": [dbus.Byte(b) for b in result_bytes]},
             [],
         )
-
 
     def _reset_shared_data(self, feedback_message):
         logger.debug("Resetting shared data because of failure: %s", feedback_message)
@@ -458,14 +437,15 @@ class FindIPCharacteristic(Characteristic):
         logger.debug("Hostname found: " + repr(self.value))
         result_bytes = json.dumps(self.value).encode('utf-8')
         return [dbus.Byte(b) for b in result_bytes]
-    
+
+
 class CalibrationCharacteristic(Characteristic):
     uuid = "778c5d1a-315f-4baf-a23b-6429b84835e3"
     description = b"Use to calibrate the exposure of the camera!"
 
     def __init__(self, bus, index, service):
         Characteristic.__init__(
-            self, bus, index, self.uuid, ["write", "notify", "read"], service,
+            self, bus, index, self.uuid, ["write", "notify"], service,
         )
         self.notifying = False
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
@@ -508,7 +488,7 @@ class CalibrationCharacteristic(Characteristic):
         if self.notifying:
             logger.debug("Already notifying")
             return
-        logger.debug("StartNotify called for ev calibration")
+        logger.debug("StartNotify called")
         self.notifying = True
         # self.notify_client()
 
@@ -533,6 +513,7 @@ class CalibrationCharacteristic(Characteristic):
         []
         )
 
+
 class BatteryMonitorCharacteristic(Characteristic):
     uuid = "a834f0f7-89cc-453b-8be4-2905d27344bf"
     description = b"Regularly send the battery status to the app!"
@@ -555,7 +536,7 @@ class BatteryMonitorCharacteristic(Characteristic):
         if self.notifying:
             logger.debug("Already notifying")
             return
-        logger.debug("StartNotify called for battery monitor")
+        logger.debug("StartNotify called for battery")
         self.notifying = True
 
         self.value = return_battery_power()
@@ -568,7 +549,7 @@ class BatteryMonitorCharacteristic(Characteristic):
         if not self.notifying:
             logger.debug("Not currently notifying")
             return
-        logger.debug("StopNotify called")
+        logger.debug("StopNotify called for battery")
         self.notifying = False
 
         # stop the periodic update
@@ -598,37 +579,6 @@ class BatteryMonitorCharacteristic(Characteristic):
         self.notify_client()
 
         return True  # continue calling periodically
-    
-class CancelSwingCharacteristic(Characteristic):
-    uuid = "8f1a5ff0-399b-4afe-9cb4-280c8310e388"
-    description = b"Write to cancel swing analysis/camera operation"
-
-    def __init__(self, bus, index, service):
-        Characteristic.__init__(
-            self, bus, index, self.uuid, ["write"], service,
-        )
-        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 5, self))
-
-    def WriteValue(self, value, options):
-        logger.debug("received write command for cancel swing")
-        if hasattr(self.service, "camera_event"):
-            self.service.camera_event.clear()
-            logger.info("Stopped capture")
-
-
-
-# class PowerOffCharacteristic(Characteristic):
-#     uuid = ""
-#     description = b"Write to power off BLE!"
-
-#     def __init__(self, bus, index, service):
-#         Characteristic.__init__(
-#             self, bus, index, self.uuid, ["write"], service,
-#         )
-#         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
-
-#     def WriteValue(self, options):
-#         # CHANGE IN FUTURE TO POWER DOWN DEVICE
         
 
 
@@ -695,8 +645,6 @@ def main():
 
     # powered property on the controller to on
     adapter_props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(1))
-    adapter_props.Set("org.bluez.Adapter1", "Pairable", dbus.Boolean(0))
-
 
     # Get manager objs
     service_manager = dbus.Interface(adapter_obj, GATT_MANAGER_IFACE)
@@ -712,18 +660,8 @@ def main():
 
     mainloop = MainLoop()
 
-    service_manager.RegisterApplication(
-        app.get_path(),
-        {},
-        reply_handler=register_app_cb,
-        error_handler=register_app_error_cb,
-    )
-
     agent_manager = dbus.Interface(obj, "org.bluez.AgentManager1")
     agent_manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
-
-    # Make sure Bluetooth is not pairable
-    subprocess.run(["bluetoothctl", "pairable", "off"])
 
     ad_manager.RegisterAdvertisement(
         advertisement.get_path(),
@@ -734,6 +672,12 @@ def main():
 
     logger.info("Registering GATT application...")
 
+    service_manager.RegisterApplication(
+        app.get_path(),
+        {},
+        reply_handler=register_app_cb,
+        error_handler=register_app_error_cb,
+    )
 
     agent_manager.RequestDefaultAgent(AGENT_PATH)
 
