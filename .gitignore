@@ -25,3 +25,4 @@ ball_frames/
 
 # Ignore BLE logs
 *.log
+/CCTag
