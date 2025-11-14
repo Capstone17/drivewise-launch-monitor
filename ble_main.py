@@ -133,19 +133,13 @@ class rpiService(Service):
 
     def __init__(self, bus, index):
         Service.__init__(self, bus, index, self.rpi_SVC_UUID, True)
-        self.shared_data = {
-            "metrics": None,
-            "feedback": None
-        }
         self.camera_event = threading.Event()
         self.exposure = "200"
         self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
-        self.add_characteristic(GenerateFeedbackCharacteristic(bus, 1, self))
         self.add_characteristic(FindIPCharacteristic(bus, 2, self))
         self.add_characteristic(CalibrationCharacteristic(bus, 3, self))
         self.add_characteristic(BatteryMonitorCharacteristic(bus, 4, self))
         self.add_characteristic(CancelSwingCharacteristic(bus, 5, self))
-        # self.add_characteristic(PowerOffCharacteristic(bus, 3, self))
 
 
 class SwingAnalysisCharacteristic(Characteristic):
@@ -154,36 +148,31 @@ class SwingAnalysisCharacteristic(Characteristic):
 
     def __init__(self, bus, index, service):
         Characteristic.__init__(
-            self, bus, index, self.uuid, ["read", "write", "notify"], service,
+            self, bus, index, self.uuid, ["write", "notify"], service,
         )
         self.notifying = False
-        self.value = self.service.shared_data["metrics"] 
+        self.value = {
+            "metrics": None,
+            "feedback": None
+        }
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 0, self))
-
-    def ReadValue(self, options):
-        # Run computer vision script here
-        # Run rule-based AI with all 3 json files to recieve 4 output metrics in dict + string message
-        logger.debug("Analysis finished, sending metrics: " + repr(self.value))
-        result_bytes = json.dumps(self.value).encode('utf-8')
-        return [dbus.Byte(b) for b in result_bytes]
         
         
     def WriteValue(self, value, options):
         logger.debug("Received write command")
         if not self.service.camera_event.is_set():
             self.service.camera_event.set()
-            thread = threading.Thread(target=self.swingAnalysisLoop, args=(value),daemon=True).start()
+            threading.Thread(target=self.swingAnalysisLoop,daemon=True).start()
             logger.info("started capture thread")
         else:
             logger.info("Capture already running")
 
-
-    def swingAnalysisLoop(self, value):
+    def swingAnalysisLoop(self):
         logger.info("swing analysis loop function entered")
 
         while self.service.camera_event.is_set():
             try:
-                set_status_led_color("red")
+                set_status_led_color("yellow")
                 ball_detected = False
 
                 logger.info("STAGE1: before auto_capture is called")
@@ -347,7 +336,7 @@ class SwingAnalysisCharacteristic(Characteristic):
 
                 logger.info("STAGE4: STATE: %s latest video is sent to video_ball_detector.py", ball_detected_high)
                 
-                set_status_led_color("yellow")
+                set_status_led_color("red")
 
                 logger.info("Processing video data...")
                 try:
@@ -364,8 +353,8 @@ class SwingAnalysisCharacteristic(Characteristic):
                     )
 
                     logger.info("Running rule-based analysis...")
-                    self.service.shared_data = rule_based_system("mid-iron")
-                    self.value = self.service.shared_data["metrics"]
+                    self.value = rule_based_system("mid-iron")
+                    # self.value = self.service.shared_data["metrics"]
 
                 except (FileNotFoundError, RuntimeError) as e:
                     logger.exception(f"Video processing failed: {e}")
@@ -381,24 +370,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                 logger.exception("Low-rate ball detection failed")
                 self.end_loop()
 
-        # except TimeoutError as e:
-        #     logger.warning(str(e))
-        #     self._reset_shared_data("Ball not detected in time.")
-        #     if self.notifying:
-        #         self.notify_client()
-
-        # except Exception as e:
-        #     logger.exception(f"Unexpected failure in WriteValue: {e}")
-        #     self._reset_shared_data("Unexpected system error occurred.")
-        #     if self.notifying:
-        #         self.notify_client()
-
-        # else:
-        #     # This block runs only if try block completes without exception
-        #     logger.debug("Updated value after script")
-        #     if self.notifying:
-        #         self.notify_client()
-
+        
     def StartNotify(self):
         if self.notifying:
             logger.debug("Already notifying")
@@ -411,7 +383,7 @@ class SwingAnalysisCharacteristic(Characteristic):
         if not self.notifying:
             logger.debug("Not currently notifying")
             return
-        logger.debug("StopNotify called")
+        logger.debug("StopNotify called for analyze swing")
         self.notifying = False
 
     def notify_client(self):
@@ -419,8 +391,15 @@ class SwingAnalysisCharacteristic(Characteristic):
             logger.debug("Not notifying, skipping notify_client")
             return
 
-        result_bytes = json.dumps(self.value).encode("utf-8")
-        logger.debug("Emitting PropertiesChanged with updated value")
+        result_bytes = json.dumps(self.value["metrics"]).encode("utf-8")
+        logger.debug("Notifying mobile app with metric values")
+        self.PropertiesChanged(
+            GATT_CHRC_IFACE,
+            {"Value": [dbus.Byte(b) for b in result_bytes]},
+            [],
+        )
+        result_bytes = json.dumps(self.value["feedback"]).encode("utf-8")
+        logger.debug("Notifying mobile app with feedback values")
         self.PropertiesChanged(
             GATT_CHRC_IFACE,
             {"Value": [dbus.Byte(b) for b in result_bytes]},
@@ -429,9 +408,9 @@ class SwingAnalysisCharacteristic(Characteristic):
 
     def _reset_shared_data(self, feedback_message):
         logger.debug("Resetting shared data because of failure: %s", feedback_message)
-        self.service.shared_data["metrics"] = None
-        self.service.shared_data["feedback"] = feedback_message
-        self.value = self.service.shared_data["metrics"]
+        self.value["metrics"] = None
+        self.value["feedback"] = feedback_message
+        # self.value = self.service.shared_data["metrics"]
 
     def end_loop(self):
         if self.notifying:
@@ -440,25 +419,6 @@ class SwingAnalysisCharacteristic(Characteristic):
         self.service.camera_event.clear()
         logger.info("Capture loop ended and event cleared")
 
-class GenerateFeedbackCharacteristic(Characteristic):
-    uuid = "2c58a217-0a9b-445f-adac-0b37bd8635c3"
-    description = b"Generate feedback based on swing metrics!"
-
-    def __init__(self, bus, index, service):
-        Characteristic.__init__(
-            self, bus, index, self.uuid, ["read"], service,
-        )
-        self.value = self.service.shared_data["feedback"]
-        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 1, self))
-        logger.debug("Entered generatefeedback characteristic")
-
-
-    def ReadValue(self, options):
-        # take text from json file that has feedback
-        self.value = self.service.shared_data["feedback"]
-        logger.debug("sending feedback based on metrics: " + repr(self.value))
-        result_bytes = json.dumps(self.value).encode('utf-8')
-        return [dbus.Byte(b) for b in result_bytes]
     
 class FindIPCharacteristic(Characteristic):
     uuid = "2c75511d-11b8-407d-b275-a295ef2c199f"
@@ -477,7 +437,8 @@ class FindIPCharacteristic(Characteristic):
         logger.debug("Hostname found: " + repr(self.value))
         result_bytes = json.dumps(self.value).encode('utf-8')
         return [dbus.Byte(b) for b in result_bytes]
-    
+
+
 class CalibrationCharacteristic(Characteristic):
     uuid = "778c5d1a-315f-4baf-a23b-6429b84835e3"
     description = b"Use to calibrate the exposure of the camera!"
@@ -527,7 +488,7 @@ class CalibrationCharacteristic(Characteristic):
         if self.notifying:
             logger.debug("Already notifying")
             return
-        logger.debug("StartNotify called for ev calibration")
+        logger.debug("StartNotify called")
         self.notifying = True
         # self.notify_client()
 
@@ -543,7 +504,7 @@ class CalibrationCharacteristic(Characteristic):
             logger.debug("Not notifying, skipping notify_client")
             return
 
-        self.value = "Calibration complete!"
+        self.value = "success"
         result_bytes = json.dumps(self.value).encode('utf-8')
         logger.debug("Notifying values changed")
         self.PropertiesChanged(
@@ -551,6 +512,7 @@ class CalibrationCharacteristic(Characteristic):
         {"Value": [dbus.Byte(b) for b in result_bytes]},
         []
         )
+
 
 class BatteryMonitorCharacteristic(Characteristic):
     uuid = "a834f0f7-89cc-453b-8be4-2905d27344bf"
@@ -574,7 +536,7 @@ class BatteryMonitorCharacteristic(Characteristic):
         if self.notifying:
             logger.debug("Already notifying")
             return
-        logger.debug("StartNotify called for battery monitor")
+        logger.debug("StartNotify called for battery")
         self.notifying = True
 
         self.value = return_battery_power()
@@ -587,7 +549,7 @@ class BatteryMonitorCharacteristic(Characteristic):
         if not self.notifying:
             logger.debug("Not currently notifying")
             return
-        logger.debug("StopNotify called")
+        logger.debug("StopNotify called for battery")
         self.notifying = False
 
         # stop the periodic update
@@ -617,7 +579,8 @@ class BatteryMonitorCharacteristic(Characteristic):
         self.notify_client()
 
         return True  # continue calling periodically
-    
+        
+
 class CancelSwingCharacteristic(Characteristic):
     uuid = "8f1a5ff0-399b-4afe-9cb4-280c8310e388"
     description = b"Write to cancel swing analysis/camera operation"
@@ -633,22 +596,6 @@ class CancelSwingCharacteristic(Characteristic):
         if hasattr(self.service, "camera_event"):
             self.service.camera_event.clear()
             logger.info("Stopped capture")
-
-
-
-# class PowerOffCharacteristic(Characteristic):
-#     uuid = ""
-#     description = b"Write to power off BLE!"
-
-#     def __init__(self, bus, index, service):
-#         Characteristic.__init__(
-#             self, bus, index, self.uuid, ["write"], service,
-#         )
-#         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
-
-#     def WriteValue(self, options):
-#         # CHANGE IN FUTURE TO POWER DOWN DEVICE
-        
 
 
 class CharacteristicUserDescriptionDescriptor(Descriptor):
@@ -681,7 +628,7 @@ class rpiAdvertisement(Advertisement):
 
         self.add_service_uuid(rpiService.rpi_SVC_UUID)
 
-        self.add_local_name("Company17_Rpi5")
+        self.add_local_name("group17rpi")
         self.include_tx_power = True
 
 
