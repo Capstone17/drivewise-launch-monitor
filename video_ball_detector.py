@@ -45,8 +45,8 @@ BALL_SCORE_THRESHOLD = 0.4
 MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
-MOTION_WINDOW_FRAMES = 40  # number of frames kept in the motion window
-IMPACT_SPEED_THRESHOLD_PX = 6.0  # pixel distance that marks ball movement
+MOTION_WINDOW_FRAMES = 80  # number of frames kept in the motion window
+IMPACT_SPEED_THRESHOLD_PX = 1.0  # pixel distance that marks ball movement
 
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
     "1",
@@ -1128,6 +1128,10 @@ def process_video(
     """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
+
+    current_calibration = None
+    if calibration is not None:
+        current_calibration = apply_calibration(calibration)
 
     ball_compile_start = time.perf_counter()
     detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
