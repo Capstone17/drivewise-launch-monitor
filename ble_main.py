@@ -172,7 +172,7 @@ class SwingAnalysisCharacteristic(Characteristic):
 
         while self.service.camera_event.is_set():
             try:
-                set_status_led_color("red")
+                set_status_led_color("yellow")
                 ball_detected = False
 
                 logger.info("STAGE1: before auto_capture is called")
@@ -336,7 +336,7 @@ class SwingAnalysisCharacteristic(Characteristic):
 
                 logger.info("STAGE4: STATE: %s latest video is sent to video_ball_detector.py", ball_detected_high)
                 
-                set_status_led_color("yellow")
+                set_status_led_color("red")
 
                 logger.info("Processing video data...")
                 try:
