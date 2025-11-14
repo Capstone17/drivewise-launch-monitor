@@ -132,6 +132,100 @@ except ValueError:
     _club_slowdown_scale_env = 1.0
 CLUB_X_SLOWDOWN_SCALE = min(1.0, max(0.0, _club_slowdown_scale_env))
 
+@dataclass
+class TailCheckResult:
+    ball_present: bool
+    hits: int
+    frames_checked: int
+    scores: list[float]
+    frame_indices: list[int]
+
+def check_tail_for_ball(
+    video_path: str,
+    *,
+    detector: TFLiteBallDetector | None = None,
+    calibration: dict[str, object] | None = None,
+    frames_to_check: int = 12,
+    stride: int = 1,
+    score_threshold: float = 0.25,
+    min_hits: int = 2,
+) -> TailCheckResult:
+    """Inspect the tail end of a clip and report whether the ball remains visible."""
+
+    if calibration is not None:
+        apply_calibration(calibration)
+
+    if frames_to_check <= 0:
+        return TailCheckResult(False, 0, 0, [], [])
+    if stride <= 0:
+        raise ValueError("stride must be positive")
+
+    owned_detector = detector is None
+    if detector is None:
+        detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
+
+    frame_loop_start = time.perf_counter()
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Unable to open video for tail check: {video_path}")
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+    scores: list[float] = []
+    frame_indices: list[int] = []
+    hits = 0
+    processed = 0
+
+    if total_frames > 0:
+        last_idx = max(0, total_frames - 1)
+        span = frames_to_check * stride
+        start_idx = max(0, last_idx - span + 1)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_idx)
+        current_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) or start_idx
+        while processed < frames_to_check and current_idx <= last_idx:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                break
+            detections = detector.detect(frame)
+            best_score = max((det.get("score", 0.0) for det in detections), default=0.0)
+            scores.append(float(best_score))
+            frame_indices.append(int(current_idx))
+            if best_score >= score_threshold:
+                hits += 1
+            processed += 1
+            if processed >= frames_to_check:
+                break
+            skip = stride - 1
+            while skip > 0 and current_idx < last_idx:
+                ok_skip = cap.grab()
+                current_idx += 1
+                if not ok_skip:
+                    break
+                skip -= 1
+            current_idx += 1
+    else:
+        while processed < frames_to_check:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                break
+            detections = detector.detect(frame)
+            best_score = max((det.get("score", 0.0) for det in detections), default=0.0)
+            scores.append(float(best_score))
+            frame_indices.append(processed)
+            if best_score >= score_threshold:
+                hits += 1
+            processed += 1
+            for _ in range(stride - 1):
+                if not cap.grab():
+                    break
+
+    cap.release()
+    if owned_detector and hasattr(detector, "interpreter"):
+        del detector
+
+    ball_present = hits >= min_hits and hits > 0
+    return TailCheckResult(ball_present, hits, processed, scores, frame_indices)
+
 
 def bbox_to_ball_metrics(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
     """Return center, radius and distance estimates for a bounding box."""
@@ -1014,6 +1108,13 @@ def process_video(
     ball_path: str,
     sticker_path: str,
     frames_dir: str = "ball_frames",
+    *,
+    tail_check: TailCheckResult | None = None,
+    calibration: dict[str, object] | None = None,
+    tail_frames_to_check: int = 12,
+    tail_stride: int = 1,
+    tail_score_threshold: float = 0.25,
+    tail_min_hits: int = 2,
 ) -> str:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
@@ -1028,6 +1129,17 @@ def process_video(
     ball_compile_start = time.perf_counter()
     detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
     ball_compile_time = time.perf_counter() - ball_compile_start
+
+    if tail_check is None:
+        tail_check = check_tail_for_ball(
+            video_path,
+            detector=detector,
+            calibration=current_calibration,
+            frames_to_check=tail_frames_to_check,
+            stride=tail_stride,
+            score_threshold=tail_score_threshold,
+            min_hits=tail_min_hits,
+        )
 
     start_frame, end_frame, ball_found, motion_stats = find_motion_window(
         video_path,
