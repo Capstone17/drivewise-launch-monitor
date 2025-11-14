@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import warnings
+from dataclasses import dataclass
 
 warnings.filterwarnings(
     "ignore",
