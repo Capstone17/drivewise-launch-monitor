@@ -81,6 +81,65 @@ _calib_data = np.load(_calib_path)
 CAMERA_MATRIX = _calib_data["camera_matrix"]
 DIST_COEFFS = _calib_data["dist_coeffs"]
 
+_DEFAULT_CAMERA_MATRIX = CAMERA_MATRIX.astype(np.float32, copy=True)
+_DEFAULT_DIST_COEFFS = DIST_COEFFS.astype(np.float32, copy=True)
+_DEFAULT_FOCAL_LENGTH = float(FOCAL_LENGTH)
+_DEFAULT_BALL_RADIUS = float(ACTUAL_BALL_RADIUS)
+_CURRENT_CALIBRATION: dict[str, object] | None = None
+
+
+def apply_calibration(calibration: dict[str, object] | None = None) -> dict[str, object]:
+    """Update global calibration parameters and return the resolved set."""
+
+    global CAMERA_MATRIX, DIST_COEFFS, FOCAL_LENGTH, ACTUAL_BALL_RADIUS, _CURRENT_CALIBRATION
+
+    matrix = _DEFAULT_CAMERA_MATRIX
+    dist = _DEFAULT_DIST_COEFFS
+    focal = _DEFAULT_FOCAL_LENGTH
+    radius = _DEFAULT_BALL_RADIUS
+
+    if calibration:
+        cam_mat = calibration.get("camera_matrix")
+        if cam_mat is not None:
+            arr = np.asarray(cam_mat, dtype=np.float32)
+            if arr.shape == (3, 3):
+                matrix = arr
+        dist_vals = calibration.get("dist_coeffs")
+        if dist_vals is not None:
+            arr = np.asarray(dist_vals, dtype=np.float32)
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)
+            if arr.ndim == 2:
+                dist = arr
+        focal_val = calibration.get("focal_length")
+        if focal_val is not None:
+            try:
+                focal = float(focal_val)
+            except (TypeError, ValueError):
+                pass
+        radius_val = calibration.get("ball_radius")
+        if radius_val is not None:
+            try:
+                radius = float(radius_val)
+            except (TypeError, ValueError):
+                pass
+
+    CAMERA_MATRIX = matrix.astype(np.float32, copy=True)
+    DIST_COEFFS = dist.astype(np.float32, copy=True)
+    FOCAL_LENGTH = float(focal)
+    ACTUAL_BALL_RADIUS = float(radius)
+
+    _CURRENT_CALIBRATION = {
+        "camera_matrix": CAMERA_MATRIX.copy(),
+        "dist_coeffs": DIST_COEFFS.copy(),
+        "focal_length": FOCAL_LENGTH,
+        "ball_radius": ACTUAL_BALL_RADIUS,
+    }
+    return _CURRENT_CALIBRATION
+
+
+apply_calibration()
+
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
 ARUCO_PARAMS = cv2.aruco.DetectorParameters()
 ARUCO_PARAMS.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
