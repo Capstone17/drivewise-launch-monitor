@@ -585,41 +585,67 @@ def predict_sticker_series(
     measured_frames = sorted(measured_lookup)
     if not measured_frames:
         return []
-    measured_times = [float(measured_lookup[frame]["time"]) for frame in measured_frames]
     measured_positions = [
         np.array(measured_lookup[frame]["position"], dtype=float) for frame in measured_frames
     ]
+    first_measured_frame = measured_frames[0]
+    last_measured_frame = measured_frames[-1]
+    trend_coeffs: list[np.ndarray] | None = None
+    if len(measured_frames) >= 2:
+        frame_values = np.array(measured_frames, dtype=float)
+        position_matrix = np.vstack(measured_positions)
+        trend_coeffs = []
+        for axis in range(3):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", POLYFIT_RANK_WARNING)
+                coeffs = np.polyfit(frame_values, position_matrix[:, axis], deg=1)
+            trend_coeffs.append(coeffs)
 
-    def interpolate_xyz(frame: int, time_value: float) -> np.ndarray:
+    def extrapolate_with_trend(frame: int) -> np.ndarray:
+        assert trend_coeffs is not None
+        return np.array(
+            [trend_coeffs[axis][0] * frame + trend_coeffs[axis][1] for axis in range(3)],
+            dtype=float,
+        )
+
+    def interpolate_xyz(frame: int) -> np.ndarray:
+        if len(measured_frames) == 1:
+            return measured_positions[0].astype(float, copy=True)
+        if frame <= first_measured_frame:
+            if trend_coeffs is not None:
+                return extrapolate_with_trend(frame)
+            return measured_positions[0].astype(float, copy=True)
+        if frame >= last_measured_frame:
+            if trend_coeffs is not None:
+                return extrapolate_with_trend(frame)
+            return measured_positions[-1].astype(float, copy=True)
         idx = bisect_left(measured_frames, frame)
         if idx <= 0:
-            return measured_positions[0].astype(float, copy=True)
-        if idx >= len(measured_frames):
-            return measured_positions[-1].astype(float, copy=True)
-        left_idx = idx - 1
-        right_idx = idx
-        left_time = measured_times[left_idx]
-        right_time = measured_times[right_idx]
-        denom = right_time - left_time
-        if denom <= 1e-9:
-            frame_denom = measured_frames[right_idx] - measured_frames[left_idx]
-            if frame_denom <= 0:
-                ratio = 0.0
-            else:
-                ratio = (frame - measured_frames[left_idx]) / frame_denom
+            left_idx = 0
+            right_idx = 1
+        elif idx >= len(measured_frames):
+            left_idx = len(measured_frames) - 2
+            right_idx = len(measured_frames) - 1
         else:
-            ratio = (time_value - left_time) / denom
-        ratio = min(1.0, max(0.0, ratio))
+            left_idx = idx - 1
+            right_idx = idx
+        left_frame = measured_frames[left_idx]
+        right_frame = measured_frames[right_idx]
+        span = right_frame - left_frame
+        if span <= 0:
+            ratio = 0.0
+        else:
+            ratio = (frame - left_frame) / span
         left_pos = measured_positions[left_idx]
         right_pos = measured_positions[right_idx]
-        return (1.0 - ratio) * left_pos + ratio * right_pos
+        return left_pos + ratio * (right_pos - left_pos)
 
     series = []
     for frame in range(series_start, end_frame):
         time = frame / fps
         measurement = measured_lookup.get(frame)
         if measurement is None:
-            xyz = interpolate_xyz(frame, time)
+            xyz = interpolate_xyz(frame)
             source = "predicted"
         else:
             pos = np.array(measurement["position"], dtype=float)
