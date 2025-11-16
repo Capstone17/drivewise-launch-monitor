@@ -45,7 +45,7 @@ BALL_SCORE_THRESHOLD = 0.4
 MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
-MOTION_WINDOW_FRAMES = 80  # number of frames kept in the motion window
+MOTION_WINDOW_FRAMES = 160  # number of frames kept in the motion window
 IMPACT_SPEED_THRESHOLD_PX = 1.0  # pixel distance that marks ball movement
 
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
@@ -176,23 +176,6 @@ MAX_TRANSLATION_DELTA = 30.0  # translation jump threshold
 MAX_ROTATION_DELTA = 45.0  # degrees
 
 CLUB_IMPACT_Z_OFFSET = float(os.environ.get("CLUB_IMPACT_Z_OFFSET", "0.0"))
-try:
-    _club_slowdown_frames_env = int(os.environ.get("CLUB_X_SLOWDOWN_FRAMES", "6"))
-except ValueError:
-    _club_slowdown_frames_env = 6
-CLUB_X_SLOWDOWN_FRAMES = max(1, _club_slowdown_frames_env)
-
-try:
-    _club_slowdown_power_env = float(os.environ.get("CLUB_X_SLOWDOWN_POWER", "3.0"))
-except ValueError:
-    _club_slowdown_power_env = 3.0
-CLUB_X_SLOWDOWN_POWER = max(1.0, _club_slowdown_power_env)
-
-try:
-    _club_slowdown_scale_env = float(os.environ.get("CLUB_X_SLOWDOWN_SCALE", "1.0"))
-except ValueError:
-    _club_slowdown_scale_env = 1.0
-CLUB_X_SLOWDOWN_SCALE = min(1.0, max(0.0, _club_slowdown_scale_env))
 
 @dataclass
 class TailCheckResult:
@@ -579,37 +562,6 @@ def quat_to_rvec(q: np.ndarray) -> np.ndarray:
     return rvec
 
 
-def apply_club_x_slowdown(
-    series: list[dict[str, float | int | str]],
-    *,
-    frames: int = CLUB_X_SLOWDOWN_FRAMES,
-    ease_power: float = CLUB_X_SLOWDOWN_POWER,
-    scale: float = CLUB_X_SLOWDOWN_SCALE,
-) -> None:
-
-    if not series or frames <= 0 or scale <= 0.0:
-        return
-    window = min(frames, len(series))
-    if window < 2:
-        return
-    start_idx = len(series) - window
-    original = [float(series[start_idx + i]["x"]) for i in range(window)]
-    slowed_x = original[0]
-    series[start_idx]["x"] = slowed_x
-    denom = window - 1
-    for offset in range(1, window):
-        idx = start_idx + offset
-        orig_delta = original[offset] - original[offset - 1]
-        if denom > 0:
-            progress = max(0.0, min(1.0, offset / denom))
-        else:
-            progress = 1.0
-        easing = pow(progress, ease_power)
-        slowdown = max(0.0, min(1.0, 1.0 - scale * easing))
-        slowed_x += orig_delta * slowdown
-        series[idx]["x"] = slowed_x
-
-
 def predict_sticker_series(
     measurements: list[dict[str, object]],
     start_frame: int,
@@ -618,8 +570,6 @@ def predict_sticker_series(
     *,
     impact_frame: int | None = None,
     impact_ball_z: float | None = None,
-    impact_ball_xy: tuple[float, float] | None = None,
-    impact_ball_radius: float | None = None,
     impact_z_offset: float = CLUB_IMPACT_Z_OFFSET,
 ) -> list[dict[str, float | int | str]]:
 
@@ -671,20 +621,6 @@ def predict_sticker_series(
                 [float(np.polyval(models[axis], target_time)) for axis in range(3)],
                 dtype=float,
             )
-            if impact_ball_xy is not None:
-                ball_center = np.array(impact_ball_xy, dtype=float)
-                ball_radius = (
-                    float(impact_ball_radius)
-                    if impact_ball_radius is not None
-                    else ACTUAL_BALL_RADIUS
-                )
-                ball_radius = max(ball_radius, 1e-3)
-                target_xyz[0] = float(
-                    np.clip(target_xyz[0], ball_center[0] - ball_radius, ball_center[0] + ball_radius)
-                )
-                target_xyz[1] = float(
-                    np.clip(target_xyz[1], ball_center[1] - ball_radius, ball_center[1] + ball_radius)
-                )
             if impact_ball_z is not None:
                 target_xyz[2] = impact_ball_z + impact_z_offset
             for axis in range(3):
@@ -1262,7 +1198,6 @@ def process_video(
     impact_frame_idx: int | None = None
     impact_time: float | None = None
     impact_ball_z: float | None = None
-    impact_ball_xy: tuple[float, float] | None = None
     # Tracking of last detected ball position and velocity
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
@@ -1343,7 +1278,6 @@ def process_video(
                                 impact_frame_idx = frame_idx
                                 impact_time = t
                                 impact_ball_z = bz
-                                impact_ball_xy = (bx, by)
                         last_ball_center = center
                         last_ball_radius = rad
                         detected_center = (cx, cy, rad)
@@ -1516,12 +1450,9 @@ def process_video(
         video_fps,
         impact_frame=impact_frame_idx,
         impact_ball_z=impact_ball_z,
-        impact_ball_xy=impact_ball_xy,
-        impact_ball_radius=ACTUAL_BALL_RADIUS,
     )
     if not sticker_series:
         raise RuntimeError("No sticker detected in the video")
-    apply_club_x_slowdown(sticker_series)
     sticker_coords = []
     for entry in sticker_series:
         source = str(entry.get("source", "predicted"))
@@ -1557,7 +1488,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "tst_16.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "validation_0_0_0.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
