@@ -6,6 +6,7 @@ import sys
 import time
 import warnings
 from dataclasses import dataclass
+from bisect import bisect_left
 
 warnings.filterwarnings(
     "ignore",
@@ -174,8 +175,6 @@ USE_BLUR = False
 MAX_REPROJECTION_ERROR = 2.0  # pixels
 MAX_TRANSLATION_DELTA = 30.0  # translation jump threshold
 MAX_ROTATION_DELTA = 45.0  # degrees
-
-CLUB_IMPACT_Z_OFFSET = float(os.environ.get("CLUB_IMPACT_Z_OFFSET", "0.0"))
 
 @dataclass
 class TailCheckResult:
@@ -567,10 +566,6 @@ def predict_sticker_series(
     start_frame: int,
     end_frame: int,
     fps: float,
-    *,
-    impact_frame: int | None = None,
-    impact_ball_z: float | None = None,
-    impact_z_offset: float = CLUB_IMPACT_Z_OFFSET,
 ) -> list[dict[str, float | int | str]]:
 
     if not measurements or start_frame >= end_frame:
@@ -586,89 +581,57 @@ def predict_sticker_series(
     if series_start >= end_frame:
         return []
 
-    times = np.array([float(m["time"]) for m in relevant], dtype=float)
-    positions = np.stack([np.array(m["position"], dtype=float) for m in relevant])
-
-    if times.size == 1:
-        degree = 0
-    elif times.size == 2:
-        degree = 1
-    else:
-        degree = 2  # capture acceleration
-
-    models = []
-    for axis in range(3):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", POLYFIT_RANK_WARNING)
-            coeffs = np.polyfit(times, positions[:, axis], deg=degree)
-        models.append(coeffs)
-
-    axis_overrides: dict[int, dict[str, float]] = {}
-    if impact_frame is not None and fps > 0.0 and relevant:
-        target_time = impact_frame / fps
-        last_idx = len(relevant) - 1
-        last_time = times[last_idx]
-        duration = target_time - last_time
-        if duration > 1e-6:
-            last_position = positions[last_idx]
-            if last_idx > 0:
-                prev_time = times[last_idx - 1]
-                dt = max(last_time - prev_time, 1e-6)
-                last_velocity = (positions[last_idx] - positions[last_idx - 1]) / dt
-            else:
-                last_velocity = np.zeros(3, dtype=float)
-            target_xyz = np.array(
-                [float(np.polyval(models[axis], target_time)) for axis in range(3)],
-                dtype=float,
-            )
-            if impact_ball_z is not None:
-                target_xyz[2] = impact_ball_z + impact_z_offset
-            for axis in range(3):
-                if axis == 2 and impact_ball_z is None:
-                    continue
-                accel = 2.0 * (
-                    target_xyz[axis] - last_position[axis] - last_velocity[axis] * duration
-                ) / (duration * duration)
-                axis_overrides[axis] = {
-                    "start_time": last_time,
-                    "duration": duration,
-                    "pos0": last_position[axis],
-                    "vel0": last_velocity[axis],
-                    "accel": accel,
-                }
-
     measured_lookup = {m["frame"]: m for m in relevant}
+    measured_frames = sorted(measured_lookup)
+    if not measured_frames:
+        return []
+    measured_times = [float(measured_lookup[frame]["time"]) for frame in measured_frames]
+    measured_positions = [
+        np.array(measured_lookup[frame]["position"], dtype=float) for frame in measured_frames
+    ]
+
+    def interpolate_xyz(frame: int, time_value: float) -> np.ndarray:
+        idx = bisect_left(measured_frames, frame)
+        if idx <= 0:
+            return measured_positions[0].astype(float, copy=True)
+        if idx >= len(measured_frames):
+            return measured_positions[-1].astype(float, copy=True)
+        left_idx = idx - 1
+        right_idx = idx
+        left_time = measured_times[left_idx]
+        right_time = measured_times[right_idx]
+        denom = right_time - left_time
+        if denom <= 1e-9:
+            frame_denom = measured_frames[right_idx] - measured_frames[left_idx]
+            if frame_denom <= 0:
+                ratio = 0.0
+            else:
+                ratio = (frame - measured_frames[left_idx]) / frame_denom
+        else:
+            ratio = (time_value - left_time) / denom
+        ratio = min(1.0, max(0.0, ratio))
+        left_pos = measured_positions[left_idx]
+        right_pos = measured_positions[right_idx]
+        return (1.0 - ratio) * left_pos + ratio * right_pos
+
     series = []
     for frame in range(series_start, end_frame):
         time = frame / fps
         measurement = measured_lookup.get(frame)
         if measurement is None:
-            xyz: list[float] = []
-            for axis in range(3):
-                value = float(np.polyval(models[axis], time))
-                override = axis_overrides.get(axis)
-                if override is not None and time >= override["start_time"]:
-                    dt = time - override["start_time"]
-                    if dt >= 0.0:
-                        dt = min(dt, override["duration"])
-                        value = (
-                            override["pos0"]
-                            + override["vel0"] * dt
-                            + 0.5 * override["accel"] * dt * dt
-                        )
-                xyz.append(value)
+            xyz = interpolate_xyz(frame, time)
             source = "predicted"
         else:
             pos = np.array(measurement["position"], dtype=float)
-            xyz = [float(pos[0]), float(pos[1]), float(pos[2])]
+            xyz = pos
             source = "measured"
         series.append(
             {
                 "frame": frame,
                 "time": time,
-                "x": xyz[0],
-                "y": xyz[1],
-                "z": xyz[2],
+                "x": float(xyz[0]),
+                "y": float(xyz[1]),
+                "z": float(xyz[2]),
                 "source": source,
             }
         )
@@ -1197,7 +1160,6 @@ def process_video(
     missing_frames = 0
     impact_frame_idx: int | None = None
     impact_time: float | None = None
-    impact_ball_z: float | None = None
     # Tracking of last detected ball position and velocity
     last_ball_center: np.ndarray | None = None
     last_ball_radius: float | None = None
@@ -1277,7 +1239,6 @@ def process_video(
                             if impact_frame_idx is None and speed >= IMPACT_SPEED_THRESHOLD_PX:
                                 impact_frame_idx = frame_idx
                                 impact_time = t
-                                impact_ball_z = bz
                         last_ball_center = center
                         last_ball_radius = rad
                         detected_center = (cx, cy, rad)
@@ -1448,8 +1409,6 @@ def process_video(
         inference_start,
         sticker_cutoff_frame,
         video_fps,
-        impact_frame=impact_frame_idx,
-        impact_ball_z=impact_ball_z,
     )
     if not sticker_series:
         raise RuntimeError("No sticker detected in the video")
