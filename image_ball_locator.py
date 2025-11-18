@@ -29,7 +29,7 @@ def find_ball_y_in_image(image_path: str, model_path: str = DEFAULT_MODEL_PATH) 
 
     best = max(detections, key=lambda d: d["score"])
     _, y1, _, y2 = best["bbox"]
-    bottom_from_top = float(max(y1, y2))
+    bottom_from_top = float(max(y1, y2)) - 3.0
     h = frame.shape[0]
     bottom_from_bottom = float(h - 1 - bottom_from_top)
     return bottom_from_top, bottom_from_bottom
