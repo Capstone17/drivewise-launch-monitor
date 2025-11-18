@@ -46,7 +46,7 @@ BALL_SCORE_THRESHOLD = 0.4
 MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
-MOTION_WINDOW_FRAMES = 80  # number of frames kept in the motion window
+MOTION_WINDOW_FRAMES = 160  # number of frames kept in the motion window
 IMPACT_SPEED_THRESHOLD_PX = 1.0  # pixel distance that marks ball movement
 
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
@@ -953,8 +953,10 @@ def find_motion_window(
         enhanced, _ = preprocess_frame(frame)
         stats["detector_runs"] += 1
         detections = detector.detect(enhanced)
-        best: dict | None = None
-        best_score = float("-inf")
+        best_safe: dict | None = None
+        best_safe_score = float("-inf")
+        best_edge: dict | None = None
+        best_edge_score = float("-inf")
         for det in detections:
             score = det["score"]
             if score < score_threshold:
@@ -967,22 +969,28 @@ def find_motion_window(
             aspect = min(width, height) / max(width, height)
             if aspect < MOTION_WINDOW_MIN_ASPECT_RATIO:
                 continue
+            inside = True
             if frame_width and frame_height:
-                if not bbox_within_image(det["bbox"], float(frame_width), float(frame_height)):
-                    continue
+                inside = bbox_within_image(det["bbox"], float(frame_width), float(frame_height))
             cx, cy, radius, _ = bbox_to_ball_metrics(x1, y1, x2, y2)
             if radius < MIN_BALL_RADIUS_PX:
                 continue
-            if score > best_score:
-                center = np.array([cx, cy], dtype=float)
-                best = {
-                    "frame": idx,
-                    "center": center,
-                    "radius": float(radius),
-                    "bbox": (float(x1), float(y1), float(x2), float(y2)),
-                    "score": float(score),
-                }
-                best_score = score
+            center = np.array([cx, cy], dtype=float)
+            candidate = {
+                "frame": idx,
+                "center": center,
+                "radius": float(radius),
+                "bbox": (float(x1), float(y1), float(x2), float(y2)),
+                "score": float(score),
+            }
+            if inside:
+                if score > best_safe_score:
+                    best_safe = candidate
+                    best_safe_score = score
+            elif score > best_edge_score:
+                best_edge = candidate
+                best_edge_score = score
+        best = best_safe if best_safe is not None else best_edge
         detection_cache[idx] = best
         if best is not None:
             stats["frames_with_ball"] += 1
@@ -1488,7 +1496,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "bad_numbers_1.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "bad_numbers_2.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
