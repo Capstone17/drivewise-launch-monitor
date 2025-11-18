@@ -17,8 +17,11 @@ def find_ball_y_in_image(
     model_path: str = DEFAULT_MODEL_PATH,
     calibration: dict[str, object] | None = None,
     debug_output_path: str | None = None,
-) -> float:
-    """Return the golf ball's bottom Y coordinate in inches, matching ``video_ball_detector``."""
+) -> float | None:  # Modified return type to include None
+    """Return the golf ball's bottom Y coordinate in inches, matching ``video_ball_detector``.
+    
+    Returns None if the ball cannot be detected.
+    """
 
     frame = cv2.imread(image_path)
     if frame is None:
@@ -35,13 +38,13 @@ def find_ball_y_in_image(
         del detector
 
     if not detections:
-        raise RuntimeError("Ball not detected in the image")
+        return None  # Return None instead of raising error
 
     best = max(detections, key=lambda d: d["score"])
     x1, y1, x2, y2 = best["bbox"]
     cx, cy, radius, distance = vbd.bbox_to_ball_metrics(x1, y1, x2, y2)
     if radius < vbd.MIN_BALL_RADIUS_PX:
-        raise RuntimeError("Detection too small to be a valid golf ball")
+        return None  # Return None instead of raising error
 
     h = frame.shape[0]
     bottom_pixel = max(y1, y2) + BOTTOM_PIXEL_BIAS_PX
@@ -89,8 +92,12 @@ def main() -> None:
         calib,
         debug_output_path=args.debug_output,
     )
-    print(f"Ball bottom Y (in): {y:.2f}")
+    
+    if y is None:
+        print("Error: Ball not detected in the image")
+    else:
+        print(f"Ball bottom Y (in): {y:.2f}")
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
