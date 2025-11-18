@@ -297,4 +297,4 @@ def rule_based_system(club_selection):
 # Main function for testing
 # -------------------------------
 # if __name__ == "__main__":
-  # result = rule_based_system("mid-iron")
+ #  result = rule_based_system("mid-iron")
