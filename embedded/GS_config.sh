@@ -2,33 +2,47 @@
 # shellcheck disable=SC2154
 # (silence shellcheck wrt $cam1 environment variable)
 
+
 # RUN INSTRUCTIONS:
 #   Make executable: chmod +x GS_config.sh
-#   Usage: ./GS_config.sh <width> <height>
+#   Usage: ./GS_config.sh <width> <height> [<crop_displacement>]
 #   Example: ./GS_config.sh 816 144
-#   Example: ./GS_config.sh 672 128
+#   Example: ./GS_config.sh 672 128 -5
+#   Example: ./GS_config.sh 224 128
+
 
 # -------------------------
 # Default Values
 # -------------------------
-DEFAULT_WIDTH=196
+DEFAULT_WIDTH=224
 DEFAULT_HEIGHT=128
+DEFAULT_CROP_DISPLACEMENT=20
+
 
 # -------------------------
 # Handle Arguments
 # -------------------------
 if [[ $# -eq 0 ]]; then
-    echo "No arguments provided. Using defaults: width=$DEFAULT_WIDTH, height=$DEFAULT_HEIGHT"
+    echo "No arguments provided. Using defaults: width=$DEFAULT_WIDTH, height=$DEFAULT_HEIGHT, crop_displacement=$DEFAULT_CROP_DISPLACEMENT"
     width=$DEFAULT_WIDTH
     height=$DEFAULT_HEIGHT
+    crop_displacement=$DEFAULT_CROP_DISPLACEMENT
 elif [[ $# -eq 2 ]]; then
     width=$1
     height=$2
+    crop_displacement=$DEFAULT_CROP_DISPLACEMENT
+    echo "Using default crop displacement: $crop_displacement"
+elif [[ $# -eq 3 ]]; then
+    width=$1
+    height=$2
+    crop_displacement=$3
 else
-    echo "Usage: $0 [<width> <height>]"
+    echo "Usage: $0 [<width> <height> [<crop_displacement>]]"
     echo "Example: $0 196 128"
+    echo "Example: $0 196 128 -5"
     exit 1
 fi
+
 
 # -------------------------
 # Validate Even Dimensions
@@ -38,23 +52,28 @@ if (( width % 2 != 0 )); then
     exit 1
 fi
 
+
 if (( height % 2 != 0 )); then
     echo "Error: height must be an even number (got $height)"
     exit 1
 fi
 
+
 # -------------------------
 # Compute Center Crop
 # -------------------------
 crop_x=$(((1456 - width) / 2))
-crop_y=$((((1088 - height) / 2) - 5))
+crop_y=$((((1088 - height) / 2) - crop_displacement))
 max_crop_y=$((1088 - height))
+
 
 if (( crop_y > max_crop_y )); then
     crop_y=$max_crop_y
 fi
 
-echo "Cropping at: ($crop_x, $crop_y)"
+
+echo "Cropping at: ($crop_x, $crop_y) with displacement: $crop_displacement"
+
 
 # -------------------------
 # Detect IMX296 Entity Dynamically
