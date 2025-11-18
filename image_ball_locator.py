@@ -9,12 +9,14 @@ import cv2
 import video_ball_detector as vbd
 
 DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(__file__), "golf_ball_detector.tflite")
+BOTTOM_PIXEL_BIAS_PX = -4.0  # positive moves cutoff downward; negative shifts upward
 
 
 def find_ball_y_in_image(
     image_path: str,
     model_path: str = DEFAULT_MODEL_PATH,
     calibration: dict[str, object] | None = None,
+    debug_output_path: str | None = None,
 ) -> float:
     """Return the golf ball's bottom Y coordinate in inches, matching ``video_ball_detector``."""
 
@@ -42,8 +44,18 @@ def find_ball_y_in_image(
         raise RuntimeError("Detection too small to be a valid golf ball")
 
     h = frame.shape[0]
-    bottom_pixel_offset = max(y1, y2) - h / 2.0
+    bottom_pixel = max(y1, y2) + BOTTOM_PIXEL_BIAS_PX
+    bottom_pixel_offset = bottom_pixel - h / 2.0
     bottom_inches = bottom_pixel_offset * distance / vbd.FOCAL_LENGTH
+
+    if debug_output_path:
+        cutoff = int(round(bottom_pixel))
+        cutoff = max(0, min(cutoff, h - 1))
+        masked = frame.copy()
+        if cutoff + 1 < h:
+            masked[cutoff + 1 :, :] = 0
+        cv2.imwrite(debug_output_path, masked)
+
     return float(bottom_inches)
 
 
@@ -64,10 +76,19 @@ def main() -> None:
         "--calibration",
         help="Optional JSON file with calibration overrides.",
     )
+    parser.add_argument(
+        "--debug-output",
+        help="Optional path to save an image with everything below the detected bottom blacked out.",
+    )
     args = parser.parse_args()
 
     calib = _load_json(args.calibration) if args.calibration else None
-    y = find_ball_y_in_image(args.image_path, args.model, calib)
+    y = find_ball_y_in_image(
+        args.image_path,
+        args.model,
+        calib,
+        debug_output_path=args.debug_output,
+    )
     print(f"Ball bottom Y (in): {y:.2f}")
 
 
