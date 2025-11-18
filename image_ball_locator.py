@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 
 import cv2
@@ -9,23 +8,14 @@ import cv2
 import video_ball_detector as vbd
 
 DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(__file__), "golf_ball_detector.tflite")
-BOTTOM_PIXEL_BIAS_PX = -4.0  # positive moves cutoff downward; negative shifts upward
 
 
-def find_ball_y_in_image(
-    image_path: str,
-    model_path: str = DEFAULT_MODEL_PATH,
-    calibration: dict[str, object] | None = None,
-    debug_output_path: str | None = None,
-) -> float:
-    """Return the golf ball's bottom Y coordinate in inches, matching ``video_ball_detector``."""
+def find_ball_y_in_image(image_path: str, model_path: str = DEFAULT_MODEL_PATH) -> tuple[float, float]:
+    """Return (pixel_from_top, pixels_from_bottom) for the detected ball bottom."""
 
     frame = cv2.imread(image_path)
     if frame is None:
         raise FileNotFoundError(f"Unable to read image: {image_path}")
-
-    if calibration is not None:
-        vbd.apply_calibration(calibration)
 
     detector = vbd.TFLiteBallDetector(model_path, conf_threshold=0.01)
     try:
@@ -38,58 +28,22 @@ def find_ball_y_in_image(
         raise RuntimeError("Ball not detected in the image")
 
     best = max(detections, key=lambda d: d["score"])
-    x1, y1, x2, y2 = best["bbox"]
-    cx, cy, radius, distance = vbd.bbox_to_ball_metrics(x1, y1, x2, y2)
-    if radius < vbd.MIN_BALL_RADIUS_PX:
-        raise RuntimeError("Detection too small to be a valid golf ball")
-
+    _, y1, _, y2 = best["bbox"]
+    bottom_from_top = float(max(y1, y2))
     h = frame.shape[0]
-    bottom_pixel = max(y1, y2) + BOTTOM_PIXEL_BIAS_PX
-    bottom_pixel_offset = bottom_pixel - h / 2.0
-    bottom_inches = bottom_pixel_offset * distance / vbd.FOCAL_LENGTH
-
-    if debug_output_path:
-        cutoff = int(round(bottom_pixel))
-        cutoff = max(0, min(cutoff, h - 1))
-        masked = frame.copy()
-        if cutoff + 1 < h:
-            masked[cutoff + 1 :, :] = 0
-        cv2.imwrite(debug_output_path, masked)
-
-    return float(bottom_inches)
-
-
-def _load_json(path: str) -> dict[str, object]:
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    bottom_from_bottom = float(h - 1 - bottom_from_top)
+    return bottom_from_top, bottom_from_bottom
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Print the calibrated bottom Y coordinate of the golf ball in inches.")
-    parser.add_argument("image_path", help="Path to the input JPEG.")
-    parser.add_argument(
-        "--model",
-        default=DEFAULT_MODEL_PATH,
-        help="Path to the golf_ball_detector.tflite model.",
-    )
-    parser.add_argument(
-        "--calibration",
-        help="Optional JSON file with calibration overrides.",
-    )
-    parser.add_argument(
-        "--debug-output",
-        help="Optional path to save an image with everything below the detected bottom blacked out.",
-    )
+    parser = argparse.ArgumentParser(description="Print the ball bottom pixel offsets (top and bottom).")
+    parser.add_argument("image_path")
+    parser.add_argument("--model", default=DEFAULT_MODEL_PATH)
     args = parser.parse_args()
 
-    calib = _load_json(args.calibration) if args.calibration else None
-    y = find_ball_y_in_image(
-        args.image_path,
-        args.model,
-        calib,
-        debug_output_path=args.debug_output,
-    )
-    print(f"Ball bottom Y (in): {y:.2f}")
+    px_top, px_bottom = find_ball_y_in_image(args.image_path, args.model)
+    print(f"Bottom from top: {px_top:.1f} px")
+    print(f"Bottom from bottom: {px_bottom:.1f} px")
 
 
 if __name__ == "__main__":
