@@ -26,3 +26,6 @@ ball_frames/
 # Ignore BLE logs
 *.log
 /CCTag
+annotated.mp4
+debug_ball_video.py
+some_frame.jpgZone.Identifier
