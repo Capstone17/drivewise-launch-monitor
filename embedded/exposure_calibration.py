@@ -31,7 +31,7 @@ def calibrate_exposure():
 
     # Define the commands as a list of lists
     commands = [
-        ['echo', 'Starting command series...'],
+        ['echo', 'Starting exposure calibration command series...'],
         ['echo', 'Capturing exposures...'],
         ['rpicam-vid', '-o', exposure_samples_path_as_str + '50_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--no-raw', '-n', '--shutter', '50', '--frames', '1'],
         ['rpicam-vid', '-o', exposure_samples_path_as_str + '100_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--no-raw', '-n', '--shutter', '100', '--frames', '1'],
