@@ -16,7 +16,7 @@
 # -------------------------
 DEFAULT_WIDTH=224
 DEFAULT_HEIGHT=128
-DEFAULT_CROP_DISPLACEMENT=50
+DEFAULT_CROP_DISPLACEMENT=-50
 
 
 # -------------------------
