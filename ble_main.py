@@ -281,7 +281,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                         print(f"Time at video start: {current_time.time()}")
 
                         subprocess.run(
-                            ["./embedded/rpicam_run.sh", "5s", str(self.service.exposure)],
+                            ["./embedded/rpicam_run.sh", "7s", str(self.service.exposure)],
                             check=True,
                             capture_output=True,
                         )
