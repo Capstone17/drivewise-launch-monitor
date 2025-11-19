@@ -23,7 +23,6 @@ def configure_new_crop(new_crop_offset, exposure, exposure_samples_path):
     # Define the commands as a list of lists
     commands = [
         ['echo', 'Starting crop calibration command series...'],
-        ['echo', 'Recalibrating camera...'],
         ['echo', exposure_samples_path + '../GS_config.sh', '224', '128', str(new_crop_offset)],
         ['echo', 'Capturing exposures...'],
         ['rpicam-vid', '-o', exposure_samples_path + exposure + '_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', str(exposure), '--frames', '1'],
@@ -35,10 +34,10 @@ def configure_new_crop(new_crop_offset, exposure, exposure_samples_path):
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 
-            print(f"Command: {' '.join(cmd)}")
-            print(f"Stdout:\n{result.stdout}")
-            if result.stderr:
-                print(f"Stderr:\n{result.stderr}")
+            # print(f"Command: {' '.join(cmd)}")
+            # print(f"Stdout:\n{result.stdout}")
+            # if result.stderr:
+            #     print(f"Stderr:\n{result.stderr}")
 
         except subprocess.CalledProcessError as e:
             print(f"Error executing command: {' '.join(cmd)}")
