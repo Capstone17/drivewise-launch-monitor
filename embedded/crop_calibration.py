@@ -17,10 +17,8 @@ def calculate_crop_offset(pixels_bottom, threshold=5):
         return 0
     
     
-def configure_new_crop(new_crop_offset, exposure):
+def configure_new_crop(new_crop_offset, exposure, path):
     # Define the exposure sample photo path
-    exposure_samples_path = Path("~/Documents/webcamGolf/embedded/exposure_samples/").expanduser()
-    exposure_samples_path_as_str = str(exposure_samples_path) + "/"
 
     # Define the commands as a list of lists
     commands = [
@@ -28,9 +26,9 @@ def configure_new_crop(new_crop_offset, exposure):
         ['echo', 'Recalibrating camera...']
         ['echo', './GS_config', '224', '128', new_crop_offset]
         ['echo', 'Capturing exposures...'],
-        ['rpicam-vid', '-o', exposure_samples_path_as_str + exposure + '_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', '50', '--frames', '1'],
+        ['rpicam-vid', '-o', path + exposure + '_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', '50', '--frames', '1'],
         ['echo', 'Extracting frames...'],
-        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + exposure + '_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + exposure + '_exposure.jpg', '-y'],
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', path + exposure + '_exposure.mp4', '-frames:v', '1', '-update', '1', path + exposure + '_exposure.jpg', '-y'],
     ]
 
     for cmd in commands:
@@ -57,8 +55,10 @@ def configure_new_crop(new_crop_offset, exposure):
 def calibrate_crop(exposure):
     
     # Find the bottom of the ball in the image with the best exposure
+    exposure_samples_path = Path("~/Documents/webcamGolf/embedded/exposure_samples/").expanduser()
+    exposure_samples_path_as_str = str(exposure_samples_path) + "/"
     filename = f"{exposure}_exposure.jpg"
-    result = find_ball_y_in_image(filename)
+    result = find_ball_y_in_image(exposure_samples_path_as_str + filename)
     
     if result is None:
         print(f"[calibrate_crop] Warning: Ball not detected in {filename}")
