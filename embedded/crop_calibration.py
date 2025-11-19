@@ -81,7 +81,7 @@ def calibrate_crop(exposure):
         if (crop_offset == 0):
             calibrated = True
         else:
-            configure_new_crop(crop_offset, exposure)
+            configure_new_crop(crop_offset, exposure, exposure_samples_path_as_str)
     
    
     
