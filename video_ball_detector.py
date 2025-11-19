@@ -271,6 +271,70 @@ def check_tail_for_ball(
     return TailCheckResult(ball_present, hits, processed, scores, frame_indices)
 
 
+def check_head_for_ball(
+    video_path: str,
+    *,
+    detector: TFLiteBallDetector | None = None,
+    calibration: dict[str, object] | None = None,
+    frames_to_check: int = 5,
+    stride: int = 1,
+    score_threshold: float = 0.3,
+    min_hits: int = 1,
+) -> TailCheckResult:
+    """Inspect the first ``frames_to_check`` frames looking for a ball."""
+
+    if calibration is not None:
+        apply_calibration(calibration)
+
+    if frames_to_check <= 0:
+        return TailCheckResult(False, 0, 0, [], [])
+    if stride <= 0:
+        raise ValueError("stride must be positive")
+
+    owned_detector = detector is None
+    if detector is None:
+        detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Unable to open video for head check: {video_path}")
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    current_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) or 0
+
+    scores: list[float] = []
+    frame_indices: list[int] = []
+    hits = 0
+    processed = 0
+
+    while processed < frames_to_check:
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            break
+        detections = detector.detect(frame)
+        best_score = max((det.get("score", 0.0) for det in detections), default=0.0)
+        scores.append(float(best_score))
+        frame_indices.append(int(current_idx))
+        if best_score >= score_threshold:
+            hits += 1
+        processed += 1
+        current_idx += 1
+        skip = stride - 1
+        while skip > 0:
+            ok_skip = cap.grab()
+            if not ok_skip:
+                break
+            current_idx += 1
+            skip -= 1
+
+    cap.release()
+    if owned_detector and hasattr(detector, "interpreter"):
+        del detector
+
+    ball_present = hits >= min_hits and hits > 0
+    return TailCheckResult(ball_present, hits, processed, scores, frame_indices)
+
+
 def bbox_to_ball_metrics(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
     """Return center, radius and distance estimates for a bounding box."""
 
@@ -876,7 +940,8 @@ def find_motion_window(
     confirm_radius: int = 3,
     score_threshold: float = MOTION_WINDOW_SCORE_THRESHOLD,
     debug: bool = False,
-) -> tuple[int, int, bool, dict[str, int | bool | None]]:
+    max_search_seconds: float | None = 30.0,
+) -> tuple[int, int, bool, dict[str, int | bool | float | None]]:
     """Return a motion window around the last confident ball sighting.
 
     The search prioritises late frames by sampling the video with progressively
@@ -896,7 +961,7 @@ def find_motion_window(
         else max(confirm_radius * 3, 9)
     )
 
-    stats: dict[str, int | bool | None] = {
+    stats: dict[str, int | bool | float | None] = {
         "total_frames": total,
         "frames_evaluated": 0,
         "frames_decoded": 0,
@@ -911,12 +976,31 @@ def find_motion_window(
         "refine_frames": 0,
         "refine_last_frame": None,
         "miss_limit": miss_limit,
+        "timed_out": False,
+        "timeout_seconds": max_search_seconds,
+        "search_seconds": 0.0,
     }
 
     detection_cache: dict[int, dict | None] = {}
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
     current_pos: int | None = None
+    search_start = time.perf_counter()
+    timed_out = False
+
+    def exceeded_time() -> bool:
+        nonlocal timed_out
+        if timed_out or max_search_seconds is None:
+            return timed_out
+        if time.perf_counter() - search_start >= max_search_seconds:
+            timed_out = True
+        return timed_out
+
+    def finalize_stats() -> None:
+        stats["frames_processed"] = len(detection_cache)
+        stats["detector_calls"] = stats["detector_runs"]
+        stats["search_seconds"] = time.perf_counter() - search_start
+        stats["timed_out"] = timed_out
 
     def debug_break(reason: str, frame_idx: int | None = None) -> None:
         if not debug:
@@ -998,8 +1082,7 @@ def find_motion_window(
 
     try:
         if total == 0:
-            stats["frames_processed"] = 0
-            stats["detector_calls"] = 0
+            finalize_stats()
             return 0, 0, False, stats
 
         coarse_true: int | None = None
@@ -1007,10 +1090,14 @@ def find_motion_window(
         coarse_frames_total = 0
         coarse_steps = (64, 32, 16, 8, 4)
         for step in coarse_steps:
+            if exceeded_time():
+                break
             idx = total - 1
             last_false = total
             frames_this_step = 0
             while idx >= 0:
+                if exceeded_time():
+                    break
                 frames_this_step += 1
                 det = detect_frame(idx)
                 if det is not None:
@@ -1024,14 +1111,16 @@ def find_motion_window(
                 last_false = idx
                 idx -= step
             coarse_frames_total += frames_this_step
-            if coarse_true is not None:
+            if coarse_true is not None or exceeded_time():
                 break
 
-        if coarse_true is None:
+        if coarse_true is None and not exceeded_time():
             stats["fallback_full_scan"] = True
             idx = total - 1
             frames_this_step = 0
             while idx >= 0:
+                if exceeded_time():
+                    break
                 frames_this_step += 1
                 det = detect_frame(idx)
                 if det is not None:
@@ -1048,14 +1137,12 @@ def find_motion_window(
         stats["coarse_frames_scanned"] = coarse_frames_total
 
         if coarse_true is None:
-            stats["frames_processed"] = len(detection_cache)
-            stats["detector_calls"] = stats["detector_runs"]
+            finalize_stats()
             return 0, total, False, stats
 
         initial_det = detect_frame(coarse_true)
         if initial_det is None:
-            stats["frames_processed"] = len(detection_cache)
-            stats["detector_calls"] = stats["detector_runs"]
+            finalize_stats()
             return 0, total, False, stats
 
         last_detection_idx = coarse_true
@@ -1065,7 +1152,7 @@ def find_motion_window(
         refine_frames = 0
         center_jump_limit = MAX_CENTER_JUMP_PX * 1.25
 
-        while refine_idx < total and misses < miss_limit:
+        while refine_idx < total and misses < miss_limit and not exceeded_time():
             det = detect_frame(refine_idx)
             refine_frames += 1
             if det is not None:
@@ -1088,14 +1175,39 @@ def find_motion_window(
         if end_frame - start_frame > max_frames:
             start_frame = max(0, end_frame - max_frames)
 
-        stats["frames_processed"] = len(detection_cache)
-        stats["detector_calls"] = stats["detector_runs"]
         stats["coarse_false_frame"] = coarse_false
         stats["last_detection_frame"] = last_detection_idx
+        finalize_stats()
 
         return start_frame, end_frame, True, stats
     finally:
         cap.release()
+
+
+def write_zero_coordinate_files(ball_path: str, sticker_path: str) -> None:
+    """Write placeholder coordinate files used when no ball is present."""
+
+    zero_ball = [
+        {
+            "time": 0.0,
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+        }
+    ]
+    zero_sticker = [
+        {
+            "time": 0.0,
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "label": "garbage",
+        }
+    ]
+    with open(ball_path, "w") as f:
+        json.dump(zero_ball, f, indent=2)
+    with open(sticker_path, "w") as f:
+        json.dump(zero_sticker, f, indent=2)
 
 
 def process_video(
@@ -1110,6 +1222,11 @@ def process_video(
     tail_stride: int = 1,
     tail_score_threshold: float = 0.25,
     tail_min_hits: int = 2,
+    head_frames_to_check: int = 5,
+    head_stride: int = 1,
+    head_score_threshold: float = 0.3,
+    head_min_hits: int = 1,
+    motion_window_timeout: float | None = 30.0,
 ) -> str:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
@@ -1140,11 +1257,43 @@ def process_video(
             min_hits=tail_min_hits,
         )
 
-    start_frame, end_frame, ball_found, motion_stats = find_motion_window(
+    head_check = check_head_for_ball(
         video_path,
-        detector,
-        debug=MOTION_WINDOW_DEBUG,
+        detector=detector,
+        calibration=current_calibration,
+        frames_to_check=head_frames_to_check,
+        stride=head_stride,
+        score_threshold=head_score_threshold,
+        min_hits=head_min_hits,
     )
+
+    def _motion_window_once(
+        timeout: float | None,
+    ) -> tuple[int, int, bool, dict[str, int | bool | float | None]]:
+        return find_motion_window(
+            video_path,
+            detector,
+            debug=MOTION_WINDOW_DEBUG,
+            max_search_seconds=timeout,
+        )
+
+    start_frame, end_frame, ball_found, motion_stats = _motion_window_once(motion_window_timeout)
+    timed_out = bool(motion_stats.get("timed_out"))
+    if not ball_found:
+        ball_evidence = head_check.ball_present or tail_check.ball_present
+        if timed_out and ball_evidence and motion_window_timeout is not None:
+            print("Motion window search timed out but ball presence checks saw detections; retrying without timeout.")
+            start_frame, end_frame, ball_found, motion_stats = _motion_window_once(None)
+            timed_out = False
+        if not ball_found:
+            if not timed_out:
+                print("Ball detector scanned every frame without a hit; writing zero coordinate files.")
+                write_zero_coordinate_files(ball_path, sticker_path)
+                return "skibidi"
+            if not ball_evidence:
+                print("Ball detector timed out with no head/tail hits; writing zero coordinate files.")
+                write_zero_coordinate_files(ball_path, sticker_path)
+                return "skibidi"
     processed = motion_stats.get("frames_processed", 0)
     detector_calls = motion_stats.get("detector_calls", 0)
     coarse_step = motion_stats.get("coarse_step")
@@ -1496,7 +1645,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "bad_numbers_2.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "bad_numbers_wrong-motion-window.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
