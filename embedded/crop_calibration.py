@@ -5,7 +5,7 @@ from pathlib import Path
 from embedded.image_ball_locator import find_ball_y_in_image
 
 
-DEFAULT_CROP_OFFSET = 50
+DEFAULT_CROP_OFFSET = -50
 
 
 def calculate_crop_offset(pixels_bottom, threshold=5):
@@ -66,7 +66,7 @@ def calibrate_crop(exposure):
     # - A positive crop value will move the crop downwards, since the camera is flipped
     # --------------------
     # First get an image at the specified exposure
-    logging.info("[calibrate_crop] Capturing image with default crop")
+    print("[calibrate_crop] Capturing image with default crop")
     configure_new_crop(DEFAULT_CROP_OFFSET, exposure, exposure_samples_path_as_str)
     calibrated = False
     while (calibrated == False):
@@ -77,10 +77,10 @@ def calibrate_crop(exposure):
             return  # Or handle as needed
 
         px_top, px_bottom = result
-        logging.info(f"[calibrate_crop] Detected ball bottom at {px_top:.1f} px from top, {px_bottom:.1f} px from bottom")
+        print(f"[calibrate_crop] Detected ball bottom at {px_top:.1f} px from top, {px_bottom:.1f} px from bottom")
 
         crop_offset = calculate_crop_offset(px_bottom, 5)
-        logging.info(f"[calibrate_crop] New crop value is {crop_offset}")
+        print(f"[calibrate_crop] New crop value is {crop_offset}")
 
         # If the cropping is already within the threshold, quit
         if (crop_offset == 0):
