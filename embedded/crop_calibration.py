@@ -61,7 +61,10 @@ def calibrate_crop(exposure):
     # Calculate New Crop
     # - A positive crop value will move the crop downwards, since the camera is flipped
     # --------------------
-    configure_new_crop(crop_offset, exposure, exposure_samples_path_as_str)
+    # First get an image at the specified exposure
+    subprocess.run(["./embedded/GS_config.sh", "224", "128"], check=True)
+    subprocess.run(['rpicam-vid', '-o', exposure_samples_path + exposure + '_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', str(exposure), '--frames', '1']) 
+    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path + exposure + '_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path + exposure + '_exposure.jpg', '-y'])
     calibrated = False
     while (calibrated == False):
         result = find_ball_y_in_image(exposure_samples_path_as_str + filename)
