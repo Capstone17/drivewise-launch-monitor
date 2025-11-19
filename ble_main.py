@@ -457,9 +457,7 @@ class CalibrationCharacteristic(Characteristic):
             # Run calibration script
             self.service.exposure = calibrate_exposure()
             logger.info(f"Exposure from calibration: {self.service.exposure}")
-            self.service.crop_offset = calibrate_crop(self.service.exposure)
             # Run config script
-            logger.debug("Calibration successful. Now running GS_config")
             subprocess.run(
                 [
                     "./embedded/GS_config.sh",
@@ -469,6 +467,8 @@ class CalibrationCharacteristic(Characteristic):
                 ],
                 check=True,
             )
+            logger.info("Calibrating crop")
+            self.service.crop_offset = calibrate_crop(self.service.exposure)
         except Exception as e:
             logger.error(f"Calibration function failed: {e}")
             if self.notifying:
