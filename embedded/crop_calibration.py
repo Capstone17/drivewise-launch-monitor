@@ -20,12 +20,12 @@ def calculate_crop_offset(pixels_bottom, threshold=5):
         return 0
     
     
-def configure_new_crop(new_crop_offset, exposure, exposure_samples_path):
+def configure_new_crop(new_crop_offset, exposure, exposure_samples_path, config_path):
 
     # Define the commands as a list of lists
     commands = [
         ['echo', 'Starting crop calibration command series...'],
-        ['echo', exposure_samples_path + '../GS_config.sh', '224', '128', str(new_crop_offset)],
+        ['echo', config_path + 'GS_config.sh', '224', '128', str(new_crop_offset)],
         ['echo', 'Capturing exposures...'],
         ['rpicam-vid', '-o', exposure_samples_path + exposure + '_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', str(exposure), '--frames', '1'],
         ['echo', 'Extracting frames...'],
@@ -58,6 +58,8 @@ def calibrate_crop(exposure):
     # Find the bottom of the ball in the image with the best exposure
     exposure_samples_path = Path("~/Documents/webcamGolf/embedded/exposure_samples/").expanduser()
     exposure_samples_path_as_str = str(exposure_samples_path) + "/"
+    config_path = Path("~/Documents/webcamGolf/embedded/").expanduser()
+    config_path_as_str = str(config_path) + "/"
     filename = f"{exposure}_exposure.jpg"
 
 
@@ -67,7 +69,7 @@ def calibrate_crop(exposure):
     # --------------------
     # First get an image at the specified exposure
     print("[calibrate_crop] Capturing image with default crop")
-    configure_new_crop(DEFAULT_CROP_OFFSET, exposure, exposure_samples_path_as_str)
+    configure_new_crop(DEFAULT_CROP_OFFSET, exposure, exposure_samples_path_as_str, config_path_as_str)
     calibrated = False
     while (calibrated == False):
         result = find_ball_y_in_image(exposure_samples_path_as_str + filename)
@@ -87,7 +89,7 @@ def calibrate_crop(exposure):
             calibrated = True
         else:
             logging.info("[calibrate_crop] Ball still not in frame, recropping")
-            configure_new_crop(crop_offset, exposure, exposure_samples_path_as_str)
+            configure_new_crop(crop_offset, exposure, exposure_samples_path_as_str, config_path_as_str)
     
    
     
