@@ -2,7 +2,7 @@
 venv/
 .venv/
 
-#Ignore test videos
+#Ignore test videos and images
 embedded/video.mp4
 demo_400_144_387_5000_700
 exposure_test/
@@ -10,6 +10,7 @@ full_integration_vids/
 Indoor_Sim_0807/
 oldTestVids/
 alphamapping/
+z_vs_time.png
 
 # Ignore JSON files genereated by image detection
 stationary_sticker.json
