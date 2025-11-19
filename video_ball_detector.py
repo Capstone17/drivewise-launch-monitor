@@ -48,6 +48,10 @@ MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
 MOTION_WINDOW_FRAMES = 120  # number of frames kept in the motion window
 IMPACT_SPEED_THRESHOLD_PX = 1.0  # pixel distance that marks ball movement
+HEAD_CHECK_FRAMES = 5
+HEAD_SCORE_THRESHOLD = 0.3
+HEAD_MIN_HITS = 1
+HEAD_STATIONARY_DRIFT_PX = 6.0
 
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
     "1",
@@ -184,6 +188,15 @@ class TailCheckResult:
     scores: list[float]
     frame_indices: list[int]
 
+
+@dataclass
+class HeadCheckResult:
+    ball_present: bool
+    stationary: bool
+    hits: int
+    frames_checked: int
+    max_drift_px: float
+
 def check_tail_for_ball(
     video_path: str,
     *,
@@ -269,6 +282,80 @@ def check_tail_for_ball(
 
     ball_present = hits >= min_hits and hits > 0
     return TailCheckResult(ball_present, hits, processed, scores, frame_indices)
+
+
+def check_head_for_stationary_ball(
+    video_path: str,
+    *,
+    detector: TFLiteBallDetector | None = None,
+    frames_to_check: int = HEAD_CHECK_FRAMES,
+    stride: int = 1,
+    score_threshold: float = HEAD_SCORE_THRESHOLD,
+    min_hits: int = HEAD_MIN_HITS,
+    drift_threshold_px: float = HEAD_STATIONARY_DRIFT_PX,
+) -> HeadCheckResult:
+    """Inspect the first frames of a clip and confirm the ball is stationary."""
+
+    if frames_to_check <= 0:
+        return HeadCheckResult(False, False, 0, 0, 0.0)
+    if stride <= 0:
+        raise ValueError("stride must be positive")
+
+    owned_detector = detector is None
+    if detector is None:
+        detector = TFLiteBallDetector("golf_ball_detector.tflite", conf_threshold=0.01)
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Unable to open video for head check: {video_path}")
+
+    centers: list[np.ndarray] = []
+    hits = 0
+    frames_checked = 0
+
+    while frames_checked < frames_to_check:
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            break
+        enhanced, _ = preprocess_frame(frame)
+        detections = detector.detect(enhanced)
+        best_center: np.ndarray | None = None
+        best_score = float("-inf")
+        for det in detections:
+            score = det.get("score", 0.0)
+            if score < score_threshold:
+                continue
+            x1, y1, x2, y2 = det["bbox"]
+            cx, cy, radius, _ = bbox_to_ball_metrics(x1, y1, x2, y2)
+            if radius < MIN_BALL_RADIUS_PX:
+                continue
+            if score > best_score:
+                best_score = score
+                best_center = np.array([cx, cy], dtype=float)
+        if best_center is not None:
+            hits += 1
+            centers.append(best_center)
+        frames_checked += 1
+        if frames_checked >= frames_to_check:
+            break
+        skip = stride - 1
+        while skip > 0:
+            if not cap.grab():
+                break
+            skip -= 1
+
+    cap.release()
+    if owned_detector and hasattr(detector, "interpreter"):
+        del detector
+
+    ball_present = hits >= min_hits and hits > 0
+    max_drift = 0.0
+    stationary = False
+    if ball_present and centers:
+        ref = centers[0]
+        max_drift = max(float(np.linalg.norm(center - ref)) for center in centers)
+        stationary = max_drift <= drift_threshold_px
+    return HeadCheckResult(ball_present, stationary, hits, frames_checked, max_drift)
 
 
 def bbox_to_ball_metrics(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
@@ -1098,6 +1185,32 @@ def find_motion_window(
         cap.release()
 
 
+def write_zero_coordinate_files(ball_path: str, sticker_path: str) -> None:
+    """Write placeholder zero-coordinate JSON payloads when processing is skipped."""
+
+    zero_ball = [
+        {
+            "time": 0.0,
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+        }
+    ]
+    zero_sticker = [
+        {
+            "time": 0.0,
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "label": "garbage",
+        }
+    ]
+    with open(ball_path, "w") as f:
+        json.dump(zero_ball, f, indent=2)
+    with open(sticker_path, "w") as f:
+        json.dump(zero_sticker, f, indent=2)
+
+
 def process_video(
     video_path: str,
     ball_path: str,
@@ -1110,6 +1223,11 @@ def process_video(
     tail_stride: int = 1,
     tail_score_threshold: float = 0.25,
     tail_min_hits: int = 2,
+    head_frames_to_check: int = HEAD_CHECK_FRAMES,
+    head_stride: int = 1,
+    head_score_threshold: float = HEAD_SCORE_THRESHOLD,
+    head_min_hits: int = HEAD_MIN_HITS,
+    head_stationary_drift_px: float = HEAD_STATIONARY_DRIFT_PX,
 ) -> str:
     """Process ``video_path`` saving ball and sticker coordinates to JSON.
 
@@ -1139,6 +1257,26 @@ def process_video(
             score_threshold=tail_score_threshold,
             min_hits=tail_min_hits,
         )
+
+    head_check = check_head_for_stationary_ball(
+        video_path,
+        detector=detector,
+        frames_to_check=head_frames_to_check,
+        stride=head_stride,
+        score_threshold=head_score_threshold,
+        min_hits=head_min_hits,
+        drift_threshold_px=head_stationary_drift_px,
+    )
+    if not head_check.ball_present:
+        print("No ball detected in the opening frames; writing zero coordinate files.")
+        write_zero_coordinate_files(ball_path, sticker_path)
+        return "skibidi"
+    if not head_check.stationary:
+        print(
+            f"Ball moved {head_check.max_drift_px:.1f}px within the opening frames; writing zero coordinate files."
+        )
+        write_zero_coordinate_files(ball_path, sticker_path)
+        return "skibidi"
 
     start_frame, end_frame, ball_found, motion_stats = find_motion_window(
         video_path,
@@ -1496,7 +1634,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "bad_numbers_2.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "bad_numbers_no-ball.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
