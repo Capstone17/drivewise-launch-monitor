@@ -48,7 +48,7 @@ def calibrate_exposure():
         ['rpicam-vid', '-o', exposure_samples_path_as_str + '650_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--no-raw', '-n', '--shutter', '650', '--frames', '1'],
         ['rpicam-vid', '-o', exposure_samples_path_as_str + '700_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--no-raw', '-n', '--shutter', '700', '--frames', '1'],
         ['rpicam-vid', '-o', exposure_samples_path_as_str + '750_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--no-raw', '-n', '--shutter', '750', '--frames', '1'],
-        ['rpicam-vid', '-o', exposure_samples_path_as_str + '2500_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--no-raw', '-n', '--shutter', '2500', '--frames', '1'],
+        ['rpicam-vid', '-o', exposure_samples_path_as_str + '2500_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', '2500', '--frames', '1'],
         ['echo', 'Extracting frames...'],
         ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '50_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '50_exposure.jpg'],
         ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '100_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '100_exposure.jpg', '-y'],
