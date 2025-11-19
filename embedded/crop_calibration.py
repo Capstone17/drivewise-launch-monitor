@@ -28,7 +28,7 @@ def configure_new_crop(new_crop_offset, exposure):
         ['echo', 'Recalibrating camera...']
         ['echo', './GS_config', '224', '128', new_crop_offset]
         ['echo', 'Capturing exposures...'],
-        ['rpicam-vid', '-o', exposure_samples_path_as_str + exposure + '_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--no-raw', '-n', '--shutter', '50', '--frames', '1'],
+        ['rpicam-vid', '-o', exposure_samples_path_as_str + exposure + '_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', '50', '--frames', '1'],
         ['echo', 'Extracting frames...'],
         ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + exposure + '_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + exposure + '_exposure.jpg', '-y'],
     ]
