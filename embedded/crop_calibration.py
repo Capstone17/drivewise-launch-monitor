@@ -17,18 +17,18 @@ def calculate_crop_offset(pixels_bottom, threshold=5):
         return 0
     
     
-def configure_new_crop(new_crop_offset, exposure, path):
+def configure_new_crop(new_crop_offset, exposure, exposure_samples_path):
     # Define the exposure sample photo path
 
     # Define the commands as a list of lists
     commands = [
         ['echo', 'Starting crop calibration command series...'],
         ['echo', 'Recalibrating camera...'],
-        ['echo', './GS_config', '224', '128', str(new_crop_offset)],
+        ['echo', exposure_samples_path + '../GS_config.sh', '224', '128', str(new_crop_offset)],
         ['echo', 'Capturing exposures...'],
-        ['rpicam-vid', '-o', path + exposure + '_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', str(exposure), '--frames', '1'],
+        ['rpicam-vid', '-o', exposure_samples_path + exposure + '_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', str(exposure), '--frames', '1'],
         ['echo', 'Extracting frames...'],
-        ['ffmpeg', '-y', '-loglevel', 'error', '-i', path + exposure + '_exposure.mp4', '-frames:v', '1', '-update', '1', path + exposure + '_exposure.jpg', '-y']
+        ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path + exposure + '_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path + exposure + '_exposure.jpg', '-y']
     ]
 
     for cmd in commands:
