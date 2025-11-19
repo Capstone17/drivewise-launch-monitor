@@ -18,7 +18,6 @@ def calculate_crop_offset(pixels_bottom, threshold=5):
     
     
 def configure_new_crop(new_crop_offset, exposure, exposure_samples_path):
-    # Define the exposure sample photo path
 
     # Define the commands as a list of lists
     commands = [
@@ -62,6 +61,7 @@ def calibrate_crop(exposure):
     # Calculate New Crop
     # - A positive crop value will move the crop downwards, since the camera is flipped
     # --------------------
+    configure_new_crop(crop_offset, exposure, exposure_samples_path_as_str)
     calibrated = False
     while (calibrated == False):
         result = find_ball_y_in_image(exposure_samples_path_as_str + filename)
