@@ -46,7 +46,14 @@ BALL_SCORE_THRESHOLD = 0.4
 MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
-MOTION_WINDOW_FRAMES = 120  # number of frames kept in the motion window
+
+# ----------------------------
+# Motion window parameters
+# - Indoor, slow swing: 160 frames
+# - Outdoor, fast swing: 80 frames
+# ----------------------------
+MOTION_WINDOW_FRAMES = 160  # number of frames kept in the motion window
+
 IMPACT_SPEED_THRESHOLD_PX = 1.0  # pixel distance that marks ball movement
 HEAD_CHECK_FRAMES = 5
 HEAD_SCORE_THRESHOLD = 0.3

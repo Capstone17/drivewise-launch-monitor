@@ -1,4 +1,4 @@
-from .metric_calculation import *
+from metric_calculation import *
 
 from pathlib import Path
 import json
@@ -479,11 +479,11 @@ def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz
     # - This is worst-case scenario, and we don't want it to happen often!
     # ---------------------------------
     # Face-to-path should also be updated in this case
-    if (abs(swing_path) > 25):
+    if (abs(swing_path) > 30):
         print(f"Extreme swing path {swing_path}; using default of 0.00")
         swing_path = 0.00
         face_to_path = face_angle - swing_path
-    if (abs(side_angle) > 25):
+    if (abs(side_angle) > 30):
         print(f"Extreme side angle {side_angle}; using default of 0.00")
         side_angle = 0.00
     # Face angle can be more extreme, but still check
@@ -513,10 +513,10 @@ def return_metrics() -> dict:
     # Coordinate source paths
     src_coords_path = Path("~/Documents/webcamGolf").expanduser()
     src_coords = str(src_coords_path) + "/"
-    ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
-    sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
-    # ball_coords_path = "../ball_coords.json"  # STANDALONE
-    # sticker_coords_path = "../sticker_coords.json"  # STANDALONE
+    # ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
+    # sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
+    ball_coords_path = "../ball_coords.json"  # STANDALONE
+    sticker_coords_path = "../sticker_coords.json"  # STANDALONE
 
     # ---------------------------------
     # Find impact time
