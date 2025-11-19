@@ -63,7 +63,7 @@ fi
 # Compute Center Crop
 # -------------------------
 crop_x=$(((1456 - width) / 2))
-crop_y=$((((1088 - height) / 2) - crop_displacement))
+crop_y=$((((1088 - height) / 2) + crop_displacement))
 max_crop_y=$((1088 - height))
 
 

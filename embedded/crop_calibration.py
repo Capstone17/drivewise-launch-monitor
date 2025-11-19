@@ -5,7 +5,7 @@ from pathlib import Path
 from embedded.image_ball_locator import find_ball_y_in_image
 
 
-DEFAULT_CROP_OFFSET = -50
+DEFAULT_CROP_OFFSET = 50
 
 
 def calculate_crop_offset(pixels_bottom, threshold=5):
