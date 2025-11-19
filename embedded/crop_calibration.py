@@ -14,7 +14,7 @@ def calculate_crop_offset(pixels_bottom, threshold=5):
         return threshold
     # If the ball is too far up, crop such that the ball is 5 pixels away from the bottom
     elif (pixels_bottom >= 2*threshold):
-        return -round(pixels_bottom - threshold)
+        return round(pixels_bottom - threshold)
     # Else our crop is already working
     else:
         return 0
