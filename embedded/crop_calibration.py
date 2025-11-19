@@ -58,15 +58,6 @@ def calibrate_crop(exposure):
     exposure_samples_path = Path("~/Documents/webcamGolf/embedded/exposure_samples/").expanduser()
     exposure_samples_path_as_str = str(exposure_samples_path) + "/"
     filename = f"{exposure}_exposure.jpg"
-    result = find_ball_y_in_image(exposure_samples_path_as_str + filename)
-    
-    if result is None:
-        print(f"[calibrate_crop] Warning: Ball not detected in {filename}")
-        return  # Or handle as needed
-
-    px_top, px_bottom = result
-    logging.info(f"[calibrate_crop] Detected ball bottom at {px_top:.1f} px from top, {px_bottom:.1f} px from bottom")
-
 
     # --------------------
     # Calculate New Crop
@@ -74,6 +65,15 @@ def calibrate_crop(exposure):
     # --------------------
     calibrated = False
     while (calibrated == False):
+        result = find_ball_y_in_image(exposure_samples_path_as_str + filename)
+        
+        if result is None:
+            print(f"[calibrate_crop] Warning: Ball not detected in {filename}")
+            return  # Or handle as needed
+
+        px_top, px_bottom = result
+        logging.info(f"[calibrate_crop] Detected ball bottom at {px_top:.1f} px from top, {px_bottom:.1f} px from bottom")
+
         crop_offset = calculate_crop_offset(px_bottom, 5)
         logging.info(f"[calibrate_crop] New crop value is {crop_offset}")
 
@@ -81,6 +81,7 @@ def calibrate_crop(exposure):
         if (crop_offset == 0):
             calibrated = True
         else:
+            logging.info("[calibrate_crop] Ball still not in frame, recropping")
             configure_new_crop(crop_offset, exposure, exposure_samples_path_as_str)
     
    
