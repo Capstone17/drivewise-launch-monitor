@@ -1,4 +1,4 @@
-from metric_calculation import *
+from .metric_calculation import *
 
 from pathlib import Path
 import json
@@ -386,8 +386,8 @@ def finite_difference_fallback(frames, verbose=True):
 #   and resistance to overfitting random noise for real-world motion estimation from short, 
 #   noisy time series.
 # Note that Savitzky-Golay is meant for local smoothing, not global trend fitting.
-#   This is why we have a maximum window size of 9
-def savgol_velocity(json_path, polyorder=2, max_window=9):
+#   This is why we have a maximum window size of 7-13
+def savgol_velocity(json_path, polyorder=2, max_window=13):
     """
     Estimate velocity components (x, y, z) at the last time point in a JSON file
     using Savitzky-Golay smoothing/derivative.
@@ -519,10 +519,10 @@ def return_metrics() -> dict:
     # Coordinate source paths
     src_coords_path = Path("~/Documents/webcamGolf").expanduser()
     src_coords = str(src_coords_path) + "/"
-    # ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
-    # sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
-    ball_coords_path = "../ball_coords.json"  # STANDALONE
-    sticker_coords_path = "../sticker_coords.json"  # STANDALONE
+    ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
+    sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
+    # ball_coords_path = "../ball_coords.json"  # STANDALONE
+    # sticker_coords_path = "../sticker_coords.json"  # STANDALONE
 
     # ---------------------------------
     # Find impact time

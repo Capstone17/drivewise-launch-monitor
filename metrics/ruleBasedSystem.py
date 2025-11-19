@@ -3,7 +3,7 @@
 # - For production, this would need to be updated, but this assumption works for the purposes of our project.
 # -----------------------------------
 
-from metric_output import return_metrics
+from .metric_output import return_metrics
 
 import random
 
@@ -296,5 +296,5 @@ def rule_based_system(club_selection):
 # -------------------------------
 # Main function for testing
 # -------------------------------
-if __name__ == "__main__":
-  result = rule_based_system("mid-iron")
+# if __name__ == "__main__":
+#   result = rule_based_system("mid-iron")

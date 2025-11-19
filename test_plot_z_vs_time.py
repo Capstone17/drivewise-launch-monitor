@@ -1,14 +1,18 @@
 import json
 import matplotlib.pyplot as plt
 
-def plot_z_vs_time(data, title="z vs Time"):
-    # Sort by time in case input is unordered
+def plot_z_vs_time(data, title="z vs Time", outfile=None):
+    # Sort by time
     data_sorted = sorted(data, key=lambda d: d["time"])
 
     times = [d["time"] for d in data_sorted]
     zs = [d["z"] for d in data_sorted]
 
-    # Separate measured vs extrapolated for marker coloring
+    # Default missing labels to "measured"
+    for d in data_sorted:
+        if "label" not in d:
+            d["label"] = "measured"
+
     times_measured = [d["time"] for d in data_sorted if d["label"] == "measured"]
     z_measured = [d["z"] for d in data_sorted if d["label"] == "measured"]
 
@@ -17,24 +21,33 @@ def plot_z_vs_time(data, title="z vs Time"):
 
     plt.figure(figsize=(8, 4))
 
-    # Base line through all points
+    # Line through all points
     plt.plot(times, zs, color="gray", linewidth=1, alpha=0.7)
 
-    # Measured points (blue)
+    # Measured points (always present)
     plt.scatter(times_measured, z_measured,
                 color="blue", label="measured", zorder=3)
 
-    # Extrapolated points (red)
-    plt.scatter(times_extrap, z_extrap,
-                color="red", label="extrapolated", zorder=3)
+    # Extrapolated points (only if any exist)
+    if times_extrap:
+        plt.scatter(times_extrap, z_extrap,
+                    color="red", label="extrapolated", zorder=3)
 
     plt.title(title)
     plt.xlabel("Time (s)")
     plt.ylabel("z")
-    plt.legend()
     plt.grid(True, linestyle="--", alpha=0.3)
+    plt.legend()
     plt.tight_layout()
-    plt.savefig("z_vs_time.png", dpi=150)
+
+    if outfile is None:
+        # For headless environments, prefer saving to file
+        plt.savefig("z_vs_time.png", dpi=150)
+    else:
+        plt.savefig(outfile, dpi=150)
+
+    plt.close()
+
 
 
 if __name__ == "__main__":
