@@ -5,6 +5,9 @@ from pathlib import Path
 from embedded.image_ball_locator import find_ball_y_in_image
 
 
+DEFAULT_CROP_OFFSET = 50
+
+
 def calculate_crop_offset(pixels_bottom, threshold=5):
     # If the bottom of the ball is too close to the bottom
     if pixels_bottom < threshold:
@@ -62,9 +65,7 @@ def calibrate_crop(exposure):
     # - A positive crop value will move the crop downwards, since the camera is flipped
     # --------------------
     # First get an image at the specified exposure
-    subprocess.run(["./embedded/GS_config.sh", "224", "128"], check=True)
-    subprocess.run(['rpicam-vid', '-o', exposure_samples_path + exposure + '_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', str(exposure), '--frames', '1']) 
-    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path + exposure + '_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path + exposure + '_exposure.jpg', '-y'])
+    configure_new_crop(DEFAULT_CROP_OFFSET, exposure, exposure_samples_path_as_str)
     calibrated = False
     while (calibrated == False):
         result = find_ball_y_in_image(exposure_samples_path_as_str + filename)
