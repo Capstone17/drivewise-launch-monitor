@@ -7,7 +7,7 @@ import cv2
 
 import video_ball_detector as vbd
 
-DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(__file__), "golf_ball_detector.tflite")
+DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(__file__), "../golf_ball_detector.tflite")  # Located in the parent folder
 
 
 def find_ball_y_in_image(
