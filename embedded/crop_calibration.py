@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_CROP_OFFSET = 50
 MAX_CALIBRATION_ATTEMPTS = 10
 TARGET_PIXELS_FROM_BOTTOM = 2
-TOLERANCE = 1  # pixels - acceptable deviation from target
+TOLERANCE = 2  # pixels - acceptable deviation from target
 
 
 def calculate_crop_adjustment(pixels_bottom, target=TARGET_PIXELS_FROM_BOTTOM, tolerance=TOLERANCE):
@@ -38,7 +38,7 @@ def calculate_crop_adjustment(pixels_bottom, target=TARGET_PIXELS_FROM_BOTTOM, t
     # Since camera is flipped, positive offset moves crop down (ball appears higher)
     # If ball is too high (pixels_bottom > target), we need positive adjustment
     # If ball is too low (pixels_bottom < target), we need negative adjustment
-    return round(deviation)
+    return -round(deviation)
 
 
 def run_command(cmd, description=""):
