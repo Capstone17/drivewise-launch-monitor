@@ -60,11 +60,13 @@ def calibrate_crop(exposure):
     exposure_samples_path_as_str = str(exposure_samples_path) + "/"
     filename = f"{exposure}_exposure.jpg"
 
+
     # --------------------
     # Calculate New Crop
     # - A positive crop value will move the crop downwards, since the camera is flipped
     # --------------------
     # First get an image at the specified exposure
+    logging.info("[calibrate_crop] Capturing image with default crop")
     configure_new_crop(DEFAULT_CROP_OFFSET, exposure, exposure_samples_path_as_str)
     calibrated = False
     while (calibrated == False):
