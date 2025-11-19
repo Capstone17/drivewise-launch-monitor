@@ -41,20 +41,20 @@ def find_ball_y_in_image(
     return bottom_from_top, bottom_from_bottom
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Print the ball bottom pixel offsets (top and bottom).")
-    parser.add_argument("image_path")
-    parser.add_argument("--model", default=DEFAULT_MODEL_PATH)
-    args = parser.parse_args()
+# def main() -> None:
+#     parser = argparse.ArgumentParser(description="Print the ball bottom pixel offsets (top and bottom).")
+#     parser.add_argument("image_path")
+#     parser.add_argument("--model", default=DEFAULT_MODEL_PATH)
+#     args = parser.parse_args()
 
-    result = find_ball_y_in_image(args.image_path, args.model)
+#     result = find_ball_y_in_image(args.image_path, args.model)
     
-    if result is None:
-        print("Error: Ball not detected in the image")
-    else:
-        px_top, px_bottom = result
-        print(f"Bottom from top: {px_top:.1f} px")
-        print(f"Bottom from bottom: {px_bottom:.1f} px")
+#     if result is None:
+#         print("Error: Ball not detected in the image")
+#     else:
+#         px_top, px_bottom = result
+#         print(f"Bottom from top: {px_top:.1f} px")
+#         print(f"Bottom from bottom: {px_bottom:.1f} px")
 
 
 # if __name__ == "__main__":
