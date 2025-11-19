@@ -53,6 +53,10 @@ HEAD_SCORE_THRESHOLD = 0.3
 HEAD_MIN_HITS = 1
 HEAD_STATIONARY_DRIFT_PX = 6.0
 
+STICKER_Z_SPIKE_WINDOW = 5
+STICKER_Z_SPIKE_MAD_SCALE = 3.5
+STICKER_Z_SPIKE_MIN_JUMP = 6.0
+
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
     "1",
     "true",
@@ -648,6 +652,72 @@ def quat_to_rvec(q: np.ndarray) -> np.ndarray:
     return rvec
 
 
+def _detect_sticker_z_spikes(
+    measured_frames: list[int],
+    measured_lookup: dict[int, dict[str, object]],
+    *,
+    window: int = STICKER_Z_SPIKE_WINDOW,
+    mad_scale: float = STICKER_Z_SPIKE_MAD_SCALE,
+    min_jump: float = STICKER_Z_SPIKE_MIN_JUMP,
+) -> set[int]:
+    """Return measured frames whose Z value is an outlier inside a small median window."""
+
+    spikes: set[int] = set()
+    if len(measured_frames) < 3 or window < 3:
+        return spikes
+
+    half = max(1, window // 2)
+    z_values = [
+        float(np.asarray(measured_lookup[frame]["position"], dtype=float)[2])
+        for frame in measured_frames
+    ]
+
+    for idx, frame in enumerate(measured_frames):
+        left = max(0, idx - half)
+        right = min(len(measured_frames), idx + half + 1)
+        window_vals = z_values[left:right]
+        if len(window_vals) < 3:
+            continue
+        median = float(np.median(window_vals))
+        mad = float(np.median(np.abs(np.array(window_vals) - median))) + 1e-6
+        threshold = max(min_jump, mad_scale * mad)
+        if abs(z_values[idx] - median) > threshold:
+            spikes.add(frame)
+    return spikes
+
+
+def _clean_sticker_z_outliers(
+    measured_lookup: dict[int, dict[str, object]],
+    *,
+    max_passes: int = 3,
+) -> set[int]:
+    """Iteratively drop Z outliers so secondary spikes are revealed after primaries are removed."""
+
+    all_spikes: set[int] = set()
+    for _ in range(max_passes):
+        measured_frames = sorted(measured_lookup)
+        if len(measured_frames) < 3:
+            break
+        spikes = _detect_sticker_z_spikes(measured_frames, measured_lookup)
+        if not spikes:
+            break
+        all_spikes.update(spikes)
+        if len(measured_frames) <= len(spikes):
+            z_vals = [
+                float(np.asarray(measured_lookup[frame]["position"], dtype=float)[2])
+                for frame in measured_frames
+            ]
+            fallback_z = float(np.median(z_vals))
+            for frame in measured_frames:
+                pos = np.array(measured_lookup[frame]["position"], dtype=float)
+                pos[2] = fallback_z
+                measured_lookup[frame] = {**measured_lookup[frame], "position": pos}
+            break
+        for frame in spikes:
+            measured_lookup.pop(frame, None)
+    return all_spikes
+
+
 def predict_sticker_series(
     measurements: list[dict[str, object]],
     start_frame: int,
@@ -669,6 +739,7 @@ def predict_sticker_series(
         return []
 
     measured_lookup = {m["frame"]: m for m in relevant}
+    z_spikes = _clean_sticker_z_outliers(measured_lookup)
     measured_frames = sorted(measured_lookup)
     if not measured_frames:
         return []
@@ -731,7 +802,7 @@ def predict_sticker_series(
     for frame in range(series_start, end_frame):
         time = frame / fps
         measurement = measured_lookup.get(frame)
-        if measurement is None:
+        if measurement is None or frame in z_spikes:
             xyz = interpolate_xyz(frame)
             source = "predicted"
         else:
@@ -1634,7 +1705,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "bad_numbers_no-ball.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "real_ball_test_1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
