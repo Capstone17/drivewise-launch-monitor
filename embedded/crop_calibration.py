@@ -8,7 +8,7 @@ from embedded.image_ball_locator import find_ball_y_in_image
 DEFAULT_CROP_OFFSET = 50
 
 
-def calculate_crop_offset(pixels_bottom, threshold=5):
+def calculate_crop_offset(pixels_bottom, threshold=2):
     # If the bottom of the ball is too close to the bottom
     if pixels_bottom < threshold:
         return threshold
