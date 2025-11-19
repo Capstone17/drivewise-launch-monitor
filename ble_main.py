@@ -36,6 +36,7 @@ import threading
 from video_ball_detector import process_video, TFLiteBallDetector, check_tail_for_ball
 from metrics.ruleBasedSystem import rule_based_system
 from embedded.exposure_calibration import calibrate_exposure
+from embedded.crop_calibration import calibrate_crop
 from battery import return_battery_power
 from status_led import set_status_led_color
 
@@ -451,14 +452,12 @@ class CalibrationCharacteristic(Characteristic):
         self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
 
     def WriteValue(self, value, options):
-        logger.debug("received write command for ev calibration")
+        logger.debug("received write command for calibration")
         try: 
             # Run calibration script
-            logger.debug("Began calibration function")
             self.service.exposure = calibrate_exposure()
             logger.info(f"Exposure from calibration: {self.service.exposure}")
             # Run config script
-            logger.debug("Calibration successful. Now running GS_config")
             subprocess.run(
                 [
                     "./embedded/GS_config.sh",
@@ -468,6 +467,8 @@ class CalibrationCharacteristic(Characteristic):
                 ],
                 check=True,
             )
+            logger.info("Calibrating crop")
+            self.service.crop_offset = calibrate_crop(self.service.exposure)
         except Exception as e:
             logger.error(f"Calibration function failed: {e}")
             if self.notifying:
