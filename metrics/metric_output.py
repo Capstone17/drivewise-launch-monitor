@@ -1,4 +1,4 @@
-from metric_calculation import *
+from .metric_calculation import *
 
 from pathlib import Path
 import json
@@ -513,10 +513,10 @@ def return_metrics() -> dict:
     # Coordinate source paths
     src_coords_path = Path("~/Documents/webcamGolf").expanduser()
     src_coords = str(src_coords_path) + "/"
-    # ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
-    # sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
-    ball_coords_path = "../ball_coords.json"  # STANDALONE
-    sticker_coords_path = "../sticker_coords.json"  # STANDALONE
+    ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
+    sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
+    # ball_coords_path = "../ball_coords.json"  # STANDALONE
+    # sticker_coords_path = "../sticker_coords.json"  # STANDALONE
 
     # ---------------------------------
     # Find impact time
