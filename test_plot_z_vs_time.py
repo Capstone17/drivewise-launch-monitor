@@ -53,7 +53,7 @@ def plot_z_vs_time(data, title="z vs Time", outfile=None):
 if __name__ == "__main__":
 
     # Change this path to ball coordinates or sticker coordinates
-    with open("sticker_coords.json", "r") as f:
+    with open("ball_coords.json", "r") as f:
         data = json.load(f)
 
     plot_z_vs_time(data, title="z vs Time (example)")

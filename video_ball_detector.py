@@ -50,9 +50,9 @@ MAX_CENTER_JUMP_PX = 120.0
 # ----------------------------
 # Motion window parameters
 # - Indoor, slow swing: 160 frames
-# - Outdoor, fast swing: 80 frames
+# - Outdoor, fast swing: 80 frames (PLEASE LEAVE IT AT 80 WHEN PUSHING TO MAIN)
 # ----------------------------
-MOTION_WINDOW_FRAMES = 160  # number of frames kept in the motion window
+MOTION_WINDOW_FRAMES = 80  # number of frames kept in the motion window
 
 IMPACT_SPEED_THRESHOLD_PX = 1.0  # pixel distance that marks ball movement
 HEAD_CHECK_FRAMES = 5

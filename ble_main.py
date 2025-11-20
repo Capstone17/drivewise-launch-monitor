@@ -280,8 +280,9 @@ class SwingAnalysisCharacteristic(Characteristic):
                         current_time = datetime.now()
                         print(f"Time at video start: {current_time.time()}")
 
+                        # 5s and 7s commonly have misses where the user hits the ball in between videos
                         subprocess.run(
-                            ["./embedded/rpicam_run.sh", "7s", str(self.service.exposure)],
+                            ["./embedded/rpicam_run.sh", "9s", str(self.service.exposure)],
                             check=True,
                             capture_output=True,
                         )

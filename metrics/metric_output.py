@@ -1,4 +1,4 @@
-from .metric_calculation import *
+from metric_calculation import *
 
 from pathlib import Path
 import json
@@ -67,7 +67,6 @@ def calculate_r_squared(t_values, y_values, slope, intercept):
 # -------------------------
 # Ball Velocity
 # -------------------------
-
 def ball_velocity_components(json_path, time_threshold, apply_filter=True, 
                             window_length=11, poly_order=2, 
                             warn_threshold=0.8, verbose=True,
@@ -265,7 +264,7 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
 
 # Since we usually get some frames at the end where the ball is partially detected, this can mess up the dz calculation.
 # To avoid this we can remove these frames when we calcuate for dz.
-def remove_z_increasing_tail(frames, verbose=False, increase_threshold=5.0, min_consecutive=2):
+def remove_z_increasing_tail(frames, verbose=True, increase_threshold=5.0, min_consecutive=2):
     """
     Remove frames at the end where z starts consistently increasing (object appears to move away).
     Since the object is always moving toward camera, z should decrease overall.
@@ -307,6 +306,14 @@ def remove_z_increasing_tail(frames, verbose=False, increase_threshold=5.0, min_
             # Reset counter if we don't see an increase
             consecutive_increases = 0
     
+    # Additional check: if the LAST FRAME shows a single large anomalous jump
+    if cutoff_idx == len(frames) and len(frames) >= 2:
+        last_z_change = z_vals[-1] - z_vals[-2]
+        if last_z_change > increase_threshold:
+            cutoff_idx = len(frames) - 1
+            if verbose:
+                print(f"Z-anomaly detected: Last frame shows large z-increase of {last_z_change:.2f} units")
+    
     # Additional check: if the last few frames show a strong upward trend
     # compared to the overall downward trend, remove them
     if cutoff_idx == len(frames) and len(frames) >= 5:
@@ -322,10 +329,11 @@ def remove_z_increasing_tail(frames, verbose=False, increase_threshold=5.0, min_
         removed_count = len(frames) - cutoff_idx
         if verbose:
             print(f"Z-anomaly detected at frame {cutoff_idx}: Will use only first {cutoff_idx} frames for z-fitting")
-            print(f"  Removed {removed_count} frames where z increased by >{increase_threshold} units")
+            print(f"  Removed {removed_count} frame(s) where z increased anomalously")
         return frames[:cutoff_idx]
     
     return frames
+
 
 # Worst-case scenario: If we only have 2 frames, we must use finite difference
 def finite_difference_fallback(frames, verbose=True):
@@ -519,10 +527,10 @@ def return_metrics() -> dict:
     # Coordinate source paths
     src_coords_path = Path("~/Documents/webcamGolf").expanduser()
     src_coords = str(src_coords_path) + "/"
-    ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
-    sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
-    # ball_coords_path = "../ball_coords.json"  # STANDALONE
-    # sticker_coords_path = "../sticker_coords.json"  # STANDALONE
+    # ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
+    # sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
+    ball_coords_path = "../ball_coords.json"  # STANDALONE
+    sticker_coords_path = "../sticker_coords.json"  # STANDALONE
 
     # ---------------------------------
     # Find impact time
