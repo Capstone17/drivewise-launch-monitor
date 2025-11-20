@@ -60,6 +60,14 @@ HEAD_SCORE_THRESHOLD = 0.3
 HEAD_MIN_HITS = 1
 HEAD_STATIONARY_DRIFT_PX = 6.0
 
+STICKER_Z_SPIKE_WINDOW = 5
+STICKER_Z_SPIKE_MAD_SCALE = 3.0
+STICKER_Z_SPIKE_MIN_JUMP = 5.0
+STICKER_Z_TREND_JUMP = 3.5
+STICKER_Z_LOCAL_PEAK_JUMP = 3.5
+STICKER_Z_LINEAR_GAP_JUMP = 3.5
+STICKER_Z_MONO_TOLERANCE = 1.0
+
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
     "1",
     "true",
@@ -655,6 +663,178 @@ def quat_to_rvec(q: np.ndarray) -> np.ndarray:
     return rvec
 
 
+def _detect_sticker_z_spikes(
+    measured_frames: list[int],
+    measured_lookup: dict[int, dict[str, object]],
+    *,
+    window: int = STICKER_Z_SPIKE_WINDOW,
+    mad_scale: float = STICKER_Z_SPIKE_MAD_SCALE,
+    min_jump: float = STICKER_Z_SPIKE_MIN_JUMP,
+) -> set[int]:
+    """Return measured frames whose Z value is an outlier inside a small median window."""
+
+    spikes: set[int] = set()
+    if len(measured_frames) < 3 or window < 3:
+        return spikes
+
+    half = max(1, window // 2)
+    z_values = [
+        float(np.asarray(measured_lookup[frame]["position"], dtype=float)[2])
+        for frame in measured_frames
+    ]
+
+    for idx, frame in enumerate(measured_frames):
+        left = max(0, idx - half)
+        right = min(len(measured_frames), idx + half + 1)
+        window_vals = z_values[left:right]
+        if len(window_vals) < 3:
+            continue
+        median = float(np.median(window_vals))
+        mad = float(np.median(np.abs(np.array(window_vals) - median))) + 1e-6
+        threshold = max(min_jump, mad_scale * mad)
+        if abs(z_values[idx] - median) > threshold:
+            spikes.add(frame)
+    return spikes
+
+
+def _clean_sticker_z_outliers(
+    measured_lookup: dict[int, dict[str, object]],
+    *,
+    max_passes: int = 3,
+) -> set[int]:
+    """Iteratively drop Z outliers so secondary spikes are revealed after primaries are removed."""
+
+    all_spikes: set[int] = set()
+    for _ in range(max_passes):
+        measured_frames = sorted(measured_lookup)
+        if len(measured_frames) < 3:
+            break
+        spikes = _detect_sticker_z_spikes(measured_frames, measured_lookup)
+        if not spikes:
+            break
+        all_spikes.update(spikes)
+        if len(measured_frames) <= len(spikes):
+            z_vals = [
+                float(np.asarray(measured_lookup[frame]["position"], dtype=float)[2])
+                for frame in measured_frames
+            ]
+            fallback_z = float(np.median(z_vals))
+            for frame in measured_frames:
+                pos = np.array(measured_lookup[frame]["position"], dtype=float)
+                pos[2] = fallback_z
+                measured_lookup[frame] = {**measured_lookup[frame], "position": pos}
+            break
+        for frame in spikes:
+            measured_lookup.pop(frame, None)
+    return all_spikes
+
+
+def _detect_sticker_z_local_peaks(
+    measured_lookup: dict[int, dict[str, object]],
+    *,
+    min_jump: float = STICKER_Z_LOCAL_PEAK_JUMP,
+) -> set[int]:
+    """Find isolated high points compared to their immediate neighbours."""
+
+    frames = sorted(measured_lookup)
+    peaks: set[int] = set()
+    if len(frames) < 3:
+        return peaks
+
+    for idx in range(1, len(frames) - 1):
+        prev_f = frames[idx - 1]
+        mid_f = frames[idx]
+        next_f = frames[idx + 1]
+        z_prev = float(np.asarray(measured_lookup[prev_f]["position"], dtype=float)[2])
+        z_mid = float(np.asarray(measured_lookup[mid_f]["position"], dtype=float)[2])
+        z_next = float(np.asarray(measured_lookup[next_f]["position"], dtype=float)[2])
+        neighbour_max = max(z_prev, z_next)
+        if z_mid - neighbour_max > min_jump and z_mid >= max(z_prev, z_next):
+            peaks.add(mid_f)
+    return peaks
+
+
+def _detect_sticker_z_trend_spikes(
+    measured_lookup: dict[int, dict[str, object]],
+    *,
+    min_jump: float = STICKER_Z_TREND_JUMP,
+) -> set[int]:
+    """Flag measured frames that sit well above a linear interpolation of their neighbours."""
+
+    frames = sorted(measured_lookup)
+    spikes: set[int] = set()
+    if len(frames) < 3:
+        return spikes
+
+    for idx in range(1, len(frames) - 1):
+        left = frames[idx - 1]
+        mid = frames[idx]
+        right = frames[idx + 1]
+        span = right - left
+        if span <= 0:
+            continue
+        z_left = float(np.asarray(measured_lookup[left]["position"], dtype=float)[2])
+        z_mid = float(np.asarray(measured_lookup[mid]["position"], dtype=float)[2])
+        z_right = float(np.asarray(measured_lookup[right]["position"], dtype=float)[2])
+        alpha = (mid - left) / span
+        expected = z_left + (z_right - z_left) * alpha
+        if (z_mid - expected) > min_jump and (z_mid - max(z_left, z_right)) > (min_jump * 0.5):
+            spikes.add(mid)
+    return spikes
+
+
+def _detect_sticker_z_linear_gap_spikes(
+    measured_lookup: dict[int, dict[str, object]],
+    *,
+    min_jump: float = STICKER_Z_LINEAR_GAP_JUMP,
+) -> set[int]:
+    """Flag measured points that are far above the straight line between neighbouring measured frames."""
+
+    frames = sorted(measured_lookup)
+    spikes: set[int] = set()
+    if len(frames) < 3:
+        return spikes
+
+    for idx in range(1, len(frames) - 1):
+        left = frames[idx - 1]
+        mid = frames[idx]
+        right = frames[idx + 1]
+        span = right - left
+        if span <= 0:
+            continue
+        z_left = float(np.asarray(measured_lookup[left]["position"], dtype=float)[2])
+        z_mid = float(np.asarray(measured_lookup[mid]["position"], dtype=float)[2])
+        z_right = float(np.asarray(measured_lookup[right]["position"], dtype=float)[2])
+        alpha = (mid - left) / span
+        expected = z_left + (z_right - z_left) * alpha
+        overshoot = z_mid - expected
+        if overshoot > min_jump and overshoot > 0.5 * min_jump and z_mid - max(z_left, z_right) > 0.5 * min_jump:
+            spikes.add(mid)
+    return spikes
+
+
+def _detect_sticker_z_monotonic_spikes(
+    measured_lookup: dict[int, dict[str, object]],
+    *,
+    tolerance: float = STICKER_Z_MONO_TOLERANCE,
+) -> set[int]:
+    """Identify measured points that rise above the running minimum by more than ``tolerance``."""
+
+    frames = sorted(measured_lookup)
+    spikes: set[int] = set()
+    if len(frames) < 2:
+        return spikes
+
+    running_min = float("inf")
+    for frame in frames:
+        z_val = float(np.asarray(measured_lookup[frame]["position"], dtype=float)[2])
+        if z_val > running_min + tolerance:
+            spikes.add(frame)
+        else:
+            running_min = min(running_min, z_val)
+    return spikes
+
+
 def predict_sticker_series(
     measurements: list[dict[str, object]],
     start_frame: int,
@@ -676,6 +856,27 @@ def predict_sticker_series(
         return []
 
     measured_lookup = {m["frame"]: m for m in relevant}
+    z_spikes = _clean_sticker_z_outliers(measured_lookup)
+    trend_spikes = _detect_sticker_z_trend_spikes(measured_lookup)
+    local_peaks = _detect_sticker_z_local_peaks(measured_lookup)
+    linear_gap_spikes = _detect_sticker_z_linear_gap_spikes(measured_lookup)
+    monotonic_spikes = _detect_sticker_z_monotonic_spikes(measured_lookup)
+    secondary_spikes = trend_spikes | local_peaks | linear_gap_spikes | monotonic_spikes
+    if secondary_spikes:
+        if len(measured_lookup) > len(secondary_spikes):
+            for frame in secondary_spikes:
+                measured_lookup.pop(frame, None)
+        else:
+            z_vals = [
+                float(np.asarray(measured_lookup[frame]["position"], dtype=float)[2])
+                for frame in measured_lookup
+            ]
+            fallback_z = float(np.median(z_vals))
+            for frame, entry in measured_lookup.items():
+                pos = np.array(entry["position"], dtype=float)
+                pos[2] = fallback_z
+                measured_lookup[frame] = {**entry, "position": pos}
+    z_spikes |= secondary_spikes
     measured_frames = sorted(measured_lookup)
     if not measured_frames:
         return []
@@ -738,7 +939,7 @@ def predict_sticker_series(
     for frame in range(series_start, end_frame):
         time = frame / fps
         measurement = measured_lookup.get(frame)
-        if measurement is None:
+        if measurement is None or frame in z_spikes:
             xyz = interpolate_xyz(frame)
             source = "predicted"
         else:
@@ -1641,7 +1842,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "bad_numbers_no-ball.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "bad_numbers_sticker-z-spike_3.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
