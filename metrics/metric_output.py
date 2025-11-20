@@ -382,11 +382,12 @@ def finite_difference_fallback(frames, verbose=True):
 # -------------------------
 # Club Velocity Calculation
 # -------------------------
-
 # Polyorder=2 gives a good balance of smoothness, adaptability to acceleration/deceleration, 
 #   and resistance to overfitting random noise for real-world motion estimation from short, 
 #   noisy time series.
-def savgol_velocity(json_path, polyorder=2):
+# Note that Savitzky-Golay is meant for local smoothing, not global trend fitting.
+#   This is why we have a maximum window size of 7-13
+def savgol_velocity(json_path, polyorder=2, max_window=13):
     """
     Estimate velocity components (x, y, z) at the last time point in a JSON file
     using Savitzky-Golay smoothing/derivative.
@@ -394,10 +395,10 @@ def savgol_velocity(json_path, polyorder=2):
     Args:
         json_path (str): Path to JSON file with position data (time, x, y, z).
         polyorder (int): Polynomial order for S-G filter (default 2).
+        max_window (int): Maximum window length (default 9). Should be odd.
 
     Returns:
         tuple: (x_vel, y_vel, z_vel) at the last time point in units/sec.
-                z_vel is negated so that motion toward camera gives negative z_vel.
 
     Raises:
         ValueError: If fewer than 3 frames in the file.
@@ -424,10 +425,14 @@ def savgol_velocity(json_path, polyorder=2):
     y_vals = y_vals[idx]
     z_vals = z_vals[idx]
 
-    # Choose largest odd window length ≤ N
-    window_length = N if N % 2 == 1 else N - 1
+    # Choose window length: use max_window, but constrain to available data
+    # Window must be odd and ≤ N
+    window_length = min(max_window, N)
+    if window_length % 2 == 0:
+        window_length -= 1  # Make it odd
     if window_length < 3:
         window_length = 3
+    
     polyorder = min(polyorder, window_length - 1)
 
     # Median time step for derivative scaling
@@ -441,6 +446,7 @@ def savgol_velocity(json_path, polyorder=2):
     z_deriv = savgol_filter(z_vals, window_length, polyorder, deriv=1, delta=dt)
 
     return x_deriv[-1], y_deriv[-1], z_deriv[-1]
+
 
 
 # -------------------------
