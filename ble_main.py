@@ -297,7 +297,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                         self.end_loop()
                         return
 
-                    mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
+                    mp4_files = glob.glob(os.path.join(output_dir, "vid_84.mp4"))
                     if not mp4_files:
                         logger.error("No vid*.mp4 found in webcamGolf after high-rate capture")
                         break
