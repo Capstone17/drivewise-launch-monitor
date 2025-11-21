@@ -72,7 +72,7 @@ rpicam-vid --level 4.2 \
     --width 224 \
     --height 128 \
     --no-raw \
-    --awbgains 1.0,1.0 \
+    --sharpness 10 \
     --denoise cdn_off \
     --hflip --vflip \
     -o "$filepath" \
