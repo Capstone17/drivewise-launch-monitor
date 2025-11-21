@@ -399,6 +399,7 @@ def savgol_velocity(json_path, polyorder=2, max_window=13):
     """
     Estimate velocity components (x, y, z) at the last time point in a JSON file
     using Savitzky-Golay smoothing/derivative, or finite difference if only two frames.
+    Ensures dz is always negative (object moving toward camera).
 
     Args:
         json_path (str): Path to JSON file with position data (time, x, y, z).
@@ -444,28 +445,44 @@ def savgol_velocity(json_path, polyorder=2, max_window=13):
     y_vals = y_vals[idx]
     z_vals = z_vals[idx]
 
-    # Choose window length: use max_window, but constrain to available data
-    # Window must be odd and ≤ N
-    window_length = min(max_window, N)
-    if window_length % 2 == 0:
-        window_length -= 1  # Make it odd
-    if window_length < 3:
-        window_length = 3
+    # Iteratively remove tail frames until dz becomes negative
+    max_removal = min(3, N - 3)  # Remove at most 3 frames, keep at least 3
+    frames_removed = 0
     
-    polyorder = min(polyorder, window_length - 1)
+    for attempt in range(max_removal + 1):
+        current_N = N - frames_removed
+        
+        # Choose window length
+        window_length = min(max_window, current_N)
+        if window_length % 2 == 0:
+            window_length -= 1
+        if window_length < 3:
+            window_length = 3
+        poly = min(polyorder, window_length - 1)
 
-    # Median time step for derivative scaling
-    dt = np.median(np.diff(t_vals))
-    if dt == 0:
-        raise ValueError("Time values must be distinct for velocity estimation.")
+        # Median time step for derivative scaling
+        dt = np.median(np.diff(t_vals[:current_N]))
+        if dt == 0:
+            raise ValueError("Time values must be distinct for velocity estimation.")
 
-    # Compute Savitzky-Golay derivatives (velocity estimates) at each time point
-    x_deriv = savgol_filter(x_vals, window_length, polyorder, deriv=1, delta=dt)
-    y_deriv = savgol_filter(y_vals, window_length, polyorder, deriv=1, delta=dt)
-    z_deriv = savgol_filter(z_vals, window_length, polyorder, deriv=1, delta=dt)
+        # Compute Savitzky-Golay derivatives
+        x_deriv = savgol_filter(x_vals[:current_N], window_length, poly, deriv=1, delta=dt)
+        y_deriv = savgol_filter(y_vals[:current_N], window_length, poly, deriv=1, delta=dt)
+        z_deriv = savgol_filter(z_vals[:current_N], window_length, poly, deriv=1, delta=dt)
 
-    return x_deriv[-1], y_deriv[-1], z_deriv[-1]
+        # Check if dz is negative (as expected)
+        if z_deriv[-1] < 0:
+            # Good! Return velocities
+            return x_deriv[-1], y_deriv[-1], z_deriv[-1]
+        else:
+            # dz is positive - remove one more frame from tail and retry
+            frames_removed += 1
+            if frames_removed <= max_removal:
+                print(f"Warning: dz positive ({z_deriv[-1]:.2f}), removing 1 tail frame (attempt {attempt+1})")
 
+    # If still positive after max removals, force it negative
+    print(f"Warning: Could not achieve negative dz after removing {frames_removed} frames. Forcing sign.")
+    return x_deriv[-1], y_deriv[-1], -abs(z_deriv[-1])
 
 
 # -------------------------
