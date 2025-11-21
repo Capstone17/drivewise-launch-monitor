@@ -184,7 +184,7 @@ _UNIT_SQUARE_OBJECT_POINTS = np.array(
     dtype=np.float32,
 )
 
-DYNAMIC_ID = 0
+DYNAMIC_ID = 17
 
 MAX_MISSING_FRAMES = 12
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
