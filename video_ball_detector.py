@@ -52,13 +52,14 @@ MAX_CENTER_JUMP_PX = 120.0
 # - Indoor, slow swing: 160 frames
 # - Outdoor, fast swing: 40 frames (PLEASE LEAVE IT AT 40 WHEN PUSHING TO MAIN)
 # ----------------------------
-MOTION_WINDOW_FRAMES = 160  # number of frames kept in the motion window
+MOTION_WINDOW_FRAMES = 60  # number of frames kept in the motion window
 
 IMPACT_SPEED_THRESHOLD_PX = 1.0  # pixel distance that marks ball movement
 HEAD_CHECK_FRAMES = 5
 HEAD_SCORE_THRESHOLD = 0.3
 HEAD_MIN_HITS = 1
 HEAD_STATIONARY_DRIFT_PX = 6.0
+POST_IMPACT_STICKER_FRAMES = 2  # keep sticker tracking alive for a couple of frames after impact
 
 STICKER_Z_SPIKE_WINDOW = 5
 STICKER_Z_SPIKE_MAD_SCALE = 3.0
@@ -1613,7 +1614,9 @@ def process_video(
                 break
 
 
-        allow_sticker = impact_frame_idx is None or frame_idx < impact_frame_idx
+        allow_sticker = (
+            impact_frame_idx is None or frame_idx <= impact_frame_idx + POST_IMPACT_STICKER_FRAMES
+        )
         if allow_sticker:
             sticker_start = time.perf_counter()
             corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
@@ -1769,7 +1772,10 @@ def process_video(
     if impact_frame_idx is None:
         sticker_cutoff_frame = inference_end
     else:
-        sticker_cutoff_frame = min(impact_frame_idx, inference_end)
+        sticker_cutoff_frame = min(
+            impact_frame_idx + POST_IMPACT_STICKER_FRAMES + 1,
+            inference_end,
+        )
     sticker_series = predict_sticker_series(
         sticker_measurements,
         inference_start,
@@ -1821,7 +1827,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "vid_77.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "id17_test_good_2.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
