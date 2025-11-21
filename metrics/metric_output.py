@@ -398,24 +398,35 @@ def finite_difference_fallback(frames, verbose=True):
 def savgol_velocity(json_path, polyorder=2, max_window=13):
     """
     Estimate velocity components (x, y, z) at the last time point in a JSON file
-    using Savitzky-Golay smoothing/derivative.
+    using Savitzky-Golay smoothing/derivative, or finite difference if only two frames.
 
     Args:
         json_path (str): Path to JSON file with position data (time, x, y, z).
         polyorder (int): Polynomial order for S-G filter (default 2).
-        max_window (int): Maximum window length (default 9). Should be odd.
+        max_window (int): Maximum window length (default 13). Should be odd.
 
     Returns:
         tuple: (x_vel, y_vel, z_vel) at the last time point in units/sec.
 
     Raises:
-        ValueError: If fewer than 3 frames in the file.
+        ValueError: If fewer than 2 frames in the file.
     """
     # Load data from JSON file
     with open(json_path, 'r') as f:
         frames = json.load(f)
     
     N = len(frames)
+    
+    # Finite difference fallback for exactly 2 frames
+    if N == 2:
+        dt = frames[1]['time'] - frames[0]['time']
+        if dt == 0:
+            raise ValueError("Timestamps of the two frames are identical.")
+        x_vel = (frames[1]['x'] - frames[0]['x']) / dt
+        y_vel = (frames[1]['y'] - frames[0]['y']) / dt
+        z_vel = (frames[1]['z'] - frames[0]['z']) / dt
+        return x_vel, y_vel, z_vel
+    
     if N < 3:
         print(f"Need at least 3 frames for Savitzky-Golay velocity. Got {N}.")
         return None, None, None
