@@ -1,11 +1,13 @@
 import subprocess
 from pathlib import Path
+import shutil
 from .histogram import analyze_exposure_in_folder
 
 
 # -----------------------------
 # Tested Exposures
 # - 1300 is too high, too much motion blur for sticker
+# - 800 is too high for fast swings outdoors
 # -----------------------------
 
 
@@ -15,25 +17,22 @@ def calibrate_exposure():
     exposure_samples_path = Path("~/Documents/webcamGolf/embedded/exposure_samples/").expanduser()
     exposure_samples_path_as_str = str(exposure_samples_path) + "/"
 
-    # Define the commands as a list of lists
-    # commands = [
-    #     ['echo', 'Starting command series...'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '50_exposure.jpg', '--shutter', '50', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '100_exposure.jpg', '--shutter', '100', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '150_exposure.jpg', '--shutter', '150', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '200_exposure.jpg', '--shutter', '200', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '250_exposure.jpg', '--shutter', '250', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '300_exposure.jpg', '--shutter', '300', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '350_exposure.jpg', '--shutter', '350', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '400_exposure.jpg', '--shutter', '400', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '450_exposure.jpg', '--shutter', '450', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '500_exposure.jpg', '--shutter', '500', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '550_exposure.jpg', '--shutter', '550', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '600_exposure.jpg', '--shutter', '600', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '650_exposure.jpg', '--shutter', '650', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '700_exposure.jpg', '--shutter', '700', '--gain', '1', '--immediate'],
-    #     ['rpicam-still', '-o', exposure_samples_path_as_str + '750_exposure.jpg', '--shutter', '750', '--gain', '1', '--immediate']
-    # ]
+    # Remove all contents from the exposure_samples folder before starting
+    print("Cleaning exposure_samples folder...")
+    if exposure_samples_path.exists():
+        for item in exposure_samples_path.iterdir():
+            try:
+                if item.is_file() or item.is_symlink():
+                    item.unlink()
+                elif item.is_dir():
+                    shutil.rmtree(item)
+            except Exception as e:
+                print(f"Failed to delete {item}: {e}")
+        print("Folder cleaned successfully.")
+    else:
+        # Create the folder if it doesn't exist
+        exposure_samples_path.mkdir(parents=True, exist_ok=True)
+        print("Folder created.")
 
     # Define the commands as a list of lists
     commands = [
@@ -55,7 +54,7 @@ def calibrate_exposure():
         ['rpicam-vid', '-o', exposure_samples_path_as_str + '700_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', '700', '--frames', '1'],
         ['rpicam-vid', '-o', exposure_samples_path_as_str + '750_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', '750', '--frames', '1'],
         ['rpicam-vid', '-o', exposure_samples_path_as_str + '800_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', '800', '--frames', '1'],
-        ['rpicam-vid', '-o', exposure_samples_path_as_str + '3000_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', '3000', '--frames', '1'],
+        # ['rpicam-vid', '-o', exposure_samples_path_as_str + '3000_exposure.mp4', '--level', '4.2', '--camera', '0', '--width', '224', '--height', '128', '--hflip', '--vflip', '--no-raw', '-n', '--shutter', '3000', '--frames', '1'],
         ['echo', 'Extracting frames...'],
         ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '50_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '50_exposure.jpg'],
         ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '100_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '100_exposure.jpg', '-y'],
@@ -73,7 +72,7 @@ def calibrate_exposure():
         ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '700_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '700_exposure.jpg', '-y'],
         ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '750_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '750_exposure.jpg', '-y'],
         ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '800_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '800_exposure.jpg', '-y']
-        , ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '3000_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '3000_exposure.jpg', '-y']           
+        # , ['ffmpeg', '-y', '-loglevel', 'error', '-i', exposure_samples_path_as_str + '3000_exposure.mp4', '-frames:v', '1', '-update', '1', exposure_samples_path_as_str + '3000_exposure.jpg', '-y']           
     ]
 
     for cmd in commands:
