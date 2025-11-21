@@ -105,9 +105,11 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
     frames = [d for d in data if after_threshold(d, time_threshold)]
     
     # Detect anomalous z-increasing frames for z-only filtering
+    # Even if there are only 3 frames, we should be removing these for z calculation.
+    #   If this is the case we can rely on our finite difference fallback later.
     frames_for_z = frames
     z_frames_removed = 0
-    if detect_z_anomaly and len(frames) > 3:
+    if detect_z_anomaly and len(frames) >= 3:
         frames_for_z = remove_z_increasing_tail(frames, verbose)
         z_frames_removed = len(frames) - len(frames_for_z)
     
@@ -278,7 +280,7 @@ def remove_z_increasing_tail(frames, verbose=True, increase_threshold=5.0, min_c
     Returns:
         Filtered list of frames with anomalous tail removed
     """
-    if len(frames) < 5:
+    if len(frames) < 3:
         return frames
     
     z_vals = np.array([f['z'] for f in frames])
