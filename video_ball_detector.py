@@ -118,31 +118,31 @@ def apply_calibration(calibration: dict[str, object] | None = None) -> dict[str,
     focal = _DEFAULT_FOCAL_LENGTH
     radius = _DEFAULT_BALL_RADIUS
 
-    # if calibration:
-    #     cam_mat = calibration.get("camera_matrix")
-    #     if cam_mat is not None:
-    #         arr = np.asarray(cam_mat, dtype=np.float32)
-    #         if arr.shape == (3, 3):
-    #             matrix = arr
-    #     dist_vals = calibration.get("dist_coeffs")
-    #     if dist_vals is not None:
-    #         arr = np.asarray(dist_vals, dtype=np.float32)
-    #         if arr.ndim == 1:
-    #             arr = arr.reshape(1, -1)
-    #         if arr.ndim == 2:
-    #             dist = arr
-    #     focal_val = calibration.get("focal_length")
-    #     if focal_val is not None:
-    #         try:
-    #             focal = float(focal_val)
-    #         except (TypeError, ValueError):
-    #             pass
-    #     radius_val = calibration.get("ball_radius")
-    #     if radius_val is not None:
-    #         try:
-    #             radius = float(radius_val)
-    #         except (TypeError, ValueError):
-    #             pass
+    if calibration:
+        cam_mat = calibration.get("camera_matrix")
+        if cam_mat is not None:
+            arr = np.asarray(cam_mat, dtype=np.float32)
+            if arr.shape == (3, 3):
+                matrix = arr
+        dist_vals = calibration.get("dist_coeffs")
+        if dist_vals is not None:
+            arr = np.asarray(dist_vals, dtype=np.float32)
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)
+            if arr.ndim == 2:
+                dist = arr
+        focal_val = calibration.get("focal_length")
+        if focal_val is not None:
+            try:
+                focal = float(focal_val)
+            except (TypeError, ValueError):
+                pass
+        radius_val = calibration.get("ball_radius")
+        if radius_val is not None:
+            try:
+                radius = float(radius_val)
+            except (TypeError, ValueError):
+                pass
 
     CAMERA_MATRIX = matrix.astype(np.float32, copy=True)
     DIST_COEFFS = dist.astype(np.float32, copy=True)
@@ -1842,7 +1842,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "bad_numbers_sticker-z-spike_3.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "vid_77.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
