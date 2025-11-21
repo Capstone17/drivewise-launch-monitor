@@ -65,6 +65,7 @@ echo "Saving video as: $filepath"
 
 # -------------------------
 # Run rpicam-vid
+# - turn awb off (--awb off)?
 # -------------------------
 rpicam-vid --level 4.2 \
     -t "$capture_time" \
