@@ -39,7 +39,20 @@ except Exception:
 ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
 
-DYNAMIC_MARKER_LENGTH = 2.38
+CHARUCO_SQUARES_X = 4  # matches the generator script
+CHARUCO_SQUARES_Y = 4
+CHARUCO_SQUARE_LENGTH = 0.5  # 5 mm squares -> 0.5 cm to stay consistent with existing units
+CHARUCO_MARKER_LENGTH = 0.35  # 3.5 mm -> 0.35 cm
+CHARUCO_AXES_LENGTH = CHARUCO_SQUARE_LENGTH * 1.5
+CHARUCO_MIN_CORNERS = 4
+CHARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+
+CHARUCO_BOARD = cv2.aruco.CharucoBoard(
+    (CHARUCO_SQUARES_X, CHARUCO_SQUARES_Y),
+    CHARUCO_SQUARE_LENGTH,
+    CHARUCO_MARKER_LENGTH,
+    CHARUCO_DICT,
+)
 MIN_BALL_RADIUS_PX = 9  # pixels
 EDGE_MARGIN_PX = 1
 BALL_SCORE_THRESHOLD = 0.4
@@ -160,31 +173,18 @@ def apply_calibration(calibration: dict[str, object] | None = None) -> dict[str,
 
 apply_calibration()
 
-ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
-ARUCO_PARAMS = cv2.aruco.DetectorParameters()
-ARUCO_PARAMS.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-ARUCO_PARAMS.adaptiveThreshWinSizeMin = 3
-ARUCO_PARAMS.adaptiveThreshWinSizeMax = 53
-ARUCO_PARAMS.adaptiveThreshWinSizeStep = 4
-ARUCO_PARAMS.minMarkerPerimeterRate = 0.02
-ARUCO_PARAMS.polygonalApproxAccuracyRate = 0.03
-ARUCO_PARAMS.cornerRefinementWinSize = 7
-ARUCO_PARAMS.cornerRefinementMinAccuracy = 0.01
-ARUCO_PARAMS.adaptiveThreshConstant = 7
+CHARUCO_PARAMS = cv2.aruco.DetectorParameters()
+CHARUCO_PARAMS.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+CHARUCO_PARAMS.adaptiveThreshWinSizeMin = 3
+CHARUCO_PARAMS.adaptiveThreshWinSizeMax = 53
+CHARUCO_PARAMS.adaptiveThreshWinSizeStep = 4
+CHARUCO_PARAMS.minMarkerPerimeterRate = 0.02
+CHARUCO_PARAMS.polygonalApproxAccuracyRate = 0.03
+CHARUCO_PARAMS.cornerRefinementWinSize = 7
+CHARUCO_PARAMS.cornerRefinementMinAccuracy = 0.01
+CHARUCO_PARAMS.adaptiveThreshConstant = 7
 
-_HAS_ARUCO_POSE_SINGLE = hasattr(cv2.aruco, "estimatePoseSingleMarkers")
-_SOLVEPNP_FLAG = getattr(cv2, "SOLVEPNP_IPPE_SQUARE", cv2.SOLVEPNP_ITERATIVE)
-_UNIT_SQUARE_OBJECT_POINTS = np.array(
-    [
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [1.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-    ],
-    dtype=np.float32,
-)
-
-DYNAMIC_ID = 0
+_HAS_CHARUCO_DETECTOR = hasattr(cv2.aruco, "CharucoDetector")
 
 MAX_MISSING_FRAMES = 12
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -404,44 +404,99 @@ def bbox_within_image(
     )
 
 
-def marker_object_points(marker_length: float) -> np.ndarray:
-    """Return square marker object points scaled to ``marker_length``."""
+def charuco_object_points(charuco_ids: np.ndarray | None) -> np.ndarray:
+    """Return ordered object points for the provided Charuco corner IDs."""
 
-    return _UNIT_SQUARE_OBJECT_POINTS * float(marker_length)
+    if charuco_ids is None or len(charuco_ids) == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    idx = charuco_ids.flatten()
+    pts = CHARUCO_BOARD.chessboardCorners[idx]
+    return np.asarray(pts, dtype=np.float32).reshape(-1, 3)
 
 
-def estimate_single_marker_pose(
-    marker_corners: np.ndarray,
-    marker_length: float,
-) -> tuple[np.ndarray, np.ndarray] | None:
-    """Estimate pose of a single ArUco marker with compatibility fallbacks."""
+def charuco_reprojection_error(
+    charuco_corners: np.ndarray,
+    charuco_ids: np.ndarray,
+    rvec: np.ndarray,
+    tvec: np.ndarray,
+) -> float:
+    """Compute mean reprojection error for a Charuco pose estimate."""
 
-    if marker_corners is None:
+    object_pts = charuco_object_points(charuco_ids)
+    if object_pts.size == 0:
+        return float("inf")
+    reprojected, _ = cv2.projectPoints(object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS)
+    return float(
+        np.linalg.norm(charuco_corners.reshape(-1, 2) - reprojected.reshape(-1, 2), axis=1).mean()
+    )
+
+
+def estimate_charuco_pose(
+    charuco_corners: np.ndarray | None,
+    charuco_ids: np.ndarray | None,
+    *,
+    last_rt: tuple[np.ndarray, np.ndarray] | None = None,
+    last_quat: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float] | None:
+    """Estimate and sanity-check Charuco board pose."""
+
+    if charuco_corners is None or charuco_ids is None:
         return None
-    if _HAS_ARUCO_POSE_SINGLE:
-        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-            [marker_corners],
-            marker_length,
-            CAMERA_MATRIX,
-            DIST_COEFFS,
-        )
-        if rvecs.size == 0 or tvecs.size == 0:
-            return None
-        return rvecs[0, 0], tvecs[0, 0].reshape(3)
-    pts_2d = marker_corners.reshape(-1, 2).astype(np.float32)
-    if pts_2d.shape[0] != 4:
+    if len(charuco_corners) < CHARUCO_MIN_CORNERS:
         return None
-    object_pts = marker_object_points(marker_length)
-    ok, rvec, tvec = cv2.solvePnP(
-        object_pts,
-        pts_2d,
-        CAMERA_MATRIX,
-        DIST_COEFFS,
-        flags=_SOLVEPNP_FLAG,
+    ok, rvec, tvec = cv2.aruco.estimatePoseCharucoBoard(
+        charucoCorners=charuco_corners,
+        charucoIds=charuco_ids,
+        board=CHARUCO_BOARD,
+        cameraMatrix=CAMERA_MATRIX,
+        distCoeffs=DIST_COEFFS,
     )
     if not ok:
         return None
-    return rvec.reshape(3), tvec.reshape(3)
+    curr_q = rvec_to_quat(rvec)
+    if last_quat is not None and np.dot(curr_q, last_quat) < 0.0:
+        curr_q = -curr_q
+        rvec = quat_to_rvec(curr_q)
+    reproj_error = charuco_reprojection_error(charuco_corners, charuco_ids, rvec, tvec)
+    if reproj_error > MAX_REPROJECTION_ERROR:
+        return None
+    if last_rt is not None:
+        trans_delta = np.linalg.norm(tvec.reshape(3) - last_rt[1])
+        if trans_delta > MAX_TRANSLATION_DELTA:
+            return None
+    if last_quat is not None:
+        ang_delta = np.degrees(2.0 * np.arccos(np.clip(np.dot(curr_q, last_quat), -1.0, 1.0)))
+        if ang_delta > MAX_ROTATION_DELTA:
+            return None
+    return rvec.reshape(3), tvec.reshape(3), curr_q, reproj_error
+
+
+def detect_charuco_board(
+    gray: np.ndarray,
+    detector: cv2.aruco.CharucoDetector | cv2.aruco.ArucoDetector,
+) -> tuple[np.ndarray | None, np.ndarray | None, list[np.ndarray] | None, np.ndarray | None]:
+    """Detect Charuco markers/corners using the available API flavour."""
+
+    if _HAS_CHARUCO_DETECTOR and hasattr(detector, "detectBoard"):
+        return detector.detectBoard(gray)
+    marker_corners, marker_ids, rejected = detector.detectMarkers(gray)
+    if rejected is not None and hasattr(cv2.aruco, "refineDetectedMarkers"):
+        cv2.aruco.refineDetectedMarkers(
+            image=gray,
+            board=CHARUCO_BOARD,
+            detectedCorners=marker_corners,
+            detectedIds=marker_ids,
+            rejectedCorners=rejected,
+            cameraMatrix=CAMERA_MATRIX,
+            distCoeffs=DIST_COEFFS,
+        )
+    charuco_corners, charuco_ids, _ = cv2.aruco.interpolateCornersCharuco(
+        marker_corners,
+        marker_ids,
+        gray,
+        CHARUCO_BOARD,
+    )
+    return charuco_corners, charuco_ids, marker_corners, marker_ids
 
 
 def preprocess_frame(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -1509,7 +1564,13 @@ def process_video(
     )
 
     sticker_compile_start = time.perf_counter()
-    aruco_detector = cv2.aruco.ArucoDetector(ARUCO_DICT, ARUCO_PARAMS)
+    if _HAS_CHARUCO_DETECTOR:
+        charuco_detector = cv2.aruco.CharucoDetector(
+            CHARUCO_BOARD,
+            detectorParams=CHARUCO_PARAMS,
+        )
+    else:
+        charuco_detector = cv2.aruco.ArucoDetector(CHARUCO_DICT, CHARUCO_PARAMS)
     sticker_compile_time = time.perf_counter() - sticker_compile_start
 
     cap = cv2.VideoCapture(video_path)
@@ -1531,9 +1592,10 @@ def process_video(
     ball_coords = []
     sticker_measurements: list[dict[str, object]] = []
     saved_frame_paths: dict[int, str] = {}
-    last_dynamic_rt = None
-    last_dynamic_quat = None
-    tracker_corners = None
+    last_board_rt = None
+    last_board_quat = None
+    tracker_charuco_corners = None
+    tracker_charuco_ids = None
     prev_gray = None
     missing_frames = 0
     impact_frame_idx: int | None = None
@@ -1637,120 +1699,94 @@ def process_video(
         allow_sticker = impact_frame_idx is None or frame_idx < impact_frame_idx
         if allow_sticker:
             sticker_start = time.perf_counter()
-            corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
+            charuco_corners, charuco_ids, _marker_corners, _marker_ids = detect_charuco_board(
+                marker_gray, charuco_detector
+            )
             sticker_time += time.perf_counter() - sticker_start
             current_rt = None
             current_quat = None
             current_position: np.ndarray | None = None
-            dynamic_corner = None
-            if ids is not None and len(ids) > 0:
-                valid = [
-                    corners[i]
-                    for i in range(len(ids))
-                    if ids[i][0] == DYNAMIC_ID
-                ]
-                if valid:
-                    valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
-                    cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
-                    for corner in valid:
-                        pose = estimate_single_marker_pose(corner, DYNAMIC_MARKER_LENGTH)
-                        if pose is None:
-                            continue
-                        rvec, tvec = pose
-                        curr_q = rvec_to_quat(rvec)
-                        if last_dynamic_rt is not None:
-                            prev_q = rvec_to_quat(last_dynamic_rt[0])
-                            if np.dot(curr_q, prev_q) < 0.0:
-                                curr_q = -curr_q
-                                rvec = quat_to_rvec(curr_q)
+            tracker_source_corners = None
+            tracker_source_ids = None
+
+            pose_result = estimate_charuco_pose(
+                charuco_corners,
+                charuco_ids,
+                last_rt=last_board_rt,
+                last_quat=last_board_quat,
+            )
+            if pose_result is not None:
+                rvec, tvec, curr_q, _ = pose_result
+                current_rt = (rvec, tvec)
+                current_quat = curr_q
+                current_position = np.array(tvec, dtype=float)
+                tracker_source_corners = charuco_corners
+                tracker_source_ids = charuco_ids
+                if charuco_corners is not None and charuco_ids is not None:
+                    cv2.aruco.drawDetectedCornersCharuco(frame, charuco_corners, charuco_ids)
+                cv2.drawFrameAxes(
+                    frame,
+                    CAMERA_MATRIX,
+                    DIST_COEFFS,
+                    rvec,
+                    tvec,
+                    CHARUCO_AXES_LENGTH,
+                    2,
+                )
+            elif (
+                tracker_charuco_corners is not None
+                and tracker_charuco_ids is not None
+                and prev_gray is not None
+            ):
+                new_corners, st, _ = cv2.calcOpticalFlowPyrLK(
+                    prev_gray,
+                    marker_gray,
+                    tracker_charuco_corners,
+                    None,
+                )
+                if st is not None and new_corners is not None:
+                    valid_mask = st.reshape(-1) == 1
+                    tracked_corners = new_corners.reshape(-1, 1, 2)[valid_mask]
+                    tracked_ids = tracker_charuco_ids.reshape(-1, 1)[valid_mask]
+                    pose_result = estimate_charuco_pose(
+                        tracked_corners if len(tracked_corners) > 0 else None,
+                        tracked_ids if len(tracked_ids) > 0 else None,
+                        last_rt=last_board_rt,
+                        last_quat=last_board_quat,
+                    )
+                    if pose_result is not None:
+                        rvec, tvec, curr_q, _ = pose_result
                         current_rt = (rvec, tvec)
                         current_quat = curr_q
                         current_position = np.array(tvec, dtype=float)
-                        dynamic_corner = corner
+                        tracker_source_corners = tracked_corners
+                        tracker_source_ids = tracked_ids
                         cv2.drawFrameAxes(
                             frame,
                             CAMERA_MATRIX,
                             DIST_COEFFS,
                             rvec,
                             tvec,
-                            DYNAMIC_MARKER_LENGTH * 0.5,
+                            CHARUCO_AXES_LENGTH,
                             2,
                         )
-            if current_rt is None and tracker_corners is not None and prev_gray is not None:
-                new_corners, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
-                if st.sum() == 4:
-                    object_pts = marker_object_points(DYNAMIC_MARKER_LENGTH)
-                    ok, rvec, tvec = cv2.solvePnP(
-                        object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
-                    )
-                    if ok:
-                        # ``solvePnP`` returns a column vector; flatten it so that the
-                        # rest of the pipeline always works with a 1D translation
-                        # vector.
-                        tvec = tvec.reshape(3)
-                        curr_q = rvec_to_quat(rvec)
-                        if last_dynamic_rt is not None:
-                            prev_q = rvec_to_quat(last_dynamic_rt[0])
-                            if np.dot(curr_q, prev_q) < 0.0:
-                                curr_q = -curr_q
-                                rvec = quat_to_rvec(curr_q)
+            if (
+                tracker_source_corners is None
+                and charuco_corners is not None
+                and charuco_ids is not None
+                and len(charuco_corners) > 0
+            ):
+                tracker_source_corners = charuco_corners
+                tracker_source_ids = charuco_ids
 
-                        # Reprojection error check
-                        reproj, _ = cv2.projectPoints(
-                            object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS
-                        )
-                        reproj_err = np.linalg.norm(
-                            new_corners.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
-                        ).mean()
-
-                        pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
-
-                        # Motion delta check
-                        if pose_ok and last_dynamic_rt is not None:
-                            trans_delta = np.linalg.norm(tvec - last_dynamic_rt[1])
-                            ang_delta = 0.0
-                            if last_dynamic_quat is not None:
-                                ang_delta = np.degrees(
-                                    2.0
-                                    * np.arccos(
-                                        np.clip(np.dot(curr_q, last_dynamic_quat), -1.0, 1.0)
-                                    )
-                                )
-                            if (
-                                trans_delta > MAX_TRANSLATION_DELTA
-                                or ang_delta > MAX_ROTATION_DELTA
-                            ):
-                                pose_ok = False
-
-                        if pose_ok:
-                            current_rt = (rvec, tvec)
-                            current_quat = curr_q
-                            current_position = np.array(tvec, dtype=float)
-                            cv2.drawFrameAxes(
-                                frame,
-                                CAMERA_MATRIX,
-                                DIST_COEFFS,
-                                rvec,
-                                tvec,
-                                DYNAMIC_MARKER_LENGTH * 0.5,
-                                2,
-                            )
-                        else:
-                            current_rt = None
-                            current_quat = None
-                            current_position = None
-                    tracker_corners = new_corners
-                    prev_gray = marker_gray
-                else:
-                    tracker_corners = None
-                    prev_gray = None
             if current_rt is None:
                 missing_frames += 1
                 if missing_frames > MAX_MISSING_FRAMES:
-                    tracker_corners = None
+                    tracker_charuco_corners = None
+                    tracker_charuco_ids = None
                     prev_gray = None
-                    last_dynamic_rt = None
-                    last_dynamic_quat = None
+                    last_board_rt = None
+                    last_board_quat = None
                     missing_frames = 0
             else:
                 missing_frames = 0
@@ -1761,13 +1797,19 @@ def process_video(
                         "position": np.array(current_position, dtype=float),
                     }
                 )
-                last_dynamic_rt = current_rt
-                last_dynamic_quat = current_quat
-                if dynamic_corner is not None:
-                    tracker_corners = dynamic_corner.reshape(4, 1, 2).astype(np.float32)
+                last_board_rt = current_rt
+                last_board_quat = current_quat
+            if tracker_source_corners is not None and tracker_source_ids is not None:
+                tracker_charuco_corners = tracker_source_corners.astype(np.float32)
+                tracker_charuco_ids = np.array(tracker_source_ids, dtype=np.int32).reshape(-1, 1)
                 prev_gray = marker_gray
+            else:
+                tracker_charuco_corners = None
+                tracker_charuco_ids = None
+                prev_gray = None
         else:
-            tracker_corners = None
+            tracker_charuco_corners = None
+            tracker_charuco_ids = None
             prev_gray = None
 
         if frames_dir and inference_start <= frame_idx < inference_end:
