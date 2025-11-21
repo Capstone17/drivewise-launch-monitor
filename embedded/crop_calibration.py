@@ -14,7 +14,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_CROP_OFFSET = 50
+DEFAULT_CROP_OFFSET = 40
 MAX_CALIBRATION_ATTEMPTS = 10
 TARGET_PIXELS_FROM_BOTTOM = 2
 TOLERANCE = 1  # pixels - acceptable deviation from target
