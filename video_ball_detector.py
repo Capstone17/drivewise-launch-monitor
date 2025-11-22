@@ -1459,12 +1459,12 @@ def process_video(
         print("No ball detected in the opening frames; writing zero coordinate files.")
         write_zero_coordinate_files(ball_path, sticker_path)
         return "skibidi"
-    if not head_check.stationary:
-        print(
-            f"Ball moved {head_check.max_drift_px:.1f}px within the opening frames; writing zero coordinate files."
-        )
-        write_zero_coordinate_files(ball_path, sticker_path)
-        return "skibidi"
+    # if not head_check.stationary:
+    #     print(
+    #         f"Ball moved {head_check.max_drift_px:.1f}px within the opening frames; writing zero coordinate files."
+    #     )
+    #     write_zero_coordinate_files(ball_path, sticker_path)
+    #     return "skibidi"
 
     start_frame, end_frame, ball_found, motion_stats = find_motion_window(
         video_path,
