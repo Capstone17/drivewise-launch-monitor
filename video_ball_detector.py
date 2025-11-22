@@ -59,7 +59,11 @@ HEAD_CHECK_FRAMES = 5
 HEAD_SCORE_THRESHOLD = 0.3
 HEAD_MIN_HITS = 1
 HEAD_STATIONARY_DRIFT_PX = 6.0
-POST_IMPACT_STICKER_FRAMES = 2  # keep sticker tracking alive for a couple of frames after impact
+
+# ----------------------------
+# Sticker 
+# ----------------------------
+POST_IMPACT_STICKER_FRAMES = 3  # keep sticker tracking alive for a couple of frames after impact
 
 STICKER_Z_SPIKE_WINDOW = 5
 STICKER_Z_SPIKE_MAD_SCALE = 3.0

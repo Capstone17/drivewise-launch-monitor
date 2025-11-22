@@ -493,54 +493,54 @@ def savgol_velocity(json_path, polyorder=2, max_window=13):
 
 # Find the metrics using ball data
 def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz) -> dict:
-
-    # NOTE: WHAT IF THE BALL SPEEDS ARE ZERO?
-
-    if (marker_dx is None) or (marker_dy is None) or (marker_dz is None):
-        print("Warning: Club not detected, using ball only")
-
-        face_angle = None
-        swing_path = None
-        attack_angle = None
-        face_to_path = None
-    else:
-        swing_path = horizontal_movement_angle_from_rates(marker_dx, marker_dz)
-        face_angle = face_angle_calc(swing_path, side_angle)
-        attack_angle = vertical_movement_angle_from_rates(marker_dy, marker_dz)
-        face_to_path = face_angle - swing_path
-
-    swing_path = horizontal_movement_angle_from_rates(marker_dx, marker_dz)
-    side_angle = horizontal_movement_angle_from_rates(ball_dx, ball_dz)
-    face_angle = face_angle_calc(swing_path, side_angle)
-    attack_angle = vertical_movement_angle_from_rates(marker_dy, marker_dz)
-    face_to_path = face_angle - swing_path
-
-    # Speeds
-    club_speed = cmps_to_speed_kmh(marker_dx, marker_dy, marker_dz)
-    print(f'Club speed: {club_speed:.2f}\n')
-
-    ball_speed = cmps_to_speed_kmh(ball_dx, ball_dy, ball_dz)
-    print(f'Ball speed: {ball_speed:.2f}\n')
-
     # ---------------------------------
     # Error checking
+    # - If club or ball was not detected, return None respectively
     # - If any angles are very extreme, return None
     # - This is worst-case scenario, and we don't want it to happen often!
     # ---------------------------------
-    # Since face_angle is calculated using swing path and side angle, it should also be returned as None 
-    if (abs(swing_path) > 35):
-        print(f"Extreme swing path {swing_path}; using default of 0.00")
+    # If club is undetected
+    if (marker_dx is None) or (marker_dy is None) or (marker_dz is None):
+        print("Warning: Club not detected, using ball only")
         swing_path = None
-        face_angle = None
-        face_to_path = None
-    if (abs(side_angle) > 35):
-        print(f"Extreme side angle {side_angle}; using default of 0.00")
-        side_angle = None
-        face_angle = None
-        face_to_path = None
-    if (abs(attack_angle) > 25):
-        print(f"Extreme attack angle {attack_angle}; using default of 0.00")
         attack_angle = None
+    else:
+        swing_path = horizontal_movement_angle_from_rates(marker_dx, marker_dz)
+        attack_angle = vertical_movement_angle_from_rates(marker_dy, marker_dz)
+        
+        # Check for extreme return values
+        if (abs(swing_path) > 35):
+            print(f"Extreme swing path {swing_path}; using default of 0.00")
+            swing_path = None
+        elif (abs(attack_angle) > 35):
+            print(f"Extreme attack angle {attack_angle}; using default of 0.00")
+            attack_angle = None
+        
+        club_speed = cmps_to_speed_kmh(marker_dx, marker_dy, marker_dz)
+        print(f'Club speed: {club_speed:.2f}\n')
+        
+    # If ball is undetected
+    if (ball_dx is None) or (ball_dy is None) or (ball_dz is None):
+        print("Warning: Ball not detected, using club only")
+        side_angle = None
+    else:
+        side_angle = horizontal_movement_angle_from_rates(ball_dx, ball_dz)
+        
+        # Check for extreme return values
+        if (abs(side_angle) > 35):
+            print(f"Extreme side angle {side_angle}; using default of 0.00")
+            side_angle = None
+        
+        ball_speed = cmps_to_speed_kmh(ball_dx, ball_dy, ball_dz)
+        print(f'Ball speed: {ball_speed:.2f}\n')
+
+    # If ball or club was not detected
+    if (side_angle is None) or (swing_path is None):
+        face_angle = None
+        face_to_path = None
+    else:
+        face_angle = face_angle_calc(swing_path, side_angle)
+        face_to_path = face_angle - swing_path
 
     return {
         "face_angle": face_angle,
@@ -610,11 +610,12 @@ def return_metrics() -> dict:
     # ---------------------------------
     # Print & Return Metrics
     # ---------------------------------
-    print(f'Swing path: {metrics["swing_path"]:.2f}\n')
-    print(f'Face angle: {metrics["face_angle"]:.2f}\n')
-    print(f'Side angle: {metrics["side_angle"]:.2f}\n')
-    print(f'Attack angle: {metrics["attack_angle"]:.2f}\n')
-    print(f'Face-to-path: {metrics["face_to_path"]:.2f}\n')
+    print(f'\nSwing path: {metrics["swing_path"] if metrics["swing_path"] is None else f"{metrics["swing_path"]:.2f}"}')
+    print(f'Face angle: {metrics["face_angle"] if metrics["face_angle"] is None else f"{metrics["face_angle"]:.2f}"}')
+    print(f'Side angle: {metrics["side_angle"] if metrics["side_angle"] is None else f"{metrics["side_angle"]:.2f}"}')
+    print(f'Attack angle: {metrics["attack_angle"] if metrics["attack_angle"] is None else f"{metrics["attack_angle"]:.2f}"}')
+    print(f'Face-to-path: {metrics["face_to_path"] if metrics["face_to_path"] is None else f"{metrics["face_to_path"]:.2f}"}')
+    print('\n')
 
     return metrics
 
