@@ -161,10 +161,11 @@ _UNIT_SQUARE_OBJECT_POINTS = np.array(
 
 # --------------------
 # ArUco marker IDs
-# - Normally we use ID 0
-# - The test ID is 17
+# - Primary marker drives club pose (was ID 0, now 17 for tests)
+# - Secondary marker (ID 190) is a fallback when the primary is occluded
 # --------------------
-DYNAMIC_ID = 17
+PRIMARY_MARKER_ID = 17
+SECONDARY_MARKER_ID = 190
 
 MAX_MISSING_FRAMES = 12
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -191,6 +192,14 @@ class HeadCheckResult:
     hits: int
     frames_checked: int
     max_drift_px: float
+
+
+@dataclass
+class MarkerState:
+    last_rt: tuple[np.ndarray, np.ndarray] | None = None
+    last_quat: np.ndarray | None = None
+    tracker_corners: np.ndarray | None = None
+    missing_frames: int = 0
 
 def check_tail_for_ball(
     video_path: str,
@@ -835,40 +844,51 @@ def predict_sticker_series(
     if series_start >= end_frame:
         return []
 
-    measured_lookup = {m["frame"]: m for m in relevant}
-    z_spikes = _clean_sticker_z_outliers(measured_lookup)
-    trend_spikes = _detect_sticker_z_trend_spikes(measured_lookup)
-    local_peaks = _detect_sticker_z_local_peaks(measured_lookup)
-    linear_gap_spikes = _detect_sticker_z_linear_gap_spikes(measured_lookup)
-    monotonic_spikes = _detect_sticker_z_monotonic_spikes(measured_lookup)
-    secondary_spikes = trend_spikes | local_peaks | linear_gap_spikes | monotonic_spikes
-    if secondary_spikes:
-        if len(measured_lookup) > len(secondary_spikes):
-            for frame in secondary_spikes:
-                measured_lookup.pop(frame, None)
-        else:
-            z_vals = [
-                float(np.asarray(measured_lookup[frame]["position"], dtype=float)[2])
-                for frame in measured_lookup
-            ]
-            fallback_z = float(np.median(z_vals))
-            for frame, entry in measured_lookup.items():
-                pos = np.array(entry["position"], dtype=float)
-                pos[2] = fallback_z
-                measured_lookup[frame] = {**entry, "position": pos}
-    z_spikes |= secondary_spikes
-    measured_frames = sorted(measured_lookup)
-    if not measured_frames:
-        return []
-    measured_positions = [
-        np.array(measured_lookup[frame]["position"], dtype=float) for frame in measured_frames
+    primary_measurements = [
+        m for m in relevant if m.get("marker_id", PRIMARY_MARKER_ID) == PRIMARY_MARKER_ID
     ]
-    first_measured_frame = measured_frames[0]
-    last_measured_frame = measured_frames[-1]
+    secondary_measurements = [
+        m for m in relevant if m.get("marker_id", None) == SECONDARY_MARKER_ID
+    ]
+
+    def _clean_lookup(raw: list[dict[str, object]]) -> tuple[dict[int, dict[str, object]], set[int]]:
+        lookup = {m["frame"]: m for m in raw}
+        if not lookup:
+            return {}, set()
+        z_spikes = _clean_sticker_z_outliers(lookup)
+        trend_spikes = _detect_sticker_z_trend_spikes(lookup)
+        local_peaks = _detect_sticker_z_local_peaks(lookup)
+        linear_gap_spikes = _detect_sticker_z_linear_gap_spikes(lookup)
+        monotonic_spikes = _detect_sticker_z_monotonic_spikes(lookup)
+        secondary_spikes = trend_spikes | local_peaks | linear_gap_spikes | monotonic_spikes
+        if secondary_spikes:
+            if len(lookup) > len(secondary_spikes):
+                for frame in secondary_spikes:
+                    lookup.pop(frame, None)
+            else:
+                z_vals = [
+                    float(np.asarray(lookup[frame]["position"], dtype=float)[2]) for frame in lookup
+                ]
+                fallback_z = float(np.median(z_vals))
+                for frame, entry in lookup.items():
+                    pos = np.array(entry["position"], dtype=float)
+                    pos[2] = fallback_z
+                    lookup[frame] = {**entry, "position": pos}
+        z_spikes |= secondary_spikes
+        return lookup, z_spikes
+
+    primary_lookup, primary_spikes = _clean_lookup(primary_measurements)
+    secondary_lookup, secondary_spikes = _clean_lookup(secondary_measurements)
+
+    measured_frames_primary = sorted(primary_lookup)
+    measured_positions_primary = [
+        np.array(primary_lookup[frame]["position"], dtype=float) for frame in measured_frames_primary
+    ]
+
     trend_coeffs: list[np.ndarray] | None = None
-    if len(measured_frames) >= 2:
-        frame_values = np.array(measured_frames, dtype=float)
-        position_matrix = np.vstack(measured_positions)
+    if len(measured_frames_primary) >= 2:
+        frame_values = np.array(measured_frames_primary, dtype=float)
+        position_matrix = np.vstack(measured_positions_primary)
         trend_coeffs = []
         for axis in range(3):
             with warnings.catch_warnings():
@@ -883,49 +903,89 @@ def predict_sticker_series(
             dtype=float,
         )
 
-    def interpolate_xyz(frame: int) -> np.ndarray:
-        if len(measured_frames) == 1:
-            return measured_positions[0].astype(float, copy=True)
+    def interpolate_primary(frame: int) -> np.ndarray | None:
+        if not measured_frames_primary:
+            return None
+        if len(measured_frames_primary) == 1:
+            return measured_positions_primary[0].astype(float, copy=True)
+        first_measured_frame = measured_frames_primary[0]
+        last_measured_frame = measured_frames_primary[-1]
         if frame <= first_measured_frame:
             if trend_coeffs is not None:
                 return extrapolate_with_trend(frame)
-            return measured_positions[0].astype(float, copy=True)
+            return measured_positions_primary[0].astype(float, copy=True)
         if frame >= last_measured_frame:
             if trend_coeffs is not None:
                 return extrapolate_with_trend(frame)
-            return measured_positions[-1].astype(float, copy=True)
-        idx = bisect_left(measured_frames, frame)
+            return measured_positions_primary[-1].astype(float, copy=True)
+        idx = bisect_left(measured_frames_primary, frame)
         if idx <= 0:
             left_idx = 0
             right_idx = 1
-        elif idx >= len(measured_frames):
-            left_idx = len(measured_frames) - 2
-            right_idx = len(measured_frames) - 1
+        elif idx >= len(measured_frames_primary):
+            left_idx = len(measured_frames_primary) - 2
+            right_idx = len(measured_frames_primary) - 1
         else:
             left_idx = idx - 1
             right_idx = idx
-        left_frame = measured_frames[left_idx]
-        right_frame = measured_frames[right_idx]
+        left_frame = measured_frames_primary[left_idx]
+        right_frame = measured_frames_primary[right_idx]
         span = right_frame - left_frame
         if span <= 0:
             ratio = 0.0
         else:
             ratio = (frame - left_frame) / span
-        left_pos = measured_positions[left_idx]
-        right_pos = measured_positions[right_idx]
+        left_pos = measured_positions_primary[left_idx]
+        right_pos = measured_positions_primary[right_idx]
         return left_pos + ratio * (right_pos - left_pos)
 
     series = []
+    last_primary_pos: np.ndarray | None = None
+    last_secondary_anchor: np.ndarray | None = None
     for frame in range(series_start, end_frame):
         time = frame / fps
-        measurement = measured_lookup.get(frame)
-        if measurement is None or frame in z_spikes:
-            xyz = interpolate_xyz(frame)
-            source = "predicted"
-        else:
-            pos = np.array(measurement["position"], dtype=float)
+        primary_entry = primary_lookup.get(frame)
+        secondary_entry = secondary_lookup.get(frame)
+        primary_valid = primary_entry is not None and frame not in primary_spikes
+        secondary_valid = secondary_entry is not None and frame not in secondary_spikes
+
+        if primary_valid:
+            pos = np.array(primary_entry["position"], dtype=float)
             xyz = pos
+            label = "primary"
             source = "measured"
+            last_primary_pos = xyz
+            if secondary_valid:
+                last_secondary_anchor = np.array(secondary_entry["position"], dtype=float)
+        elif (
+            secondary_valid
+            and last_primary_pos is not None
+            and last_secondary_anchor is not None
+        ):
+            secondary_pos = np.array(secondary_entry["position"], dtype=float)
+            delta = secondary_pos - last_secondary_anchor
+            xyz = last_primary_pos + delta
+            label = "secondary"
+            source = "predicted"
+            last_primary_pos = xyz
+            last_secondary_anchor = secondary_pos
+        elif secondary_valid and last_primary_pos is None and not measured_frames_primary:
+            # No primary data at all; initialize with secondary to avoid zeros.
+            secondary_pos = np.array(secondary_entry["position"], dtype=float)
+            xyz = secondary_pos
+            label = "secondary"
+            source = "predicted"
+            last_primary_pos = xyz
+            last_secondary_anchor = secondary_pos
+        else:
+            interpolated = interpolate_primary(frame)
+            if interpolated is None:
+                xyz = np.zeros(3, dtype=float)
+            else:
+                xyz = interpolated
+            label = "extrapolated"
+            source = "predicted"
+            last_primary_pos = xyz
         series.append(
             {
                 "frame": frame,
@@ -934,6 +994,7 @@ def predict_sticker_series(
                 "y": float(xyz[1]),
                 "z": float(xyz[2]),
                 "source": source,
+                "label": label,
             }
         )
     enforce_monotonic_predicted_z(series)
@@ -1107,6 +1168,125 @@ def _cubic_hermite(
     return h00 * start_val + h10 * start_slope + h01 * end_val + h11 * end_slope
 
 
+def _track_marker(
+    marker_id: int,
+    detected_corners: list[np.ndarray],
+    marker_gray: np.ndarray,
+    prev_gray: np.ndarray | None,
+    state: MarkerState,
+    frame_idx: int,
+    time_s: float,
+) -> dict[str, object] | None:
+    """Estimate marker pose using detections or LK tracking and update ``state``."""
+
+    current_rt: tuple[np.ndarray, np.ndarray] | None = None
+    current_quat: np.ndarray | None = None
+    current_position: np.ndarray | None = None
+    new_tracker: np.ndarray | None = None
+
+    # Prefer fresh ArUco detections
+    for corner in detected_corners:
+        pose = estimate_single_marker_pose(corner, DYNAMIC_MARKER_LENGTH)
+        if pose is None:
+            continue
+        rvec, tvec = pose
+        curr_q = rvec_to_quat(rvec)
+        if state.last_rt is not None:
+            prev_q = rvec_to_quat(state.last_rt[0])
+            if np.dot(curr_q, prev_q) < 0.0:
+                curr_q = -curr_q
+                rvec = quat_to_rvec(curr_q)
+        current_rt = (rvec, tvec)
+        current_quat = curr_q
+        current_position = np.array(tvec, dtype=float)
+        new_tracker = corner
+        break
+
+    # Fall back to LK tracking if we recently saw this marker
+    if (
+        current_rt is None
+        and state.tracker_corners is not None
+        and prev_gray is not None
+    ):
+        new_corners, st, _ = cv2.calcOpticalFlowPyrLK(
+            prev_gray,
+            marker_gray,
+            state.tracker_corners,
+            None,
+        )
+        if st.sum() == 4:
+            object_pts = marker_object_points(DYNAMIC_MARKER_LENGTH)
+            ok, rvec, tvec = cv2.solvePnP(
+                object_pts,
+                new_corners.reshape(-1, 2),
+                CAMERA_MATRIX,
+                DIST_COEFFS,
+            )
+            if ok:
+                tvec = tvec.reshape(3)
+                curr_q = rvec_to_quat(rvec)
+                if state.last_rt is not None:
+                    prev_q = rvec_to_quat(state.last_rt[0])
+                    if np.dot(curr_q, prev_q) < 0.0:
+                        curr_q = -curr_q
+                        rvec = quat_to_rvec(curr_q)
+
+                reproj, _ = cv2.projectPoints(
+                    object_pts,
+                    rvec,
+                    tvec,
+                    CAMERA_MATRIX,
+                    DIST_COEFFS,
+                )
+                reproj_err = np.linalg.norm(
+                    new_corners.reshape(-1, 2) - reproj.reshape(-1, 2),
+                    axis=1,
+                ).mean()
+
+                pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
+
+                if pose_ok and state.last_rt is not None:
+                    trans_delta = np.linalg.norm(tvec - state.last_rt[1])
+                    ang_delta = 0.0
+                    if state.last_quat is not None:
+                        ang_delta = np.degrees(
+                            2.0
+                            * np.arccos(
+                                np.clip(np.dot(curr_q, state.last_quat), -1.0, 1.0)
+                            )
+                        )
+                    if trans_delta > MAX_TRANSLATION_DELTA or ang_delta > MAX_ROTATION_DELTA:
+                        pose_ok = False
+
+                if pose_ok:
+                    current_rt = (rvec, tvec)
+                    current_quat = curr_q
+                    current_position = np.array(tvec, dtype=float)
+                    new_tracker = new_corners
+
+    if current_rt is None:
+        state.missing_frames += 1
+        if state.missing_frames > MAX_MISSING_FRAMES:
+            state.tracker_corners = None
+            state.last_rt = None
+            state.last_quat = None
+            state.missing_frames = 0
+        return None
+
+    state.missing_frames = 0
+    state.last_rt = current_rt
+    state.last_quat = current_quat
+    if new_tracker is not None:
+        state.tracker_corners = new_tracker.reshape(4, 1, 2).astype(np.float32)
+
+    return {
+        "frame": frame_idx,
+        "time": time_s,
+        "position": np.array(current_position, dtype=float),
+        "marker_id": marker_id,
+    }
+
+
 def annotate_interpolated_frames(
     frame_paths: dict[int, str],
     predictions: list[dict[str, float | int | str]],
@@ -1115,6 +1295,11 @@ def annotate_interpolated_frames(
 
     if not predictions:
         return
+    color_map = {
+        "primary": (0, 255, 0),
+        "secondary": (255, 0, 0),
+        "extrapolated": (0, 165, 255),
+    }
     for entry in predictions:
         frame_idx = entry["frame"]
         path = frame_paths.get(frame_idx)
@@ -1137,8 +1322,20 @@ def annotate_interpolated_frames(
         py = int(round(fy * (y / z) + cy))
         if px < 0 or py < 0 or px >= w or py >= h:
             continue
-        cv2.circle(image, (px, py), 6, (0, 165, 255), -1)
+        label = str(entry.get("label", "extrapolated"))
+        color = color_map.get(label, (0, 165, 255))
+        cv2.circle(image, (px, py), 6, color, -1)
         cv2.circle(image, (px, py), 9, (0, 0, 0), 2)
+        cv2.putText(
+            image,
+            label,
+            (px + 8, py - 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
         cv2.imwrite(path, image)
 
 
@@ -1511,11 +1708,11 @@ def process_video(
     ball_coords = []
     sticker_measurements: list[dict[str, object]] = []
     saved_frame_paths: dict[int, str] = {}
-    last_dynamic_rt = None
-    last_dynamic_quat = None
-    tracker_corners = None
+    marker_states = {
+        PRIMARY_MARKER_ID: MarkerState(),
+        SECONDARY_MARKER_ID: MarkerState(),
+    }
     prev_gray = None
-    missing_frames = 0
     impact_frame_idx: int | None = None
     impact_time: float | None = None
     # Tracking of last detected ball position and velocity
@@ -1621,136 +1818,50 @@ def process_video(
             sticker_start = time.perf_counter()
             corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
             sticker_time += time.perf_counter() - sticker_start
-            current_rt = None
-            current_quat = None
-            current_position: np.ndarray | None = None
-            dynamic_corner = None
+            marker_detections: dict[int, list[np.ndarray]] = {}
             if ids is not None and len(ids) > 0:
-                valid = [
-                    corners[i]
-                    for i in range(len(ids))
-                    if ids[i][0] == DYNAMIC_ID
-                ]
-                if valid:
-                    valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
-                    cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
-                    for corner in valid:
-                        pose = estimate_single_marker_pose(corner, DYNAMIC_MARKER_LENGTH)
-                        if pose is None:
-                            continue
-                        rvec, tvec = pose
-                        curr_q = rvec_to_quat(rvec)
-                        if last_dynamic_rt is not None:
-                            prev_q = rvec_to_quat(last_dynamic_rt[0])
-                            if np.dot(curr_q, prev_q) < 0.0:
-                                curr_q = -curr_q
-                                rvec = quat_to_rvec(curr_q)
-                        current_rt = (rvec, tvec)
-                        current_quat = curr_q
-                        current_position = np.array(tvec, dtype=float)
-                        dynamic_corner = corner
+                for i in range(len(ids)):
+                    marker_id = int(ids[i][0])
+                    if marker_id in marker_states:
+                        marker_detections.setdefault(marker_id, []).append(corners[i])
+            new_measurements: list[dict[str, object]] = []
+            for marker_id, state in marker_states.items():
+                detected_corners = marker_detections.get(marker_id, [])
+                measurement = _track_marker(
+                    marker_id,
+                    detected_corners,
+                    marker_gray,
+                    prev_gray,
+                    state,
+                    frame_idx,
+                    t,
+                )
+                if measurement is not None:
+                    new_measurements.append(measurement)
+                    sticker_measurements.append(measurement)
+                    if state.last_rt is not None:
                         cv2.drawFrameAxes(
                             frame,
                             CAMERA_MATRIX,
                             DIST_COEFFS,
-                            rvec,
-                            tvec,
+                            state.last_rt[0],
+                            state.last_rt[1],
                             DYNAMIC_MARKER_LENGTH * 0.5,
                             2,
                         )
-            if current_rt is None and tracker_corners is not None and prev_gray is not None:
-                new_corners, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
-                if st.sum() == 4:
-                    object_pts = marker_object_points(DYNAMIC_MARKER_LENGTH)
-                    ok, rvec, tvec = cv2.solvePnP(
-                        object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
-                    )
-                    if ok:
-                        # ``solvePnP`` returns a column vector; flatten it so that the
-                        # rest of the pipeline always works with a 1D translation
-                        # vector.
-                        tvec = tvec.reshape(3)
-                        curr_q = rvec_to_quat(rvec)
-                        if last_dynamic_rt is not None:
-                            prev_q = rvec_to_quat(last_dynamic_rt[0])
-                            if np.dot(curr_q, prev_q) < 0.0:
-                                curr_q = -curr_q
-                                rvec = quat_to_rvec(curr_q)
-
-                        # Reprojection error check
-                        reproj, _ = cv2.projectPoints(
-                            object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS
-                        )
-                        reproj_err = np.linalg.norm(
-                            new_corners.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
-                        ).mean()
-
-                        pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
-
-                        # Motion delta check
-                        if pose_ok and last_dynamic_rt is not None:
-                            trans_delta = np.linalg.norm(tvec - last_dynamic_rt[1])
-                            ang_delta = 0.0
-                            if last_dynamic_quat is not None:
-                                ang_delta = np.degrees(
-                                    2.0
-                                    * np.arccos(
-                                        np.clip(np.dot(curr_q, last_dynamic_quat), -1.0, 1.0)
-                                    )
-                                )
-                            if (
-                                trans_delta > MAX_TRANSLATION_DELTA
-                                or ang_delta > MAX_ROTATION_DELTA
-                            ):
-                                pose_ok = False
-
-                        if pose_ok:
-                            current_rt = (rvec, tvec)
-                            current_quat = curr_q
-                            current_position = np.array(tvec, dtype=float)
-                            cv2.drawFrameAxes(
-                                frame,
-                                CAMERA_MATRIX,
-                                DIST_COEFFS,
-                                rvec,
-                                tvec,
-                                DYNAMIC_MARKER_LENGTH * 0.5,
-                                2,
-                            )
-                        else:
-                            current_rt = None
-                            current_quat = None
-                            current_position = None
-                    tracker_corners = new_corners
-                    prev_gray = marker_gray
-                else:
-                    tracker_corners = None
-                    prev_gray = None
-            if current_rt is None:
-                missing_frames += 1
-                if missing_frames > MAX_MISSING_FRAMES:
-                    tracker_corners = None
-                    prev_gray = None
-                    last_dynamic_rt = None
-                    last_dynamic_quat = None
-                    missing_frames = 0
-            else:
-                missing_frames = 0
-                sticker_measurements.append(
-                    {
-                        "frame": frame_idx,
-                        "time": t,
-                        "position": np.array(current_position, dtype=float),
-                    }
-                )
-                last_dynamic_rt = current_rt
-                last_dynamic_quat = current_quat
-                if dynamic_corner is not None:
-                    tracker_corners = dynamic_corner.reshape(4, 1, 2).astype(np.float32)
+                    if detected_corners:
+                        valid_ids = np.array([[marker_id] for _ in detected_corners])
+                        cv2.aruco.drawDetectedMarkers(frame, detected_corners, valid_ids)
+            if new_measurements or any(state.tracker_corners is not None for state in marker_states.values()):
                 prev_gray = marker_gray
+            else:
+                prev_gray = None
         else:
-            tracker_corners = None
             prev_gray = None
+            for state in marker_states.values():
+                state.tracker_corners = None
+                state.last_rt = None
+                state.last_quat = None
 
         if frames_dir and inference_start <= frame_idx < inference_end:
             frame_path = os.path.join(frames_dir, f"frame_{frame_idx:04d}.png")
@@ -1794,8 +1905,7 @@ def process_video(
                 }
             )
     for entry in sticker_series:
-        source = str(entry.get("source", "predicted"))
-        label = "measured" if source == "measured" else "extrapolated"
+        label = str(entry.get("label", "extrapolated"))
         sticker_coords.append(
             {
                 "time": round(entry["time"], 3),
@@ -1808,7 +1918,7 @@ def process_video(
     if frames_dir:
         annotate_interpolated_frames(
             saved_frame_paths,
-            [entry for entry in sticker_series if entry["source"] == "predicted"],
+            [entry for entry in sticker_series if entry.get("source") == "predicted"],
         )
     if impact_frame_idx is not None and impact_time is not None:
         print(f"Impact frame: {impact_frame_idx} (t={impact_time:.3f}s)")
