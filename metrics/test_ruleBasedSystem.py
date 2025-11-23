@@ -20,9 +20,9 @@ def club_only_message(swing_path):
     if swing_path is None:
         return "Error: Swing path data unavailable."
     
-    if swing_path < -4.0:
+    if swing_path < -3.0:
         return "Fade: Your shot is curving right. If your shot is landing right of the target, try dropping your hands before turning your hips at the beginning of your downswing."
-    elif swing_path > 4.0:
+    elif swing_path > 3.0:
         return "Draw: Your shot is curving left. If your shot is landing left of the target, try keeping the clubhead in front of your body and hitting down on the ball."
     
     return "Straight: Nice shot!"
@@ -78,11 +78,11 @@ def rule_based_system(club_selection):
         "face_extreme_right": raw_data['face_angle'] is not None and 6.0 <= raw_data['face_angle'],
 
         # Path facts - with None checks
-        "path_extreme_left": raw_data['swing_path'] is not None and raw_data['swing_path'] < -5.0,
-        "path_slight_left": raw_data['swing_path'] is not None and -5.0 <= raw_data['swing_path'] < -2.0,
+        "path_extreme_left": raw_data['swing_path'] is not None and raw_data['swing_path'] < -6.0,
+        "path_slight_left": raw_data['swing_path'] is not None and -6.0 <= raw_data['swing_path'] < -2.0,
         "path_straight": raw_data['swing_path'] is not None and -2.0 <= raw_data['swing_path'] < 2.0,
-        "path_slight_right": raw_data['swing_path'] is not None and 2.0 <= raw_data['swing_path'] < 5.0,
-        "path_extreme_right": raw_data['swing_path'] is not None and 5.0 <= raw_data['swing_path'],
+        "path_slight_right": raw_data['swing_path'] is not None and 2.0 <= raw_data['swing_path'] < 6.0,
+        "path_extreme_right": raw_data['swing_path'] is not None and 6.0 <= raw_data['swing_path'],
 
         # Attack angle facts - with None checks
         "attack_extreme_up": raw_data['attack_angle'] is not None and 5.0 < raw_data['attack_angle'],
@@ -95,18 +95,18 @@ def rule_based_system(club_selection):
         "attack_extreme_down": raw_data['attack_angle'] is not None and raw_data['attack_angle'] <= -10.0,
 
         # Side angle facts - with None checks
-        "side_extreme_left": raw_data['side_angle'] is not None and raw_data['side_angle'] < -5.0,
-        "side_slight_left": raw_data['side_angle'] is not None and -5.0 <= raw_data['side_angle'] < -2.0,
+        "side_extreme_left": raw_data['side_angle'] is not None and raw_data['side_angle'] < -6.0,
+        "side_slight_left": raw_data['side_angle'] is not None and -6.0 <= raw_data['side_angle'] < -2.0,
         "side_straight": raw_data['side_angle'] is not None and -2.0 <= raw_data['side_angle'] < 2.0,
-        "side_slight_right": raw_data['side_angle'] is not None and 2.0 <= raw_data['side_angle'] < 5.0,
-        "side_extreme_right": raw_data['side_angle'] is not None and 5.0 <= raw_data['side_angle'],
+        "side_slight_right": raw_data['side_angle'] is not None and 2.0 <= raw_data['side_angle'] < 6.0,
+        "side_extreme_right": raw_data['side_angle'] is not None and 6.0 <= raw_data['side_angle'],
 
         # Face-to-path facts - with None checks
-        "face_to_path_extreme_left": raw_data['face_to_path'] is not None and raw_data['face_to_path'] < -4.0,
-        "face_to_path_slight_left": raw_data['face_to_path'] is not None and -4.0 <= raw_data['face_to_path'] < -2.0,
+        "face_to_path_extreme_left": raw_data['face_to_path'] is not None and raw_data['face_to_path'] < -6.0,
+        "face_to_path_slight_left": raw_data['face_to_path'] is not None and -6.0 <= raw_data['face_to_path'] < -2.0,
         "face_to_path_straight": raw_data['face_to_path'] is not None and -2.0 <= raw_data['face_to_path'] < 2.0,
-        "face_to_path_slight_right": raw_data['face_to_path'] is not None and 2.0 <= raw_data['face_to_path'] < 4.0,
-        "face_to_path_extreme_right": raw_data['face_to_path'] is not None and 4.0 <= raw_data['face_to_path']
+        "face_to_path_slight_right": raw_data['face_to_path'] is not None and 2.0 <= raw_data['face_to_path'] < 6.0,
+        "face_to_path_extreme_right": raw_data['face_to_path'] is not None and 6.0 <= raw_data['face_to_path']
     }
 
 
@@ -126,7 +126,7 @@ def rule_based_system(club_selection):
             "category": "all",
             "severity": 7,
             "condition": lambda f: (f["club_and_ball_detection_error"]),
-            "action": lambda: "Error: Shot was not detected. Make sure your device is calibrated and placed on a flat surface."
+            "action": lambda: "Error: Shot was not detected. Make sure your device is calibrated and placed on a flat surface, and aim for minimal movement in the background."
         },
         {
             "name": "Ball Only Detected",

@@ -61,9 +61,12 @@ HEAD_MIN_HITS = 1
 HEAD_STATIONARY_DRIFT_PX = 6.0
 
 # ----------------------------
-# Sticker 
+# Sticker Frames After Impact
+# - Results of testing say that more than 2 frames can skew numbers
+# - 1 has the best balance so far
+# - Don't change this! It affects metrics heavily
 # ----------------------------
-POST_IMPACT_STICKER_FRAMES = 3  # keep sticker tracking alive for a couple of frames after impact
+POST_IMPACT_STICKER_FRAMES = 1  # keep sticker tracking alive for a couple of frames after impact
 
 STICKER_Z_SPIKE_WINDOW = 5
 STICKER_Z_SPIKE_MAD_SCALE = 3.0
