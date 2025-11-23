@@ -634,7 +634,7 @@ def return_metrics() -> dict:
             "attack_angle": None,
             "side_angle": None,
             "face_to_path": None
-    }
+        }
 
     # ---------------------------------
     # Velocity Approximation
@@ -676,11 +676,11 @@ def return_metrics() -> dict:
     # ---------------------------------
     # Print & Return Metrics
     # ---------------------------------
-    print(f'\nSwing path: {metrics["swing_path"] if metrics["swing_path"] is None else f"{metrics["swing_path"]:.2f}"}')
-    print(f'Face angle: {metrics["face_angle"] if metrics["face_angle"] is None else f"{metrics["face_angle"]:.2f}"}')
-    print(f'Side angle: {metrics["side_angle"] if metrics["side_angle"] is None else f"{metrics["side_angle"]:.2f}"}')
-    print(f'Attack angle: {metrics["attack_angle"] if metrics["attack_angle"] is None else f"{metrics["attack_angle"]:.2f}"}')
-    print(f'Face-to-path: {metrics["face_to_path"] if metrics["face_to_path"] is None else f"{metrics["face_to_path"]:.2f}"}')
+    print(f'\nSwing path: {metrics["swing_path"] if metrics["swing_path"] is None else f"{metrics['swing_path']:.2f}"}')
+    print(f'Face angle: {metrics["face_angle"] if metrics["face_angle"] is None else f"{metrics['face_angle']:.2f}"}')
+    print(f'Side angle: {metrics["side_angle"] if metrics["side_angle"] is None else f"{metrics['side_angle']:.2f}"}')
+    print(f'Attack angle: {metrics["attack_angle"] if metrics["attack_angle"] is None else f"{metrics['attack_angle']:.2f}"}')
+    print(f'Face-to-path: {metrics["face_to_path"] if metrics["face_to_path"] is None else f"{metrics['face_to_path']:.2f}"}')
     print('\n')
 
     return metrics
