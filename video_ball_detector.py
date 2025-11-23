@@ -165,7 +165,6 @@ _UNIT_SQUARE_OBJECT_POINTS = np.array(
 # - Secondary marker (ID 190) is a fallback when the primary is occluded
 # --------------------
 PRIMARY_MARKER_ID = 17
-SECONDARY_MARKER_ID = 190
 
 MAX_MISSING_FRAMES = 12
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -845,10 +844,10 @@ def predict_sticker_series(
         return []
 
     primary_measurements = [
-        m for m in relevant if m.get("marker_id", PRIMARY_MARKER_ID) == PRIMARY_MARKER_ID
+        m for m in relevant if m.get("role") == "primary"
     ]
     secondary_measurements = [
-        m for m in relevant if m.get("marker_id", None) == SECONDARY_MARKER_ID
+        m for m in relevant if m.get("role") == "secondary"
     ]
 
     def _clean_lookup(raw: list[dict[str, object]]) -> tuple[dict[int, dict[str, object]], set[int]]:
@@ -1168,8 +1167,18 @@ def _cubic_hermite(
     return h00 * start_val + h10 * start_slope + h01 * end_val + h11 * end_slope
 
 
+def _roll_deg_from_rvec(rvec: np.ndarray) -> float:
+    """Return roll angle in degrees from a Rodrigues rotation vector."""
+
+    rot_mat, _ = cv2.Rodrigues(rvec)
+    roll_rad = float(np.arctan2(rot_mat[2, 1], rot_mat[2, 2]))
+    roll_deg = np.degrees(roll_rad)
+    # Normalize to [0, 360)
+    return (roll_deg + 360.0) % 360.0
+
+
 def _track_marker(
-    marker_id: int,
+    role: str,
     detected_corners: list[np.ndarray],
     marker_gray: np.ndarray,
     prev_gray: np.ndarray | None,
@@ -1283,7 +1292,7 @@ def _track_marker(
         "frame": frame_idx,
         "time": time_s,
         "position": np.array(current_position, dtype=float),
-        "marker_id": marker_id,
+        "role": role,
     }
 
 
@@ -1709,8 +1718,8 @@ def process_video(
     sticker_measurements: list[dict[str, object]] = []
     saved_frame_paths: dict[int, str] = {}
     marker_states = {
-        PRIMARY_MARKER_ID: MarkerState(),
-        SECONDARY_MARKER_ID: MarkerState(),
+        "primary": MarkerState(),
+        "secondary": MarkerState(),
     }
     prev_gray = None
     impact_frame_idx: int | None = None
@@ -1818,17 +1827,40 @@ def process_video(
             sticker_start = time.perf_counter()
             corners, ids, _ = aruco_detector.detectMarkers(marker_gray)
             sticker_time += time.perf_counter() - sticker_start
-            marker_detections: dict[int, list[np.ndarray]] = {}
+            marker_detections: dict[str, list[np.ndarray]] = {"primary": [], "secondary": []}
             if ids is not None and len(ids) > 0:
+                candidates = []
                 for i in range(len(ids)):
                     marker_id = int(ids[i][0])
-                    if marker_id in marker_states:
-                        marker_detections.setdefault(marker_id, []).append(corners[i])
+                    if marker_id != PRIMARY_MARKER_ID:
+                        continue
+                    pose = estimate_single_marker_pose(corners[i], DYNAMIC_MARKER_LENGTH)
+                    if pose is None:
+                        continue
+                    rvec, _ = pose
+                    roll = _roll_deg_from_rvec(rvec)
+                    candidates.append((corners[i], roll))
+                if candidates:
+                    def _delta(angle: float, target: float) -> float:
+                        return abs(((angle - target + 180.0) % 360.0) - 180.0)
+
+                    best_primary = min(candidates, key=lambda c: _delta(c[1], 180.0))
+                    best_secondary = min(candidates, key=lambda c: _delta(c[1], 0.0))
+                    if best_primary[0] is best_secondary[0] and len(candidates) > 1:
+                        # Avoid double-assigning the same detection when more than one exists
+                        remaining = [c for c in candidates if c[0] is not best_primary[0]]
+                        if remaining:
+                            best_secondary = min(remaining, key=lambda c: _delta(c[1], 0.0))
+                        else:
+                            best_secondary = None
+                    marker_detections["primary"] = [best_primary[0]]
+                    if best_secondary is not None:
+                        marker_detections["secondary"] = [best_secondary[0]]
             new_measurements: list[dict[str, object]] = []
-            for marker_id, state in marker_states.items():
-                detected_corners = marker_detections.get(marker_id, [])
+            for role, state in marker_states.items():
+                detected_corners = marker_detections.get(role, [])
                 measurement = _track_marker(
-                    marker_id,
+                    role,
                     detected_corners,
                     marker_gray,
                     prev_gray,
@@ -1850,7 +1882,7 @@ def process_video(
                             2,
                         )
                     if detected_corners:
-                        valid_ids = np.array([[marker_id] for _ in detected_corners])
+                        valid_ids = np.array([[PRIMARY_MARKER_ID] for _ in detected_corners])
                         cv2.aruco.drawDetectedMarkers(frame, detected_corners, valid_ids)
             if new_measurements or any(state.tracker_corners is not None for state in marker_states.values()):
                 prev_gray = marker_gray
