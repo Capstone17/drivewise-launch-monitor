@@ -52,21 +52,14 @@ MAX_CENTER_JUMP_PX = 120.0
 # - Indoor, slow swing: 160 frames
 # - Outdoor, fast swing: 40 frames (PLEASE LEAVE IT AT 40 WHEN PUSHING TO MAIN)
 # ----------------------------
-MOTION_WINDOW_FRAMES = 40  # number of frames kept in the motion window
+MOTION_WINDOW_FRAMES = 60  # number of frames kept in the motion window
 
 IMPACT_SPEED_THRESHOLD_PX = 1.0  # pixel distance that marks ball movement
 HEAD_CHECK_FRAMES = 5
 HEAD_SCORE_THRESHOLD = 0.3
 HEAD_MIN_HITS = 1
 HEAD_STATIONARY_DRIFT_PX = 6.0
-
-# ----------------------------
-# Sticker Frames After Impact
-# - Results of testing say that more than 2 frames can skew numbers
-# - 1 has the best balance so far
-# - Don't change this! It affects metrics heavily
-# ----------------------------
-POST_IMPACT_STICKER_FRAMES = 1  # keep sticker tracking alive for a couple of frames after impact
+POST_IMPACT_STICKER_FRAMES = 2  # keep sticker tracking alive for a couple of frames after impact
 
 STICKER_Z_SPIKE_WINDOW = 5
 STICKER_Z_SPIKE_MAD_SCALE = 3.0
@@ -1122,14 +1115,8 @@ def annotate_interpolated_frames(
 
     if not predictions:
         return
-    seen_frames: set[int] = set()
     for entry in predictions:
-        frame_idx = int(entry.get("frame", -1))
-        if frame_idx < 0:
-            continue
-        if frame_idx in seen_frames:
-            continue  # avoid double-annotating a frame if duplicate data sneaks in
-        seen_frames.add(frame_idx)
+        frame_idx = entry["frame"]
         path = frame_paths.get(frame_idx)
         if not path or not os.path.exists(path):
             continue
@@ -1796,12 +1783,21 @@ def process_video(
         video_fps,
     )
     sticker_coords = []
+    if not sticker_series:
+            sticker_coords.append(
+                {
+                    "time": 0,
+                    "x": 0,
+                    "y": 0,
+                    "z": 0,
+                    "label": "garbage",
+                }
+            )
     for entry in sticker_series:
         source = str(entry.get("source", "predicted"))
         label = "measured" if source == "measured" else "extrapolated"
         sticker_coords.append(
             {
-                "frame": int(entry["frame"]),
                 "time": round(entry["time"], 3),
                 "x": round(float(entry["x"]), 2),
                 "y": round(float(entry["y"]), 2),
@@ -1809,21 +1805,10 @@ def process_video(
                 "label": label,
             }
         )
-    if not sticker_coords:
-        sticker_coords.append(
-            {
-                "frame": -1,
-                "time": 0.0,
-                "x": 0.0,
-                "y": 0.0,
-                "z": 0.0,
-                "label": "garbage",
-            }
-        )
     if frames_dir:
         annotate_interpolated_frames(
             saved_frame_paths,
-            sticker_coords,
+            [entry for entry in sticker_series if entry["source"] == "predicted"],
         )
     if impact_frame_idx is not None and impact_time is not None:
         print(f"Impact frame: {impact_frame_idx} (t={impact_time:.3f}s)")

@@ -11,7 +11,7 @@ from scipy.signal import savgol_filter
 # Find Impact
 # -------------------------
 
-def load_impact_time(sticker_json_path, ball_json_path):
+def load_impact_time(json_path):
     """
     Finds the last sticker frame and returns it as the moment of impact.
     This is because the computer vision algorithm stops tracking the sticker once the ball begins to move.
@@ -19,70 +19,17 @@ def load_impact_time(sticker_json_path, ball_json_path):
     Returns:
         impact_time: Time of impact
     """
-    with open(sticker_json_path, 'r') as f:
+    with open(json_path, 'r') as f:
         data = json.load(f)
 
     if not data:
         return None
 
-    # Use last frame minus 3 as the moment of impact
-    # This has to do with how many frames we check after impact--should be one more than that
-    # If there is only one coordinate, our sticker detection has failed, and we should check our ball
-    if len(data) <= 1:
-        print("Warning: Sticker detection failed.")
-        impact_time = detect_ball_movement(ball_json_path)
-        
-        if (impact_time is None):
-            print("Warning: Ball detection failed.")
-            return None
-    else:
-        impact_idx = len(data) - 1 - 2
-        impact_time = data[impact_idx]['time']
+    # Use last frame as the moment of impact
+    impact_idx = len(data) - 1
+    impact_time = data[impact_idx]['time']
 
     return impact_time
-
-def detect_ball_movement(ball_json_path, threshold=5.0):
-    """
-    Detects the moment when the ball starts moving by finding the first significant 
-    position change in the ball tracking data.
-    
-    Args:
-        ball_json_path: Path to the JSON file containing ball position data
-        threshold: Minimum distance (in units) to consider as movement (default 5.0)
-    
-    Returns:
-        float: Time when ball movement is detected, or None if no valid movement found
-    """
-    with open(ball_json_path, 'r') as f:
-        data = json.load(f)
-    
-    # Check if data is invalid (empty, single entry, or all zeros)
-    if not data or len(data) <= 1:
-        return None
-    
-    # Check if this is the invalid case (all zeros)
-    if all(d['x'] == 0.0 and d['y'] == 0.0 and d['z'] == 0.0 for d in data):
-        return None
-    
-    # Need at least 2 frames to detect movement
-    if len(data) < 2:
-        return None
-    
-    # Look for the first significant movement between consecutive frames
-    print("Looking for significant displacement")
-    for i in range(len(data) - 1):
-        x1, y1, z1 = data[i]['x'], data[i]['y'], data[i]['z']
-        x2, y2, z2 = data[i+1]['x'], data[i+1]['y'], data[i+1]['z']
-        
-        # Calculate 3D distance between consecutive positions
-        distance = np.sqrt((x2 - x1)**2 + (y2 - y1)**2 + (z2 - z1)**2)
-        
-        # If movement exceeds threshold, return the time of the frame (when movement occurred)
-        if distance > threshold:
-            return data[i]['time']
-    
-    # No significant movement detected
-    return None
 
 
 # -------------------------
@@ -546,57 +493,52 @@ def savgol_velocity(json_path, polyorder=2, max_window=13):
 
 # Find the metrics using ball data
 def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz) -> dict:
+
+    if (marker_dx is None) or (marker_dy is None) or (marker_dz is None):
+        print("Error: Club not detected, returning zero case")
+        return {
+        "face_angle": 0.00,
+        "swing_path": 0.00,
+        "attack_angle": 0.00,
+        "side_angle": 0.00,
+        "face_to_path": 0.00
+        }
+
+    swing_path = horizontal_movement_angle_from_rates(marker_dx, marker_dz)
+    side_angle = horizontal_movement_angle_from_rates(ball_dx, ball_dz)
+    face_angle = face_angle_calc(swing_path, side_angle)
+    attack_angle = vertical_movement_angle_from_rates(marker_dy, marker_dz)
+    face_to_path = face_angle - swing_path
+
+    # Speeds
+    club_speed = cmps_to_speed_kmh(marker_dx, marker_dy, marker_dz)
+    print(f'Club speed: {club_speed:.2f}\n')
+
+    ball_speed = cmps_to_speed_kmh(ball_dx, ball_dy, ball_dz)
+    print(f'Ball speed: {ball_speed:.2f}\n')
+
     # ---------------------------------
     # Error checking
-    # - If club or ball was not detected, return None respectively
-    # - If any angles are very extreme, return None
+    # - If any angles are very extreme, set them to zero
     # - This is worst-case scenario, and we don't want it to happen often!
     # ---------------------------------
-    # If club is undetected
-    if (marker_dx is None) or (marker_dy is None) or (marker_dz is None):
-        print("Warning: Club not detected, using ball only")
-        swing_path = None
-        attack_angle = None
-    else:
-        swing_path = horizontal_movement_angle_from_rates(marker_dx, marker_dz)
-        attack_angle = vertical_movement_angle_from_rates(marker_dy, marker_dz)
-        
-        # Check for extreme return values
-        # If one angle is extreme, both cannot be trusted
-        if (abs(swing_path) > 40):
-            print(f"Extreme swing path {swing_path}; using default of 0.00")
-            swing_path = None
-            attack_angle = None
-        elif (abs(attack_angle) > 50):
-            print(f"Extreme attack angle {attack_angle}; using default of 0.00")
-            attack_angle = None
-            swing_path = None
-        
-        club_speed = cmps_to_speed_kmh(marker_dx, marker_dy, marker_dz)
-        print(f'Club speed: {club_speed:.2f}\n')
-        
-    # If ball is undetected
-    if (ball_dx is None) or (ball_dy is None) or (ball_dz is None):
-        print("Warning: Ball not detected, using club only")
-        side_angle = None
-    else:
-        side_angle = horizontal_movement_angle_from_rates(ball_dx, ball_dz)
-        
-        # Check for extreme return values
-        if (abs(side_angle) > 50):
-            print(f"Extreme side angle {side_angle}; using default of 0.00")
-            side_angle = None
-        
-        ball_speed = cmps_to_speed_kmh(ball_dx, ball_dy, ball_dz)
-        print(f'Ball speed: {ball_speed:.2f}\n')
-
-    # If ball or club was not detected
-    if (side_angle is None) or (swing_path is None):
-        face_angle = None
-        face_to_path = None
-    else:
-        face_angle = face_angle_calc(swing_path, side_angle)
+    # Face-to-path should also be updated in this case
+    if (abs(swing_path) > 30):
+        print(f"Extreme swing path {swing_path}; using default of 0.00")
+        swing_path = 0.00
         face_to_path = face_angle - swing_path
+    if (abs(side_angle) > 30):
+        print(f"Extreme side angle {side_angle}; using default of 0.00")
+        side_angle = 0.00
+    # Face angle can be more extreme, but still check
+    # Face-to-path should also be updated in this case
+    if (abs(face_angle) > 35):
+        print(f"Extreme face angle {face_angle}; using default of 0.00")
+        face_angle = 0.00
+        face_to_path = face_angle - swing_path
+    if (abs(attack_angle) > 25):
+        print(f"Extreme attack angle {attack_angle}; using default of 0.00")
+        attack_angle = 0.00
 
     return {
         "face_angle": face_angle,
@@ -622,19 +564,9 @@ def return_metrics() -> dict:
 
     # ---------------------------------
     # Find impact time
-    # - If impact time is Nonetype, our detection has failed because we do not have a ball or sticker
     # --------------------------------- 
-    impact_time = load_impact_time(sticker_coords_path, ball_coords_path)
+    impact_time = load_impact_time(sticker_coords_path)
     print(f"Impact time: {impact_time}")
-
-    if (impact_time is None):
-        return {
-            "face_angle": None,
-            "swing_path": None,
-            "attack_angle": None,
-            "side_angle": None,
-            "face_to_path": None
-    }
 
     # ---------------------------------
     # Velocity Approximation
@@ -676,12 +608,20 @@ def return_metrics() -> dict:
     # ---------------------------------
     # Print & Return Metrics
     # ---------------------------------
+<<<<<<< HEAD
     print(f'\nSwing path: {metrics["swing_path"] if metrics["swing_path"] is None else "%.2f" % metrics["swing_path"]}')
     print(f'Face angle: {metrics["face_angle"] if metrics["face_angle"] is None else "%.2f" % metrics["face_angle"]}')
     print(f'Side angle: {metrics["side_angle"] if metrics["side_angle"] is None else "%.2f" % metrics["side_angle"]}')
     print(f'Attack angle: {metrics["attack_angle"] if metrics["attack_angle"] is None else "%.2f" % metrics["attack_angle"]}')
     print(f'Face-to-path: {metrics["face_to_path"] if metrics["face_to_path"] is None else "%.2f" % metrics["face_to_path"]}')
     print('\n')
+=======
+    print(f'Swing path: {metrics["swing_path"]:.2f}\n')
+    print(f'Face angle: {metrics["face_angle"]:.2f}\n')
+    print(f'Side angle: {metrics["side_angle"]:.2f}\n')
+    print(f'Attack angle: {metrics["attack_angle"]:.2f}\n')
+    print(f'Face-to-path: {metrics["face_to_path"]:.2f}\n')
+>>>>>>> eebfff1217a4a90457d51eb58c4085d6e7483155
 
     return metrics
 
