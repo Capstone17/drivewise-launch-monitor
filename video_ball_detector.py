@@ -956,18 +956,19 @@ def predict_sticker_series(
             last_primary_pos = xyz
             if secondary_valid:
                 last_secondary_anchor = np.array(secondary_entry["position"], dtype=float)
-        elif (
-            secondary_valid
-            and last_primary_pos is not None
-            and last_secondary_anchor is not None
-        ):
+        elif secondary_valid and last_primary_pos is not None:
             secondary_pos = np.array(secondary_entry["position"], dtype=float)
-            delta = secondary_pos - last_secondary_anchor
-            xyz = last_primary_pos + delta
+            if last_secondary_anchor is None:
+                # First time secondary appears after primary; anchor without moving.
+                last_secondary_anchor = secondary_pos
+                xyz = last_primary_pos
+            else:
+                delta = secondary_pos - last_secondary_anchor
+                xyz = last_primary_pos + delta
+                last_primary_pos = xyz
+                last_secondary_anchor = secondary_pos
             label = "secondary"
             source = "predicted"
-            last_primary_pos = xyz
-            last_secondary_anchor = secondary_pos
         elif secondary_valid and last_primary_pos is None and not measured_frames_primary:
             # No primary data at all; initialize with secondary to avoid zeros.
             secondary_pos = np.array(secondary_entry["position"], dtype=float)
@@ -1976,7 +1977,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "Outdoor_Bad_Twostickers_StickerMisdetection_1.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "Outdoor_Bad_Twostickers_StickerMisdetection_2.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
