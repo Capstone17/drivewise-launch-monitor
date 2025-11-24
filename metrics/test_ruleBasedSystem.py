@@ -1,32 +1,23 @@
+# ASSUMPTIONS -----------------------
+# - The 0, 0, 0, 0, 0 case means that there was a detection error.
+# - For production, this would need to be updated, but this assumption works for the purposes of our project.
+# -----------------------------------
+
 from test_metric_output import return_metrics
 
 import random
 
 
 # Helper function for unsuccessful club detection
-def ball_only_message(side_angle):
-    if side_angle is None:
-        return "Error: Side angle data unavailable."
-    
+def error_side_angle_alone(side_angle):
+
     if side_angle < -2.0:
         return "Pull: Both your face and path are left, causing a pull. Try aligning your stance and path more rightward and ensure the face matches the path."
     elif side_angle > 2.0:
         return "Push: A rightward path and open face are sending shots directly right. Work on squaring the clubface and adjusting alignment toward the target."
     
+    # If there are no issues, return an encouraging message
     return "Straight: Nice shot!"
-
-# Helper function for unsuccessful ball detection
-def club_only_message(swing_path):
-    if swing_path is None:
-        return "Error: Swing path data unavailable."
-    
-    if swing_path < -3.0:
-        return "Fade: Your shot is curving right. If your shot is landing right of the target, try dropping your hands before turning your hips at the beginning of your downswing."
-    elif swing_path > 3.0:
-        return "Draw: Your shot is curving left. If your shot is landing left of the target, try keeping the clubhead in front of your body and hitting down on the ball."
-    
-    return "Straight: Nice shot!"
-
 
 # -------------------------------
 # Output as a function (for bluetooth)
@@ -56,59 +47,54 @@ def rule_based_system(club_selection):
     # - Ideal numbers for face-to-path are from GolfWRX: https://www.golfwrx.com/342864/how-to-hit-a-push-draw-and-a-pull-fade/1000/
     # -------------------------------
     facts = {
-        # Error case: club and ball were not detected
-        "club_and_ball_detection_error": ( raw_data['face_angle'] is None and 
-                                        raw_data['swing_path'] is None and 
-                                        raw_data['attack_angle'] is None and
-                                        raw_data['side_angle'] is None and
-                                        raw_data['face_to_path'] is None ),
 
         # Error case: club was not detected
-        "club_detection_error": (   raw_data['swing_path'] is None and 
-                                    raw_data['attack_angle'] is None    ),
+        "detection_error": (raw_data['face_angle'] == 0.0 and 
+                            raw_data['swing_path'] == 0.0 and 
+                            raw_data['attack_angle'] == 0.0 and
+                            raw_data['side_angle'] == 0.0 and
+                            raw_data['face_to_path'] == 0.0),
 
-        # Error case: ball was not detected
-        "ball_detection_error": (raw_data['side_angle'] is None),
+        # Error case: side angle alone was detected
+        "side_angle_alone": (raw_data['face_angle'] == 0.0 and 
+                            raw_data['swing_path'] == 0.0 and 
+                            raw_data['attack_angle'] == 0.0 and
+                            raw_data['face_to_path'] == 0.0 and
+                            raw_data['side_angle'] != 0.0),
 
-        # Face angle facts - with None checks
-        "face_extreme_left": raw_data['face_angle'] is not None and raw_data['face_angle'] < -6.0,
-        "face_slight_left": raw_data['face_angle'] is not None and -6.0 <= raw_data['face_angle'] < -3.0,
-        "face_straight": raw_data['face_angle'] is not None and -3.0 <= raw_data['face_angle'] < 3.0,
-        "face_slight_right": raw_data['face_angle'] is not None and 3.0 <= raw_data['face_angle'] < 6.0,
-        "face_extreme_right": raw_data['face_angle'] is not None and 6.0 <= raw_data['face_angle'],
+        "face_extreme_left": raw_data['face_angle'] < -6.0,
+        "face_slight_left": -6.0 <= raw_data['face_angle'] < -3.0,
+        "face_straight": -3.0 <= raw_data['face_angle'] < 3.0,
+        "face_slight_right": 3.0 <= raw_data['face_angle'] < 6.0,
+        "face_extreme_right": 6.0 <= raw_data['face_angle'],
 
-        # Path facts - with None checks
-        "path_extreme_left": raw_data['swing_path'] is not None and raw_data['swing_path'] < -6.0,
-        "path_slight_left": raw_data['swing_path'] is not None and -6.0 <= raw_data['swing_path'] < -2.0,
-        "path_straight": raw_data['swing_path'] is not None and -2.0 <= raw_data['swing_path'] < 2.0,
-        "path_slight_right": raw_data['swing_path'] is not None and 2.0 <= raw_data['swing_path'] < 6.0,
-        "path_extreme_right": raw_data['swing_path'] is not None and 6.0 <= raw_data['swing_path'],
+        "path_extreme_left": raw_data['swing_path'] < -5.0,  # Slice
+        "path_slight_left": -5.0 <= raw_data['swing_path'] < -2.0,  # Fade-bias
+        "path_straight": -2.0 <= raw_data['swing_path'] < 2.0,  # Neutral
+        "path_slight_right": 2.0 <= raw_data['swing_path'] < 5.0,  # Draw-bias
+        "path_extreme_right": 5.0 <= raw_data['swing_path'],  # Hook
 
-        # Attack angle facts - with None checks
-        "attack_extreme_up": raw_data['attack_angle'] is not None and 5.0 < raw_data['attack_angle'],
-        "attack_up": raw_data['attack_angle'] is not None and 3.0 < raw_data['attack_angle'] <= 5.0,
-        "attack_slight_up": raw_data['attack_angle'] is not None and 1.0 < raw_data['attack_angle'] <= 3.0,
-        "attack_neutral": raw_data['attack_angle'] is not None and -2.0 < raw_data['attack_angle'] <= 1.0,
-        "attack_1.5to3_down": raw_data['attack_angle'] is not None and -1.5 < raw_data['attack_angle'] <= 3.0,
-        "attack_slight_down": raw_data['attack_angle'] is not None and -5.0 < raw_data['attack_angle'] <= -2.0,
-        "attack_very_down": raw_data['attack_angle'] is not None and -10.0 < raw_data['attack_angle'] <= -5.0,
-        "attack_extreme_down": raw_data['attack_angle'] is not None and raw_data['attack_angle'] <= -10.0,
+        "attack_extreme_up": 5.0 < raw_data['attack_angle'],
+        "attack_up": 3.0 < raw_data['attack_angle'] <= 5.0,  # Ideal for driver distance
+        "attack_slight_up": 1.0 < raw_data['attack_angle'] <= 3.0,
+        "attack_neutral": -2.0 < raw_data['attack_angle'] <= 1.0,
+        "attack_1.5to3_down": -1.5 < raw_data['attack_angle'] <= 3.0,  # Ideal for mid-irons
+        "attack_slight_down": -5.0 < raw_data['attack_angle'] <= -2.0,  # Ideal for iron shots
+        "attack_very_down": -10.0 < raw_data['attack_angle'] <= -5.0,  # Ideal for wedge shots
+        "attack_extreme_down": raw_data['attack_angle'] <= -10.0,
 
-        # Side angle facts - with None checks
-        "side_extreme_left": raw_data['side_angle'] is not None and raw_data['side_angle'] < -6.0,
-        "side_slight_left": raw_data['side_angle'] is not None and -6.0 <= raw_data['side_angle'] < -2.0,
-        "side_straight": raw_data['side_angle'] is not None and -2.0 <= raw_data['side_angle'] < 2.0,
-        "side_slight_right": raw_data['side_angle'] is not None and 2.0 <= raw_data['side_angle'] < 6.0,
-        "side_extreme_right": raw_data['side_angle'] is not None and 6.0 <= raw_data['side_angle'],
+        "side_extreme_left": raw_data['side_angle'] < -5.0,
+        "side_slight_left": -5.0 <= raw_data['side_angle'] < -2.0,  # Ideal for a fade
+        "side_straight": -2.0 <= raw_data['side_angle'] < 2.0,  # Ideal for a straight shot
+        "side_slight_right": 2.0 <= raw_data['side_angle'] < 5.0,  # Ideal for hitting a draw
+        "side_extreme_right": 5.0 <= raw_data['side_angle'],
 
-        # Face-to-path facts - with None checks
-        "face_to_path_extreme_left": raw_data['face_to_path'] is not None and raw_data['face_to_path'] < -6.0,
-        "face_to_path_slight_left": raw_data['face_to_path'] is not None and -6.0 <= raw_data['face_to_path'] < -2.0,
-        "face_to_path_straight": raw_data['face_to_path'] is not None and -2.0 <= raw_data['face_to_path'] < 2.0,
-        "face_to_path_slight_right": raw_data['face_to_path'] is not None and 2.0 <= raw_data['face_to_path'] < 6.0,
-        "face_to_path_extreme_right": raw_data['face_to_path'] is not None and 6.0 <= raw_data['face_to_path']
+        "face_to_path_extreme_left": raw_data['face_to_path'] < -4.0,
+        "face_to_path_slight_left": -4.0 <= raw_data['face_to_path'] < -2.0,  # Ideal for a fade
+        "face_to_path_straight": -2.0 <= raw_data['face_to_path'] < 2.0,  # Ideal for a straight shot
+        "face_to_path_slight_right": 2.0 <= raw_data['face_to_path'] < 4.0,  # Ideal for hitting a draw
+        "face_to_path_extreme_right": 4.0 <= raw_data['face_to_path']
     }
-
 
     # -------------------------------
     # Rules
@@ -117,30 +103,23 @@ def rule_based_system(club_selection):
     rules = [
         # -------------------------------
         # Error Cases 
-        # - Severity is higher than any other result (7, 6)
-        # - Club detection error, fall back to "Ball Only Detected"
-        # - Ball detection error, fall back to "Club Only Detected"
+        # - Severity is higher than any other result (6)
+        # - Club not detected: Return an error message
+        # - Only side angle detected: Base message solely off of side angle
         # -------------------------------
         {
-            "name": "Club and Ball Detection Error",
-            "category": "all",
-            "severity": 7,
-            "condition": lambda f: (f["club_and_ball_detection_error"]),
-            "action": lambda: "Error: Shot was not detected. Make sure your device is calibrated and placed on a flat surface, and aim for minimal movement in the background."
-        },
-        {
-            "name": "Ball Only Detected",
+            "name": "Detection Error",
             "category": "all",
             "severity": 6,
-            "condition": lambda f: (f["club_detection_error"]),
-            "action": lambda: ball_only_message(raw_data['side_angle'])
+            "condition": lambda f: (f["detection_error"]),
+            "action": lambda: "Error: Club was not detected. Make sure your device is calibrated and placed on a flat surface."
         },
         {
-            "name": "Club Only Detected",
+            "name": "Side Angle Alone",
             "category": "all",
             "severity": 6,
-            "condition": lambda f: (f["ball_detection_error"]),
-            "action": lambda: club_only_message(raw_data['swing_path'])
+            "condition": lambda f: (f["side_angle_alone"]),
+            "action": lambda: error_side_angle_alone(raw_data['side_angle'])
         },
         # -------------------------------
         # Shot shaping
@@ -299,30 +278,6 @@ def rule_based_system(club_selection):
         feedback = best_rule["action"]()
     else:
         feedback = "No swing issues detected."
-
-    # -----------------------
-    # Handle the Error Cases
-    # - If nothing was detected, return all zeroes
-    # - If club was not detected, return only ball metrics, with swing_path, attack_angle, and face_angle set to zero
-    # - If ball was not detected, return only club metrics, with side_angle, and face angle set to zero
-    # -----------------------
-    if facts["club_and_ball_detection_error"]:
-        # Nothing detected - return all zeros
-        raw_data["face_angle"] = 0.0
-        raw_data["swing_path"] = 0.0
-        raw_data["attack_angle"] = 0.0
-        raw_data["side_angle"] = 0.0
-    elif facts["club_detection_error"]:
-        # Club not detected - zero out club metrics, keep ball metrics
-        raw_data["face_angle"] = 0.0
-        raw_data["swing_path"] = 0.0
-        raw_data["attack_angle"] = 0.0
-        # side_angle remains as detected
-    elif facts["ball_detection_error"]:
-        # Ball not detected - zero out ball metrics, keep club metrics
-        raw_data["side_angle"] = 0.0
-        raw_data["face_angle"] = 0.0
-        # swing_path, attack_angle remain as detected
 
     print(f"{feedback}")
 
