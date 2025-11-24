@@ -199,7 +199,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                         )
                     except subprocess.CalledProcessError as e:
                         logger.exception("Ball detection capture command failed")
-                        self._reset_shared_data("Could not capture the ball")
+                        self._reset_shared_data("Camera Operation Error: Please contact StrikeLeague")
                         self.end_loop()
                         return
 
@@ -213,7 +213,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                             )
                         except Exception:
                             logger.exception("Failed to initialise ball detector")
-                            self._reset_shared_data("Could not initialize the ball detector")
+                            self._reset_shared_data("Ball detection error! Please contact StrikeLeague")
                             self.end_loop()
                             return
                         self._ball_detector = detector
@@ -232,9 +232,9 @@ class SwingAnalysisCharacteristic(Characteristic):
                     except Exception:
                         logger.exception("Low-rate ball detection failed")
                         ball_detected = False
-                        self._reset_shared_data("Ball detection failed")
-                        self.end_loop()
-                        return
+                        self._reset_shared_data("Ball detection failed! Please try again")
+                        # self.end_loop()
+                        # return
 
                     logger.info("STAGE2: low freq video recording started STATE: %s", ball_detected)
 
@@ -256,7 +256,7 @@ class SwingAnalysisCharacteristic(Characteristic):
                         )
                     except Exception:
                         logger.exception("Failed to initialise ball detector for high-rate capture")
-                        self._reset_shared_data("Unable to initialise ball detector.")
+                        self._reset_shared_data("Unable to initialise ball detector! Please contact StrikeLeague")
                         if self.notifying:
                             self.notify_client()
                         return
@@ -293,11 +293,11 @@ class SwingAnalysisCharacteristic(Characteristic):
 
                     except subprocess.CalledProcessError:
                         logger.exception("Full video capture failed")
-                        self._reset_shared_data("Script execution failed during capture")
+                        self._reset_shared_data("High-speed camera error! Please contact StrikeLeague")
                         self.end_loop()
                         return
 
-                    mp4_files = glob.glob(os.path.join(output_dir, "vid_84.mp4"))
+                    mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
                     if not mp4_files:
                         logger.error("No vid*.mp4 found in webcamGolf after high-rate capture")
                         break
@@ -358,7 +358,7 @@ class SwingAnalysisCharacteristic(Characteristic):
 
                 except (FileNotFoundError, RuntimeError) as e:
                     logger.exception(f"Video processing failed: {e}")
-                    self._reset_shared_data("Swing analysis failed! Please try again.")
+                    self._reset_shared_data("Video file not found! Please contact StrikeLeague")
                     self.end_loop()
                     return
                 else:

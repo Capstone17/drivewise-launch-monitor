@@ -52,14 +52,21 @@ MAX_CENTER_JUMP_PX = 120.0
 # - Indoor, slow swing: 160 frames
 # - Outdoor, fast swing: 40 frames (PLEASE LEAVE IT AT 40 WHEN PUSHING TO MAIN)
 # ----------------------------
-MOTION_WINDOW_FRAMES = 60  # number of frames kept in the motion window
+MOTION_WINDOW_FRAMES = 40  # number of frames kept in the motion window
 
 IMPACT_SPEED_THRESHOLD_PX = 1.0  # pixel distance that marks ball movement
 HEAD_CHECK_FRAMES = 5
 HEAD_SCORE_THRESHOLD = 0.3
 HEAD_MIN_HITS = 1
 HEAD_STATIONARY_DRIFT_PX = 6.0
-POST_IMPACT_STICKER_FRAMES = 2  # keep sticker tracking alive for a couple of frames after impact
+
+# ----------------------------
+# Sticker Frames After Impact
+# - Results of testing say that more than 2 frames can skew numbers
+# - 1 has the best balance so far
+# - Don't change this! It affects metrics heavily
+# ----------------------------
+POST_IMPACT_STICKER_FRAMES = 1  # keep sticker tracking alive for a couple of frames after impact
 
 STICKER_Z_SPIKE_WINDOW = 5
 STICKER_Z_SPIKE_MAD_SCALE = 3.0
