@@ -1115,8 +1115,14 @@ def annotate_interpolated_frames(
 
     if not predictions:
         return
+    seen_frames: set[int] = set()
     for entry in predictions:
-        frame_idx = entry["frame"]
+        frame_idx = int(entry.get("frame", -1))
+        if frame_idx < 0:
+            continue
+        if frame_idx in seen_frames:
+            continue  # avoid double-annotating a frame if duplicate data sneaks in
+        seen_frames.add(frame_idx)
         path = frame_paths.get(frame_idx)
         if not path or not os.path.exists(path):
             continue
@@ -1783,21 +1789,12 @@ def process_video(
         video_fps,
     )
     sticker_coords = []
-    if not sticker_series:
-            sticker_coords.append(
-                {
-                    "time": 0,
-                    "x": 0,
-                    "y": 0,
-                    "z": 0,
-                    "label": "garbage",
-                }
-            )
     for entry in sticker_series:
         source = str(entry.get("source", "predicted"))
         label = "measured" if source == "measured" else "extrapolated"
         sticker_coords.append(
             {
+                "frame": int(entry["frame"]),
                 "time": round(entry["time"], 3),
                 "x": round(float(entry["x"]), 2),
                 "y": round(float(entry["y"]), 2),
@@ -1805,10 +1802,21 @@ def process_video(
                 "label": label,
             }
         )
+    if not sticker_coords:
+        sticker_coords.append(
+            {
+                "frame": -1,
+                "time": 0.0,
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0,
+                "label": "garbage",
+            }
+        )
     if frames_dir:
         annotate_interpolated_frames(
             saved_frame_paths,
-            [entry for entry in sticker_series if entry["source"] == "predicted"],
+            sticker_coords,
         )
     if impact_frame_idx is not None and impact_time is not None:
         print(f"Impact frame: {impact_frame_idx} (t={impact_time:.3f}s)")
