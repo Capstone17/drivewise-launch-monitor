@@ -1177,6 +1177,15 @@ def _roll_deg_from_rvec(rvec: np.ndarray) -> float:
     return (roll_deg + 360.0) % 360.0
 
 
+def _yaw_deg_from_rvec(rvec: np.ndarray) -> float:
+    """Return yaw (rotation about marker Z) in degrees from a Rodrigues rotation vector."""
+
+    rot_mat, _ = cv2.Rodrigues(rvec)
+    yaw_rad = float(np.arctan2(rot_mat[1, 0], rot_mat[0, 0]))
+    yaw_deg = np.degrees(yaw_rad)
+    return (yaw_deg + 360.0) % 360.0
+
+
 def _track_marker(
     role: str,
     detected_corners: list[np.ndarray],
@@ -1829,7 +1838,9 @@ def process_video(
             sticker_time += time.perf_counter() - sticker_start
             marker_detections: dict[str, list[np.ndarray]] = {"primary": [], "secondary": []}
             if ids is not None and len(ids) > 0:
-                candidates = []
+                def _delta(angle: float, target: float) -> float:
+                    return abs(((angle - target + 180.0) % 360.0) - 180.0)
+
                 for i in range(len(ids)):
                     marker_id = int(ids[i][0])
                     if marker_id != PRIMARY_MARKER_ID:
@@ -1838,24 +1849,20 @@ def process_video(
                     if pose is None:
                         continue
                     rvec, _ = pose
-                    roll = _roll_deg_from_rvec(rvec)
-                    candidates.append((corners[i], roll))
-                if candidates:
-                    def _delta(angle: float, target: float) -> float:
-                        return abs(((angle - target + 180.0) % 360.0) - 180.0)
-
-                    best_primary = min(candidates, key=lambda c: _delta(c[1], 180.0))
-                    best_secondary = min(candidates, key=lambda c: _delta(c[1], 0.0))
-                    if best_primary[0] is best_secondary[0] and len(candidates) > 1:
-                        # Avoid double-assigning the same detection when more than one exists
-                        remaining = [c for c in candidates if c[0] is not best_primary[0]]
-                        if remaining:
-                            best_secondary = min(remaining, key=lambda c: _delta(c[1], 0.0))
+                    # Use yaw (rotation about marker normal) to disambiguate flipped vs non-flipped.
+                    yaw = _yaw_deg_from_rvec(rvec)
+                    primary_delta = _delta(yaw, 180.0)
+                    secondary_delta = _delta(yaw, 0.0)
+                    if primary_delta < secondary_delta:
+                        marker_detections["primary"].append(corners[i])
+                    elif secondary_delta < primary_delta:
+                        marker_detections["secondary"].append(corners[i])
+                    else:
+                        # Tie: prefer whichever role currently lacks a detection
+                        if not marker_detections["primary"]:
+                            marker_detections["primary"].append(corners[i])
                         else:
-                            best_secondary = None
-                    marker_detections["primary"] = [best_primary[0]]
-                    if best_secondary is not None:
-                        marker_detections["secondary"] = [best_secondary[0]]
+                            marker_detections["secondary"].append(corners[i])
             new_measurements: list[dict[str, object]] = []
             for role, state in marker_states.items():
                 detected_corners = marker_detections.get(role, [])
@@ -1969,7 +1976,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "id17_test_good_2.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "Outdoor_Bad_Twostickers_StickerMisdetection_1.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
