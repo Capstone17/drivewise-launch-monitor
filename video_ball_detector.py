@@ -68,11 +68,6 @@ STICKER_Z_TREND_JUMP = 3.5
 STICKER_Z_LOCAL_PEAK_JUMP = 3.5
 STICKER_Z_LINEAR_GAP_JUMP = 3.5
 STICKER_Z_MONO_TOLERANCE = 1.0
-STICKER_MIN_MOTION_BEFORE_ACCEPT = 5.0  # min 3D displacement before trusting a sticker track
-STICKER_STATIC_MIN_FRAMES = 4
-STICKER_STATIC_WARMUP_FRAMES = 1
-STICKER_MIN_SIDE_PX = 12.0
-STICKER_MIN_ASPECT_RATIO = 0.6
 
 MOTION_WINDOW_DEBUG = os.environ.get("MOTION_WINDOW_DEBUG", "").strip().lower() in {
     "1",
@@ -1112,51 +1107,6 @@ def _cubic_hermite(
     return h00 * start_val + h10 * start_slope + h01 * end_val + h11 * end_slope
 
 
-def _marker_side_stats(corners: np.ndarray) -> tuple[float, float, float]:
-    """Return min side, max side, and aspect ratio for an ArUco detection."""
-
-    pts = corners.reshape(-1, 2).astype(float)
-    if pts.shape[0] != 4:
-        return 0.0, 0.0, 0.0
-    sides = [
-        np.linalg.norm(pts[0] - pts[1]),
-        np.linalg.norm(pts[1] - pts[2]),
-        np.linalg.norm(pts[2] - pts[3]),
-        np.linalg.norm(pts[3] - pts[0]),
-    ]
-    min_side = float(min(sides))
-    max_side = float(max(sides))
-    aspect = (min_side / max_side) if max_side > 1e-6 else 0.0
-    return min_side, max_side, aspect
-
-
-def _trim_static_sticker_measurements(
-    measurements: list[dict[str, object]],
-    *,
-    min_motion: float = STICKER_MIN_MOTION_BEFORE_ACCEPT,
-    min_frames: int = STICKER_STATIC_MIN_FRAMES,
-    warmup_frames: int = STICKER_STATIC_WARMUP_FRAMES,
-) -> list[dict[str, object]]:
-    """Drop leading sticker hits that never move (bench false positives, etc.)."""
-
-    if len(measurements) < min_frames:
-        return measurements
-
-    origin = np.asarray(measurements[0]["position"], dtype=float)
-    first_motion_idx: int | None = None
-    for idx, entry in enumerate(measurements[1:], start=1):
-        pos = np.asarray(entry["position"], dtype=float)
-        if np.linalg.norm(pos - origin) >= min_motion:
-            first_motion_idx = max(0, idx - warmup_frames)
-            break
-
-    if first_motion_idx is None:
-        return []
-    if first_motion_idx <= 0:
-        return measurements
-    return measurements[first_motion_idx:]
-
-
 def annotate_interpolated_frames(
     frame_paths: dict[int, str],
     predictions: list[dict[str, float | int | str]],
@@ -1685,20 +1635,10 @@ def process_video(
                     valid_ids = np.array([[DYNAMIC_ID] for _ in valid])
                     cv2.aruco.drawDetectedMarkers(frame, valid, valid_ids)
                     for corner in valid:
-                        min_side, max_side, aspect = _marker_side_stats(corner)
-                        if min_side < STICKER_MIN_SIDE_PX or aspect < STICKER_MIN_ASPECT_RATIO:
-                            continue
                         pose = estimate_single_marker_pose(corner, DYNAMIC_MARKER_LENGTH)
                         if pose is None:
                             continue
                         rvec, tvec = pose
-                        object_pts = marker_object_points(DYNAMIC_MARKER_LENGTH)
-                        reproj, _ = cv2.projectPoints(object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS)
-                        reproj_err = np.linalg.norm(
-                            corner.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
-                        ).mean()
-                        if reproj_err > MAX_REPROJECTION_ERROR:
-                            continue
                         curr_q = rvec_to_quat(rvec)
                         if last_dynamic_rt is not None:
                             prev_q = rvec_to_quat(last_dynamic_rt[0])
@@ -1721,70 +1661,68 @@ def process_video(
             if current_rt is None and tracker_corners is not None and prev_gray is not None:
                 new_corners, st, _ = cv2.calcOpticalFlowPyrLK(prev_gray, marker_gray, tracker_corners, None)
                 if st.sum() == 4:
-                    min_side, max_side, aspect = _marker_side_stats(new_corners)
-                    if min_side >= STICKER_MIN_SIDE_PX and aspect >= STICKER_MIN_ASPECT_RATIO:
-                        object_pts = marker_object_points(DYNAMIC_MARKER_LENGTH)
-                        ok, rvec, tvec = cv2.solvePnP(
-                            object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
+                    object_pts = marker_object_points(DYNAMIC_MARKER_LENGTH)
+                    ok, rvec, tvec = cv2.solvePnP(
+                        object_pts, new_corners.reshape(-1, 2), CAMERA_MATRIX, DIST_COEFFS
+                    )
+                    if ok:
+                        # ``solvePnP`` returns a column vector; flatten it so that the
+                        # rest of the pipeline always works with a 1D translation
+                        # vector.
+                        tvec = tvec.reshape(3)
+                        curr_q = rvec_to_quat(rvec)
+                        if last_dynamic_rt is not None:
+                            prev_q = rvec_to_quat(last_dynamic_rt[0])
+                            if np.dot(curr_q, prev_q) < 0.0:
+                                curr_q = -curr_q
+                                rvec = quat_to_rvec(curr_q)
+
+                        # Reprojection error check
+                        reproj, _ = cv2.projectPoints(
+                            object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS
                         )
-                        if ok:
-                            # ``solvePnP`` returns a column vector; flatten it so that the
-                            # rest of the pipeline always works with a 1D translation
-                            # vector.
-                            tvec = tvec.reshape(3)
-                            curr_q = rvec_to_quat(rvec)
-                            if last_dynamic_rt is not None:
-                                prev_q = rvec_to_quat(last_dynamic_rt[0])
-                                if np.dot(curr_q, prev_q) < 0.0:
-                                    curr_q = -curr_q
-                                    rvec = quat_to_rvec(curr_q)
+                        reproj_err = np.linalg.norm(
+                            new_corners.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
+                        ).mean()
 
-                            # Reprojection error check
-                            reproj, _ = cv2.projectPoints(
-                                object_pts, rvec, tvec, CAMERA_MATRIX, DIST_COEFFS
-                            )
-                            reproj_err = np.linalg.norm(
-                                new_corners.reshape(-1, 2) - reproj.reshape(-1, 2), axis=1
-                            ).mean()
+                        pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
 
-                            pose_ok = reproj_err <= MAX_REPROJECTION_ERROR
-
-                            # Motion delta check
-                            if pose_ok and last_dynamic_rt is not None:
-                                trans_delta = np.linalg.norm(tvec - last_dynamic_rt[1])
-                                ang_delta = 0.0
-                                if last_dynamic_quat is not None:
-                                    ang_delta = np.degrees(
-                                        2.0
-                                        * np.arccos(
-                                            np.clip(np.dot(curr_q, last_dynamic_quat), -1.0, 1.0)
-                                        )
+                        # Motion delta check
+                        if pose_ok and last_dynamic_rt is not None:
+                            trans_delta = np.linalg.norm(tvec - last_dynamic_rt[1])
+                            ang_delta = 0.0
+                            if last_dynamic_quat is not None:
+                                ang_delta = np.degrees(
+                                    2.0
+                                    * np.arccos(
+                                        np.clip(np.dot(curr_q, last_dynamic_quat), -1.0, 1.0)
                                     )
-                                if (
-                                    trans_delta > MAX_TRANSLATION_DELTA
-                                    or ang_delta > MAX_ROTATION_DELTA
-                                ):
-                                    pose_ok = False
-
-                            if pose_ok:
-                                current_rt = (rvec, tvec)
-                                current_quat = curr_q
-                                current_position = np.array(tvec, dtype=float)
-                                cv2.drawFrameAxes(
-                                    frame,
-                                    CAMERA_MATRIX,
-                                    DIST_COEFFS,
-                                    rvec,
-                                    tvec,
-                                    DYNAMIC_MARKER_LENGTH * 0.5,
-                                    2,
                                 )
-                            else:
-                                current_rt = None
-                                current_quat = None
-                                current_position = None
-                        tracker_corners = new_corners
-                        prev_gray = marker_gray
+                            if (
+                                trans_delta > MAX_TRANSLATION_DELTA
+                                or ang_delta > MAX_ROTATION_DELTA
+                            ):
+                                pose_ok = False
+
+                        if pose_ok:
+                            current_rt = (rvec, tvec)
+                            current_quat = curr_q
+                            current_position = np.array(tvec, dtype=float)
+                            cv2.drawFrameAxes(
+                                frame,
+                                CAMERA_MATRIX,
+                                DIST_COEFFS,
+                                rvec,
+                                tvec,
+                                DYNAMIC_MARKER_LENGTH * 0.5,
+                                2,
+                            )
+                        else:
+                            current_rt = None
+                            current_quat = None
+                            current_position = None
+                    tracker_corners = new_corners
+                    prev_gray = marker_gray
                 else:
                     tracker_corners = None
                     prev_gray = None
@@ -1831,7 +1769,6 @@ def process_video(
             }
         )
     sticker_measurements.sort(key=lambda m: m["frame"])
-    sticker_measurements = _trim_static_sticker_measurements(sticker_measurements)
     if impact_frame_idx is None:
         sticker_cutoff_frame = inference_end
     else:
@@ -1890,7 +1827,7 @@ def process_video(
 
 
 if __name__ == "__main__":
-    video_path = sys.argv[1] if len(sys.argv) > 1 else "Outdoor_Bad_Ballmisdetection_4.mp4"
+    video_path = sys.argv[1] if len(sys.argv) > 1 else "id17_test_good_2.mp4"
     ball_path = sys.argv[2] if len(sys.argv) > 2 else "ball_coords.json"
     sticker_path = sys.argv[3] if len(sys.argv) > 3 else "sticker_coords.json"
     frames_dir = sys.argv[4] if len(sys.argv) > 4 else "ball_frames"
