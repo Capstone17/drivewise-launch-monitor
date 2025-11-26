@@ -147,13 +147,16 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
         ValueError: If insufficient frames available after filtering
     """
 
+
     # Load data from JSON file
     with open(json_path, 'r') as f:
         data = json.load(f)
 
+
     # Filter by time threshold
     def after_threshold(d, threshold):
         return round(d['time'], 6) >= round(threshold, 6)
+
 
     frames = [d for d in data if after_threshold(d, time_threshold)]
     
@@ -163,10 +166,15 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
     frames_for_z = frames
     z_frames_removed = 0
     if detect_z_anomaly and len(frames) >= 3:
-        frames_for_z = remove_z_increasing_tail(frames, verbose)
+        result = remove_z_increasing_tail(frames, verbose)
+        if result is None:
+            # Too many frames removed, use finite difference fallback
+            return finite_difference_fallback(frames, verbose)
+        frames_for_z = result
         z_frames_removed = len(frames) - len(frames_for_z)
     
     print(f'Frames found: {len(frames)} (x/y), {len(frames_for_z)} (z)')
+
 
     # Always use as many frames as possible
     available_frames = len(frames)
@@ -174,6 +182,7 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
     
     if available_frames < 3:
         return finite_difference_fallback(frames, verbose)
+
 
     # Extract arrays for x and y (using all frames)
     t_vals = np.array([f['time'] for f in frames])
@@ -183,6 +192,7 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
     # Extract arrays for z (using filtered frames only)
     t_vals_z = np.array([f['time'] for f in frames_for_z])
     z_vals = np.array([f['z'] for f in frames_for_z])
+
 
     # Savitzky-Golay filtering for x and y
     if apply_filter and available_frames >= 3:
@@ -210,6 +220,7 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
         if sg_win_z > sg_poly_z:
             z_vals = savgol_filter(z_vals, sg_win_z, sg_poly_z)
 
+
     # Fit lines for x, y, and z (using appropriate datasets)
     x_rate, x_intercept = fit_line(t_vals, x_vals)
     y_rate, y_intercept = fit_line(t_vals, y_vals)
@@ -221,14 +232,8 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
         z_pred = z_rate * t_vals_z + z_intercept
         rmse_z = np.sqrt(np.mean((z_vals - z_pred) ** 2))
     elif available_frames_z == 2:
-        # Use finite difference for z
-        dt = t_vals_z[1] - t_vals_z[0]
-        z_rate = (z_vals[1] - z_vals[0]) / dt
-        z_intercept = None
-        r2_z = None
-        rmse_z = None
-        if verbose:
-            print("Warning: Using finite difference for z (only 2 valid z frames)")
+        # Use finite difference for z over last two decreasing frames
+        z_rate, z_intercept, r2_z, rmse_z = finite_difference_z(frames_for_z, verbose)
     else:
         z_rate = None
         z_intercept = None
@@ -237,15 +242,18 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
         if verbose:
             print("Warning: Insufficient z frames for velocity estimation")
 
+
     # R-squared diagnostics for x and y
     r2_x = calculate_r_squared(t_vals, x_vals, x_rate, x_intercept)
     r2_y = calculate_r_squared(t_vals, y_vals, y_rate, y_intercept)
+
 
     # RMS error diagnostics for x and y
     x_pred = x_rate * t_vals + x_intercept
     y_pred = y_rate * t_vals + y_intercept
     rmse_x = np.sqrt(np.mean((x_vals - x_pred) ** 2))
     rmse_y = np.sqrt(np.mean((y_vals - y_pred) ** 2))
+
 
     # Calculate r2_min only from available metrics
     r2_values = [r2_x, r2_y]
@@ -269,6 +277,7 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
         'window_length_z': sg_win_z,
         'poly_order_z': sg_poly_z
     }
+
 
     # Print diagnostics
     if verbose:
@@ -315,79 +324,118 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
         elif diagnostics['r2_min'] is not None:
             print(f"\nGood fit quality (all R² > {warn_threshold})")
 
+
     return x_rate, y_rate, z_rate, diagnostics
 
-# Since we usually get some frames at the end where the ball is partially detected, this can mess up the dz calculation.
-# To avoid this we can remove these frames when we calcuate for dz.
-def remove_z_increasing_tail(frames, verbose=True, increase_threshold=5.0, min_consecutive=2):
+
+def finite_difference_z(frames, verbose=True):
     """
-    Remove frames at the end where z starts consistently increasing (object appears to move away).
-    Since the object is always moving toward camera, z should decrease overall.
+    Calculate z velocity using finite differences between the last two frames
+    that show decreasing z (normal behavior for object moving toward camera).
+    
+    Args:
+        frames: List of frames with 'time' and 'z' keys
+        verbose: If True, print diagnostic information
+        
+    Returns:
+        tuple: (z_rate, z_intercept, r2_z, rmse_z)
+               z_intercept, r2_z, and rmse_z are None for finite difference
+    """
+    if len(frames) < 2:
+        if verbose:
+            print("Warning: Need at least 2 frames for z finite difference")
+        return None, None, None, None
+    
+    # Find last two frames with decreasing z
+    last_decreasing_idx = None
+    second_last_decreasing_idx = None
+    
+    for i in range(len(frames) - 1, 0, -1):
+        z_change = frames[i]['z'] - frames[i-1]['z']
+        
+        # Found a decreasing pair
+        if z_change < 0:
+            if last_decreasing_idx is None:
+                last_decreasing_idx = i
+                second_last_decreasing_idx = i - 1
+                break
+    
+    # If no decreasing pair found, just use last two frames
+    if last_decreasing_idx is None:
+        if verbose:
+            print("Warning: No decreasing z frames found, using last 2 frames for z finite difference")
+        last_decreasing_idx = len(frames) - 1
+        second_last_decreasing_idx = len(frames) - 2
+    
+    # Calculate finite difference
+    dt = frames[last_decreasing_idx]['time'] - frames[second_last_decreasing_idx]['time']
+    if dt == 0:
+        if verbose:
+            print("Warning: Selected frames have identical timestamps")
+        return None, None, None, None
+    
+    z_rate = (frames[last_decreasing_idx]['z'] - frames[second_last_decreasing_idx]['z']) / dt
+    
+    if verbose:
+        print(f"Using finite difference for z between frames {second_last_decreasing_idx} and {last_decreasing_idx}")
+        print(f"  Frame {second_last_decreasing_idx}: t={frames[second_last_decreasing_idx]['time']:.3f}, z={frames[second_last_decreasing_idx]['z']:.2f}")
+        print(f"  Frame {last_decreasing_idx}: t={frames[last_decreasing_idx]['time']:.3f}, z={frames[last_decreasing_idx]['z']:.2f}")
+        print(f"  z_rate: {z_rate:+.3f} units/sec")
+    
+    return z_rate, None, None, None
+
+
+def remove_z_increasing_tail(frames, verbose=True, min_frames_required=3):
+    """
+    Remove frames at the end where z shows large anomalous increases.
+    Since the object is always moving toward camera, large z increases indicate detection errors.
+    Scans backwards to find the EARLIEST anomalous frame.
     
     Args:
         frames: List of frames with 'z' values
         verbose: If True, print information about removed frames
-        increase_threshold: Minimum z increase (in units) to consider anomalous
-        min_consecutive: Number of consecutive increases needed to trigger removal
+        min_frames_required: Minimum frames to keep (to allow fitting). If we would
+                           remove too many, return None to trigger finite difference fallback.
         
     Returns:
-        Filtered list of frames with anomalous tail removed
+        Filtered list of frames with anomalous tail removed, or None if too many removed
     """
     if len(frames) < 3:
         return frames
     
     z_vals = np.array([f['z'] for f in frames])
     
-    # Calculate the overall trend (should be negative for decreasing z)
-    overall_slope = (z_vals[-1] - z_vals[0]) / (len(z_vals) - 1)
+    # Find the EARLIEST anomalous transition (large z increase) by scanning backwards
+    # We keep updating to earlier indices as we find them
+    cutoff_idx = None
     
-    # Look for where z starts increasing significantly and consistently
-    cutoff_idx = len(frames)
-    consecutive_increases = 0
-    
-    for i in range(len(frames) - 1):
-        z_change = z_vals[i + 1] - z_vals[i]
+    for i in range(len(frames) - 1, 0, -1):
+        z_change = z_vals[i] - z_vals[i-1]
         
-        # Check if this is a significant increase (not just noise)
-        if z_change > increase_threshold:
-            consecutive_increases += 1
-            
-            # If we see sustained increases, mark this as the cutoff
-            if consecutive_increases >= min_consecutive:
-                # Backtrack to where the increases started
-                cutoff_idx = i - consecutive_increases + 1
-                break
-        else:
-            # Reset counter if we don't see an increase
-            consecutive_increases = 0
+        # If we see a large POSITIVE change (z increasing = moving away)
+        if z_change > 5.0:
+            # Keep this as the cutoff - scanning backwards means this is earlier
+            cutoff_idx = i
+            # DON'T break - keep looking for even earlier anomalies
     
-    # Additional check: if the LAST FRAME shows a single large anomalous jump
-    if cutoff_idx == len(frames) and len(frames) >= 2:
-        last_z_change = z_vals[-1] - z_vals[-2]
-        if last_z_change > increase_threshold:
-            cutoff_idx = len(frames) - 1
-            if verbose:
-                print(f"Z-anomaly detected: Last frame shows large z-increase of {last_z_change:.2f} units")
+    # If no anomaly found, return all frames
+    if cutoff_idx is None:
+        return frames
     
-    # Additional check: if the last few frames show a strong upward trend
-    # compared to the overall downward trend, remove them
-    if cutoff_idx == len(frames) and len(frames) >= 5:
-        # Check last 3-4 frames for anomalous behavior
-        tail_length = min(4, len(frames) // 3)
-        tail_slope = (z_vals[-1] - z_vals[-tail_length]) / tail_length
-        
-        # If tail is going up while overall trend is down, it's anomalous
-        if tail_slope > 0 and overall_slope < 0 and abs(tail_slope) > abs(overall_slope):
-            cutoff_idx = len(frames) - tail_length
-    
-    if cutoff_idx < len(frames):
-        removed_count = len(frames) - cutoff_idx
+    # Safety check: Don't remove so many frames that we can't fit
+    if cutoff_idx < min_frames_required:
         if verbose:
-            print(f"Z-anomaly detected at frame {cutoff_idx}: Will use only first {cutoff_idx} frames for z-fitting")
-            print(f"  Removed {removed_count} frame(s) where z increased anomalously")
-        return frames[:cutoff_idx]
+            print(f"Z-anomaly detection would remove too many frames ({len(frames) - cutoff_idx} removed, {cutoff_idx} remaining)")
+            print(f"  Falling back to finite difference method")
+        return None
     
-    return frames
+    # Report what we're removing
+    removed_count = len(frames) - cutoff_idx
+    if verbose:
+        print(f"Z-anomaly detected: Removed last {removed_count} frame(s)")
+        print(f"  Kept frames 0-{cutoff_idx-1} with z values: {[round(f['z'], 2) for f in frames[:min(5, cutoff_idx)]]}{' ...' if cutoff_idx > 5 else ''}")
+        print(f"  Removed frames {cutoff_idx}-{len(frames)-1} with z values: {[round(f['z'], 2) for f in frames[cutoff_idx:]]}")
+    return frames[:cutoff_idx]
 
 
 # Worst-case scenario: If we only have 2 frames, we must use finite difference
@@ -617,8 +665,8 @@ def return_metrics() -> dict:
     src_coords = str(src_coords_path) + "/"
     ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
     sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
-    ball_coords_path = "../ball_coords.json"  # STANDALONE
-    sticker_coords_path = "../sticker_coords.json"  # STANDALONE
+    # ball_coords_path = "../ball_coords.json"  # STANDALONE
+    # sticker_coords_path = "../sticker_coords.json"  # STANDALONE
 
     # ---------------------------------
     # Find impact time
