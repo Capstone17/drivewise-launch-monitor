@@ -1,31 +1,30 @@
 from test_metric_output import return_metrics
 
-import random
-
 
 # Helper function for unsuccessful club detection
 def ball_only_message(side_angle):
     if side_angle is None:
-        return "Error: Side angle data unavailable."
+        return ("Ignore", "Error: Side angle data unavailable.")
     
     if side_angle < -2.0:
-        return "Pull: Both your face and path are left, causing a pull. Try aligning your stance and path more rightward and ensure the face matches the path."
+        return ("Pull", "Pull: Both your face and path are left, causing a pull. Try weakening your grip on the club.")
     elif side_angle > 2.0:
-        return "Push: A rightward path and open face are sending shots directly right. Work on squaring the clubface and adjusting alignment toward the target."
+        return ("Push", "Push: Both your face and path are right, causing a push. Try strengthening your grip on the club.")
     
-    return "Straight: Nice shot!"
+    return ("Ideal", "Straight: Nice shot!")
+
 
 # Helper function for unsuccessful ball detection
 def club_only_message(swing_path):
     if swing_path is None:
-        return "Error: Swing path data unavailable."
+        return ("Ignore", "Error: Swing path data unavailable.")
     
     if swing_path < -3.0:
-        return "Fade: Your shot is curving right. If your shot is landing right of the target, try dropping your hands before turning your hips at the beginning of your downswing."
+        return ("Slice", "Fade: Your shot is curving right. If your shot is landing right of the target, try slightly closing your stance.")
     elif swing_path > 3.0:
-        return "Draw: Your shot is curving left. If your shot is landing left of the target, try keeping the clubhead in front of your body and hitting down on the ball."
+        return ("Hook", "Draw: Your shot is curving left. If your shot is landing left of the target, try slightly opening your stance.")
     
-    return "Straight: Nice shot!"
+    return ("Ideal", "Straight: Nice shot!")
 
 
 # -------------------------------
@@ -122,6 +121,7 @@ def rule_based_system(club_selection):
         # - Ball detection error, fall back to "Club Only Detected"
         # -------------------------------
         {
+            "group": "Ignore",
             "name": "Club and Ball Detection Error",
             "category": "all",
             "severity": 7,
@@ -129,6 +129,7 @@ def rule_based_system(club_selection):
             "action": lambda: "Error: Shot was not detected. Make sure your device is calibrated and placed on a flat surface, and aim for minimal movement in the background."
         },
         {
+            "group": None,  # Will be determined dynamically
             "name": "Ball Only Detected",
             "category": "all",
             "severity": 6,
@@ -136,6 +137,7 @@ def rule_based_system(club_selection):
             "action": lambda: ball_only_message(raw_data['side_angle'])
         },
         {
+            "group": None,  # Will be determined dynamically
             "name": "Club Only Detected",
             "category": "all",
             "severity": 6,
@@ -148,6 +150,7 @@ def rule_based_system(club_selection):
         # -------------------------------
         {
             # Worst-case
+            "group": "Pull",
             "name": "Pull Hook",
             "category": "all",
             "severity": 5,
@@ -160,6 +163,7 @@ def rule_based_system(club_selection):
             ])    
         },
         {
+            "group": "Pull",
             "name": "Pull Draw",
             "category": "all",
             "severity": 4,
@@ -168,6 +172,7 @@ def rule_based_system(club_selection):
             "action": lambda: "Pull draw: Your clubface is closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right."
         },
         {
+            "group": "Pull",
             "name": "Pull",
             "category": "all",
             "severity": 3,
@@ -176,6 +181,7 @@ def rule_based_system(club_selection):
         },
         {
             # Ideal fade
+            "group": "Ideal",
             "name": "Pull Fade",
             "category": "all",
             "severity": 1,
@@ -183,6 +189,7 @@ def rule_based_system(club_selection):
             "action": lambda: "Fade: Nice fade! You're pure."  # Encouraging message
         },
         {
+            "group": "Ignore",
             "name": "Pull Slice",
             "category": "all",
             "severity": 2,
@@ -190,6 +197,7 @@ def rule_based_system(club_selection):
             "action": lambda: "Pull slice: Your club face is aiming left and your out-to-in path are producing sidespin. Work on neutralizing your swing path and straightening the face angle to prevent excessive spin."
         },
         {
+            "group": "Hook",
             "name": "Straight Hook",
             "category": "all",
             "severity": 4,
@@ -197,6 +205,7 @@ def rule_based_system(club_selection):
             "action": lambda: "Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it."
         },
         {
+            "group": "Hook",
             "name": "Straight Draw",
             "category": "all",
             "severity": 3,
@@ -206,6 +215,7 @@ def rule_based_system(club_selection):
         },
         {
             # Ideal straight
+            "group": "Ideal",
             "name": "Straight",
             "category": "all",
             "severity": 1,
@@ -213,6 +223,7 @@ def rule_based_system(club_selection):
             "action": lambda: "Straight: Now that is a strike!"  # Encouraging message
         },
         {
+            "group": "Slice",
             "name": "Straight Fade",
             "category": "all",
             "severity": 3,
@@ -221,6 +232,7 @@ def rule_based_system(club_selection):
             "action": lambda: "Straight fade: A mild leftward path with a square face produces this fade. To straighten the shot, shift your path slightly more right."
         },
         {
+            "group": "Slice",
             "name": "Straight Slice",
             "category": "all",
             "severity": 4,
@@ -228,6 +240,7 @@ def rule_based_system(club_selection):
             "action": lambda: "Straight slice: The face is square, but your path is far left, causing a slice. Try to shallow your path and swing more inside-to-out."
         },
         {
+            "group": "Ignore",
             "name": "Push Hook",
             "category": "all",
             "severity": 2,
@@ -236,6 +249,7 @@ def rule_based_system(club_selection):
         },
         {
             # Ideal draw
+            "group": "Ideal",
             "name": "Push Draw",
             "category": "all",
             "severity": 1,
@@ -243,6 +257,7 @@ def rule_based_system(club_selection):
             "action": lambda: "Draw: Buttery draw, was that Rory?"
         },
         {
+            "group": "Push",
             "name": "Push",
             "category": "all",
             "severity": 3,
@@ -250,6 +265,7 @@ def rule_based_system(club_selection):
             "action": lambda: "Push: A rightward path and open face are sending shots directly right. Work on squaring the clubface and adjusting alignment toward the target."
         },
         {
+            "group": "Push",
             "name": "Push Fade",
             "category": "all",
             "severity": 4,
@@ -258,12 +274,13 @@ def rule_based_system(club_selection):
         },
         {
             # Worst-case
+            "group": "Push",
             "name": "Push Slice",
             "category": "all",
             "severity": 5,
             "condition": lambda f: (f["face_extreme_right"] and (f["path_straight"] or f["path_slight_left"] or f["path_extreme_left"]))   or   (f["face_slight_right"] and f["path_extreme_left"])   or   (f["face_slight_right"] and f["path_slight_left"]),
             "action": lambda: "Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion."
-        },
+        }
         # -------------------------------
         # Ball flight
         # - Heavily depends on club selection; currently we assume 7-iron
@@ -271,15 +288,6 @@ def rule_based_system(club_selection):
         #    - We are currently using LPGA because their numbers are closer to our target market of novice to intermediate players
         # - We will consider drivers, woods, long irons (2-4), mid-irons (5-7), long-irons (8-PW), and wedges
         # -------------------------------
-
-        ### MID-IRONS
-        {
-            "name": "Good Attack",
-            "category": "mid-iron",
-            "severity": 1,
-            "condition": lambda f: f["attack_1.5to3_down"],
-            "action": lambda: "Good attack angle: An extremely upward attack can lead to topped shots or high spin. Try to swing down on the ball and keep your weight more centered through impact."
-        }
     ]
 
 
@@ -296,8 +304,16 @@ def rule_based_system(club_selection):
     if triggered_rules:
         # Pick rule with highest severity
         best_rule = max(triggered_rules, key=lambda r: r["severity"])
-        feedback = best_rule["action"]()
+        result = best_rule["action"]()
+        
+        # Check if result is a tuple (group, message) or just message
+        if isinstance(result, tuple):
+            group, feedback = result
+        else:
+            group = best_rule["group"]
+            feedback = result
     else:
+        group = "Ideal"
         feedback = "No swing issues detected."
 
     # -----------------------
@@ -327,6 +343,7 @@ def rule_based_system(club_selection):
     print(f"{feedback}")
 
     return {
+        "group": group,
         "metrics": {
             "type": "metrics",
             "face angle": round(raw_data["face_angle"], 2),
