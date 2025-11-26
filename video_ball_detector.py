@@ -39,6 +39,10 @@ except Exception:
 ACTUAL_BALL_RADIUS = 2.38
 FOCAL_LENGTH = 1755.0  # pixels
 
+# Physical scene assumptions used to tame X/Y scaling (Z calibration stays untouched)
+FRAME_WIDTH_METERS = float(os.environ.get("FRAME_WIDTH_METERS", "0.5"))
+STATIONARY_BALL_DISTANCE_METERS = float(os.environ.get("STATIONARY_BALL_DISTANCE_METERS", "1.3"))
+
 DYNAMIC_MARKER_LENGTH = 2.38
 MIN_BALL_RADIUS_PX = 9  # pixels
 EDGE_MARGIN_PX = 1
@@ -136,6 +140,20 @@ def apply_calibration(calibration: dict[str, object] | None = None) -> dict[str,
         "ball_radius": ACTUAL_BALL_RADIUS,
     }
     return _CURRENT_CALIBRATION
+
+
+def _xy_focal_length_for_frame(frame_width_px: float) -> float:
+    """Return a focal-like scalar that enforces the assumed physical frame width."""
+
+    width_m = FRAME_WIDTH_METERS
+    ref_z_m = STATIONARY_BALL_DISTANCE_METERS
+    if frame_width_px <= 0 or width_m <= 0.0 or ref_z_m <= 0.0:
+        return FOCAL_LENGTH
+    # Convert to centimetres to stay aligned with the rest of the pipeline units.
+    width_cm = width_m * 100.0
+    ref_z_cm = ref_z_m * 100.0
+    focal_override = (frame_width_px * ref_z_cm) / width_cm
+    return float(focal_override)
 
 
 apply_calibration()
@@ -1504,6 +1522,7 @@ def process_video(
     inference_end = min(total_frames, end_frame)
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
+    xy_focal_length = _xy_focal_length_for_frame(float(w) if w is not None else 0.0)
     if frames_dir:
         os.makedirs(frames_dir, exist_ok=True)
         for name in os.listdir(frames_dir):
@@ -1547,6 +1566,7 @@ def process_video(
             marker_gray = cv2.GaussianBlur(marker_gray, (3, 3), 0)
         if h is None:
             h, w = frame.shape[:2]
+            xy_focal_length = _xy_focal_length_for_frame(float(w))
         t = frame_idx / video_fps
         detections: list[dict] = []
         in_window = start_frame <= frame_idx < end_frame
@@ -1573,8 +1593,8 @@ def process_video(
                     if last_ball_center is not None and np.linalg.norm(center - last_ball_center) > MAX_CENTER_JUMP_PX:
                         pass
                     else:
-                        bx = (cx - w / 2.0) * distance / FOCAL_LENGTH
-                        by = (cy - h / 2.0) * distance / FOCAL_LENGTH
+                        bx = (cx - w / 2.0) * distance / xy_focal_length
+                        by = (cy - h / 2.0) * distance / xy_focal_length
                         bz = distance - 30.0
                         ball_coords.append(
                             {
