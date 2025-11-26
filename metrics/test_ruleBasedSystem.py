@@ -340,8 +340,8 @@ def rule_based_system(club_selection):
     print(f"{feedback}")
 
     return {
-        "group": group,
         "metrics": {
+            "group": group,
             "type": "metrics",
             "face angle": round(raw_data["face_angle"], 2),
             "swing path": round(raw_data["swing_path"], 2),
