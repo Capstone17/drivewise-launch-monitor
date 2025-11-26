@@ -7,7 +7,7 @@ def ball_only_message(side_angle):
         return ("Ignore", "Error: Side angle data unavailable.")
     
     if side_angle < -2.0:
-        return ("Pull", "Pull: Both your face and path are left, causing a pull. Try weakening your grip on the club.")
+        return ("Pull", "Pull: Both your face and path are left, causing a pull. Try weakening your grip on the club and keeping the face more square.")
     elif side_angle > 2.0:
         return ("Push", "Push: Both your face and path are right, causing a push. Try strengthening your grip on the club.")
     
@@ -150,17 +150,14 @@ def rule_based_system(club_selection):
         # -------------------------------
         {
             # Worst-case
-            "group": "Pull",
+            "group": "Hook",
             "name": "Pull Hook",
             "category": "all",
             "severity": 5,
             "condition": lambda f: ((f["face_slight_left"] and f["path_extreme_right"]) or
                                     (f["face_extreme_left"] and (f["path_slight_right"] or f["path_extreme_right"]))
             ),
-            "action": lambda: random.choice([
-                "Pull hook: You're closing the clubface too much and swinging in-to-out. Try aligning your feet and shoulders parallel to the target before you swing.",
-                "Pull hook: You're closing the clubface too much and swinging in-to-out. Try leaving the clubface more open and weakening your grip."
-            ])    
+            "action": lambda: "Pull hook: You're closing the clubface too much and swinging in-to-out. If your shot is landing left of the target, try slightly opening your stance."
         },
         {
             "group": "Pull",
@@ -169,7 +166,7 @@ def rule_based_system(club_selection):
             "severity": 4,
             "condition": lambda f: (f["face_slight_left"] and f["path_straight"]) or 
                                     (f["face_extreme_left"] and (f["path_straight"] or f["path_slight_left"])),
-            "action": lambda: "Pull draw: Your clubface is closed with a neutral-to-left path. Focus on squaring the face and aiming your swing path a bit more to the right."
+            "action": lambda: "Pull draw: Your clubface is closed with a neutral-to-left path. Try weakening your grip and keeping the face more square."
         },
         {
             "group": "Pull",
@@ -177,7 +174,7 @@ def rule_based_system(club_selection):
             "category": "all",
             "severity": 3,
             "condition": lambda f: (f["face_slight_left"] and f["path_slight_left"] and not f["face_to_path_slight_left"])   or   (f["face_extreme_left"] and (f["path_extreme_left"])),
-            "action": lambda: "Pull: Both your face and path are left, causing a pull. Try aligning your stance and path more rightward and ensure the face matches the path."
+            "action": lambda: "Pull: Both your face and path are left, causing a pull. Try weakening your grip and keeping the face more square."
         },
         {
             # Ideal fade
@@ -186,15 +183,15 @@ def rule_based_system(club_selection):
             "category": "all",
             "severity": 1,
             "condition": lambda f: f["face_slight_left"] and f["path_slight_left"] and f["face_to_path_slight_left"],
-            "action": lambda: "Fade: Nice fade! You're pure."  # Encouraging message
+            "action": lambda: "Fade: Pure fade, was that Tiger Woods?"  # Encouraging message
         },
         {
-            "group": "Ignore",
+            "group": "Pull",
             "name": "Pull Slice",
             "category": "all",
             "severity": 2,
             "condition": lambda f: f["face_slight_left"] and f["path_extreme_left"],
-            "action": lambda: "Pull slice: Your club face is aiming left and your out-to-in path are producing sidespin. Work on neutralizing your swing path and straightening the face angle to prevent excessive spin."
+            "action": lambda: "Pull slice: Your club face is aiming left and your swing path is out-to-in. Try weakening your grip and keeping the face more square."
         },
         {
             "group": "Hook",
@@ -202,7 +199,7 @@ def rule_based_system(club_selection):
             "category": "all",
             "severity": 4,
             "condition": lambda f: f["face_straight"] and f["path_extreme_right"],
-            "action": lambda: "Straight hook: Your path is far right while the face stays square. Aim to reduce the in-to-out path and allow your face to release away from your body to match it."
+            "action": lambda: "Straight hook: Your path is in-to-out while the face stays square. If your shot is landing left of the target, try slightly opening your stance."
         },
         {
             "group": "Hook",
@@ -211,7 +208,7 @@ def rule_based_system(club_selection):
             "severity": 3,
             "condition": lambda f:  (f["face_straight"] and f["path_slight_right"]) or
                                     (f["face_slight_left"] and f["path_slight_right"]),
-            "action": lambda: "Straight draw: A gentle rightward path with a square face is causing a draw. If your shot is landing too far left of the target, try slightly weakening your grip or evening out your path."
+            "action": lambda: "Straight draw: A gentle rightward path with a square face is causing a draw. If your shot is landing left of the target, try slightly opening your stance."
         },
         {
             # Ideal straight
@@ -229,7 +226,7 @@ def rule_based_system(club_selection):
             "severity": 3,
             "condition": lambda f:  (f["face_straight"] and f["path_slight_left"]) or
                                     (f["face_slight_right"] and f["path_slight_left"]),
-            "action": lambda: "Straight fade: A mild leftward path with a square face produces this fade. To straighten the shot, shift your path slightly more right."
+            "action": lambda: "Straight fade: A mild leftward path with a square face produces this fade. If your shot is landing right of the target, try slightly closing your stance."
         },
         {
             "group": "Slice",
@@ -237,15 +234,15 @@ def rule_based_system(club_selection):
             "category": "all",
             "severity": 4,
             "condition": lambda f: f["face_straight"] and f["path_extreme_left"],
-            "action": lambda: "Straight slice: The face is square, but your path is far left, causing a slice. Try to shallow your path and swing more inside-to-out."
+            "action": lambda: "Straight slice: The face is square, but your path is far left, causing a slice. If your shot is landing right of the target, try slightly closing your stance."
         },
         {
-            "group": "Ignore",
+            "group": "Push",
             "name": "Push Hook",
             "category": "all",
             "severity": 2,
             "condition": lambda f: f["face_slight_right"] and f["path_extreme_right"],
-            "action": lambda: "Push hook: Your path is in-to-out and the face is slightly open. Reduce the in-to-out path and check for overly strong grip or early release."
+            "action": lambda: "Push hook: Your path is in-to-out and the face is slightly open. Try strengthening your grip on the club."
         },
         {
             # Ideal draw
@@ -254,7 +251,7 @@ def rule_based_system(club_selection):
             "category": "all",
             "severity": 1,
             "condition": lambda f: f["face_slight_right"] and f["path_slight_right"] and f["face_to_path_slight_right"],
-            "action": lambda: "Draw: Buttery draw, was that Rory?"
+            "action": lambda: "Draw: Buttery draw, was that Rory McIlroy?"
         },
         {
             "group": "Push",
@@ -262,7 +259,7 @@ def rule_based_system(club_selection):
             "category": "all",
             "severity": 3,
             "condition": lambda f: (f["face_slight_right"] and f["path_slight_right"] and not f["face_to_path_slight_right"])   or   (f["face_extreme_right"] and f["path_extreme_right"]),
-            "action": lambda: "Push: A rightward path and open face are sending shots directly right. Work on squaring the clubface and adjusting alignment toward the target."
+            "action": lambda: "Push: A rightward path and open face are sending shots directly right. Try strengthening your grip on the club."
         },
         {
             "group": "Push",
@@ -270,16 +267,16 @@ def rule_based_system(club_selection):
             "category": "all",
             "severity": 4,
             "condition": lambda f: (f["face_extreme_right"] and f["path_slight_right"])   or   (f["face_slight_right"] and f["path_straight"]),
-            "action": lambda: "Push fade: You're swinging slightly right with an open face, causing a fading shot that starts right. Square the face more at impact or realign the path to reduce curvature."
+            "action": lambda: "Push fade: You're swinging slightly right with an open face, causing a fading shot that starts right. Try strengthening your grip on the club."
         },
         {
             # Worst-case
-            "group": "Push",
+            "group": "Slice",
             "name": "Push Slice",
             "category": "all",
             "severity": 5,
             "condition": lambda f: (f["face_extreme_right"] and (f["path_straight"] or f["path_slight_left"] or f["path_extreme_left"]))   or   (f["face_slight_right"] and f["path_extreme_left"])   or   (f["face_slight_right"] and f["path_slight_left"]),
-            "action": lambda: "Push slice: Your face is open and your path is too far left, exaggerating spin. Square the face earlier in the downswing and reduce your out-to-in motion."
+            "action": lambda: "Push slice: Your face is open and your path is too far left, exaggerating spin. If your shot is landing right of the target, try slightly closing your stance."
         }
         # -------------------------------
         # Ball flight
