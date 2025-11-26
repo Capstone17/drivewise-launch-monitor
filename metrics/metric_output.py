@@ -127,126 +127,77 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
     """
     Compute velocity components from position data after a specified time,
     with optional Savitzky-Golay filtering and fit quality diagnostics.
-    
-    Args:
-        json_path: Path to JSON file with position data (time, x, y, z)
-        time_threshold: Only consider frames with time > this value
-        apply_filter: If True, apply Savitzky-Golay filter to smooth data
-        window_length: Window length for Savitzky-Golay filter (must be odd)
-        poly_order: Polynomial order for Savitzky-Golay filter (typically 2-3)
-        warn_threshold: R² threshold below which to warn about poor fit quality
-        verbose: If True, print fit quality diagnostics
-        detect_z_anomaly: If True, remove frames where z increases for z-fitting only
-        
-    Returns:
-        tuple: (x_rate, y_rate, z_rate, diagnostics)
-            - x_rate, y_rate, z_rate: velocity components in units/second
-            - diagnostics: dict with R² values and other fit quality metrics
-        
-    Raises:
-        ValueError: If insufficient frames available after filtering
     """
-
 
     # Load data from JSON file
     with open(json_path, 'r') as f:
         data = json.load(f)
 
-
     # Filter by time threshold
     def after_threshold(d, threshold):
         return round(d['time'], 6) >= round(threshold, 6)
 
-
     frames = [d for d in data if after_threshold(d, time_threshold)]
-    
-    # Detect anomalous z-increasing frames for z-only filtering
-    # Even if there are only 3 frames, we should be removing these for z calculation.
-    #   If this is the case we can rely on our finite difference fallback later.
-    frames_for_z = frames
+
+    # Detect anomalous z-increasing frames; this now drives x,y,t as well
+    frames_for_fit = frames
     z_frames_removed = 0
     if detect_z_anomaly and len(frames) >= 3:
         result = remove_z_increasing_tail(frames, verbose)
         if result is None:
-            # Too many frames removed, use finite difference fallback
+            # Too many frames removed, use finite difference fallback on full frames
             return finite_difference_fallback(frames, verbose)
-        frames_for_z = result
-        z_frames_removed = len(frames) - len(frames_for_z)
-    
-    print(f'Frames found: {len(frames)} (x/y), {len(frames_for_z)} (z)')
+        frames_for_fit = result
+        z_frames_removed = len(frames) - len(frames_for_fit)
 
+    print(f'Frames found: {len(frames)} (raw), {len(frames_for_fit)} (used for x/y/z)')
 
-    # Always use as many frames as possible
-    available_frames = len(frames)
-    available_frames_z = len(frames_for_z)
-    
+    available_frames = len(frames_for_fit)
     if available_frames < 3:
-        return finite_difference_fallback(frames, verbose)
+        # Not enough clean frames; fall back to simple finite difference on full frames
+        return finite_difference_fallback(frames_for_fit, verbose)
 
+    # Extract arrays for t, x, y, z using the same filtered frames
+    t_vals = np.array([f['time'] for f in frames_for_fit])
+    x_vals = np.array([f['x'] for f in frames_for_fit])
+    y_vals = np.array([f['y'] for f in frames_for_fit])
+    z_vals = np.array([f['z'] for f in frames_for_fit])
 
-    # Extract arrays for x and y (using all frames)
-    t_vals = np.array([f['time'] for f in frames])
-    x_vals = np.array([f['x'] for f in frames])
-    y_vals = np.array([f['y'] for f in frames])
-    
-    # Extract arrays for z (using filtered frames only)
-    t_vals_z = np.array([f['time'] for f in frames_for_z])
-    z_vals = np.array([f['z'] for f in frames_for_z])
-
-
-    # Savitzky-Golay filtering for x and y
+    # Savitzky-Golay filtering for x, y, z on the same frame set
+    sg_win = sg_poly = None
     if apply_filter and available_frames >= 3:
         max_window = available_frames if available_frames % 2 == 1 else available_frames - 1
         sg_win = min(window_length, max_window)
-        if sg_win < 3: sg_win = 3
+        if sg_win < 3:
+            sg_win = 3
         sg_poly = min(poly_order, sg_win - 1)
-        
+
         if sg_win > sg_poly:
             x_vals = savgol_filter(x_vals, sg_win, sg_poly)
             y_vals = savgol_filter(y_vals, sg_win, sg_poly)
-    else:
-        sg_win = None
-        sg_poly = None
-    
-    # Savitzky-Golay filtering for z (separate window based on available z frames)
-    sg_win_z = None
-    sg_poly_z = None
-    if apply_filter and available_frames_z >= 3:
-        max_window_z = available_frames_z if available_frames_z % 2 == 1 else available_frames_z - 1
-        sg_win_z = min(window_length, max_window_z)
-        if sg_win_z < 3: sg_win_z = 3
-        sg_poly_z = min(poly_order, sg_win_z - 1)
-        
-        if sg_win_z > sg_poly_z:
-            z_vals = savgol_filter(z_vals, sg_win_z, sg_poly_z)
+            z_vals = savgol_filter(z_vals, sg_win, sg_poly)
 
-
-    # Fit lines for x, y, and z (using appropriate datasets)
+    # Fit lines for x, y
     x_rate, x_intercept = fit_line(t_vals, x_vals)
     y_rate, y_intercept = fit_line(t_vals, y_vals)
-    
-    # Handle z separately - may need fallback if too few z frames
-    if available_frames_z >= 3:
-        z_rate, z_intercept = fit_line(t_vals_z, z_vals)
-        r2_z = calculate_r_squared(t_vals_z, z_vals, z_rate, z_intercept)
-        z_pred = z_rate * t_vals_z + z_intercept
+
+    # Handle z separately - may need finite-difference fallback
+    if available_frames >= 3:
+        z_rate, z_intercept = fit_line(t_vals, z_vals)
+        r2_z = calculate_r_squared(t_vals, z_vals, z_rate, z_intercept)
+        z_pred = z_rate * t_vals + z_intercept
         rmse_z = np.sqrt(np.mean((z_vals - z_pred) ** 2))
-    elif available_frames_z == 2:
-        # Use finite difference for z over last two decreasing frames
-        z_rate, z_intercept, r2_z, rmse_z = finite_difference_z(frames_for_z, verbose)
+    elif available_frames == 2:
+        # Use finite difference for z over last two decreasing frames in frames_for_fit
+        z_rate, z_intercept, r2_z, rmse_z = finite_difference_z(frames_for_fit, verbose)
     else:
-        z_rate = None
-        z_intercept = None
-        r2_z = None
-        rmse_z = None
+        z_rate = z_intercept = r2_z = rmse_z = None
         if verbose:
             print("Warning: Insufficient z frames for velocity estimation")
-
 
     # R-squared diagnostics for x and y
     r2_x = calculate_r_squared(t_vals, x_vals, x_rate, x_intercept)
     r2_y = calculate_r_squared(t_vals, y_vals, y_rate, y_intercept)
-
 
     # RMS error diagnostics for x and y
     x_pred = x_rate * t_vals + x_intercept
@@ -254,12 +205,11 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
     rmse_x = np.sqrt(np.mean((x_vals - x_pred) ** 2))
     rmse_y = np.sqrt(np.mean((y_vals - y_pred) ** 2))
 
-
-    # Calculate r2_min only from available metrics
+    # r2_min over available components
     r2_values = [r2_x, r2_y]
     if r2_z is not None:
         r2_values.append(r2_z)
-    
+
     diagnostics = {
         'r2_x': r2_x,
         'r2_y': r2_y,
@@ -268,29 +218,22 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
         'rmse_x': rmse_x,
         'rmse_y': rmse_y,
         'rmse_z': rmse_z,
-        'num_frames': available_frames,
-        'num_frames_z': available_frames_z,
+        'num_frames': len(frames),
+        'num_frames_used': available_frames,
         'z_frames_removed': z_frames_removed,
         'filtered': apply_filter and available_frames >= 3,
         'window_length': sg_win,
         'poly_order': sg_poly,
-        'window_length_z': sg_win_z,
-        'poly_order_z': sg_poly_z
     }
 
-
-    # Print diagnostics
     if verbose:
         print(f"\n=== Velocity Fit Diagnostics ===")
-        print(f"Frames used: {available_frames} (x/y), {available_frames_z} (z)")
+        print(f"Frames found: {len(frames)}, used: {available_frames}")
         if z_frames_removed > 0:
-            print(f"  - Removed {z_frames_removed} z-anomaly frames (z increasing)")
-        print(f"Time range: {t_vals[0]:.3f} to {t_vals[-1]:.3f} seconds")
+            print(f"  - Removed {z_frames_removed} anomalous frame(s) (x,y,z)")
+        print(f"Time range (used): {t_vals[0]:.3f} to {t_vals[-1]:.3f} seconds")
         if diagnostics['filtered']:
-            print(f"Filtering applied: Yes")
-            print(f"  - x/y: Window={sg_win}, Poly={sg_poly}")
-            if sg_win_z:
-                print(f"  - z: Window={sg_win_z}, Poly={sg_poly_z}")
+            print(f"Filtering applied: Yes (Window={sg_win}, Poly={sg_poly})")
         else:
             print(f"Filtering applied: No")
         print(f"\nVelocity components:")
@@ -306,24 +249,19 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
         if r2_z is not None:
             print(f"  z: {r2_z:.4f}")
         else:
-            print(f"  z: N/A")
+            print("  z: N/A")
         print(f"\nRMS errors:")
         print(f"  x: {rmse_x:.4f} units")
         print(f"  y: {rmse_y:.4f} units")
         if rmse_z is not None:
             print(f"  z: {rmse_z:.4f} units")
         else:
-            print(f"  z: N/A")
-        
+            print("  z: N/A")
+
         if diagnostics['r2_min'] is not None and diagnostics['r2_min'] < warn_threshold:
             print(f"\nWARNING: Poor fit quality detected (min R² = {diagnostics['r2_min']:.3f} < {warn_threshold})")
-            print("    This suggests either:")
-            print("    - Velocity is not constant after the threshold")
-            print("    - Data contains significant noise")
-            print("    - Time threshold may be incorrectly chosen")
         elif diagnostics['r2_min'] is not None:
             print(f"\nGood fit quality (all R² > {warn_threshold})")
-
 
     return x_rate, y_rate, z_rate, diagnostics
 
@@ -663,10 +601,10 @@ def return_metrics() -> dict:
     # Coordinate source paths
     src_coords_path = Path("~/Documents/webcamGolf").expanduser()
     src_coords = str(src_coords_path) + "/"
-    ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
-    sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
-    # ball_coords_path = "../ball_coords.json"  # STANDALONE
-    # sticker_coords_path = "../sticker_coords.json"  # STANDALONE
+    # ball_coords_path = os.path.join(src_coords, 'ball_coords.json')  # PIPELINE
+    # sticker_coords_path = os.path.join(src_coords, 'sticker_coords.json')  # PIPELINE
+    ball_coords_path = "../ball_coords.json"  # STANDALONE
+    sticker_coords_path = "../sticker_coords.json"  # STANDALONE
 
     # ---------------------------------
     # Find impact time
