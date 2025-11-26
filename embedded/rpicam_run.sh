@@ -43,17 +43,13 @@ fi
 
 output_dir=~/Documents/webcamGolf
 
-# Find next available output file name (tst.mp4, tst1.mp4, tst2.mp4, ...)
+# Find next available output file name (vid_1.mp4, vid_2.mp4, ...)
 find_next_output_file() {
     base="$1"
     ext="$2"
-    n=0
+    n=1
     while :; do
-        if [[ $n -eq 0 ]]; then
-            f="$output_dir/${base}${cam1:+1}.$ext"
-        else
-            f="$output_dir/${base}${cam1:+1}_$n.$ext"
-        fi
+        f="$output_dir/${base}${cam1:+1}_$n.$ext"
         [[ ! -e "$f" ]] && { echo "$f"; return; }
         ((n++))
     done
