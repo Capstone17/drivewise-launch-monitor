@@ -631,7 +631,7 @@ def metrics_with_ball(ball_dx, ball_dy, ball_dz, marker_dx, marker_dy, marker_dz
         side_angle = horizontal_movement_angle_from_rates(ball_dx, ball_dz)
         
         # Check for extreme return values
-        if (abs(side_angle) > 50):
+        if (abs(side_angle) > 56):
             print(f"Extreme side angle {side_angle}; using default of 0.00")
             side_angle = None
         
