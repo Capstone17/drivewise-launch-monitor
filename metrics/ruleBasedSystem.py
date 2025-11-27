@@ -71,9 +71,9 @@ def rule_based_system(club_selection):
 
         # Face angle facts - with None checks
         "face_extreme_left": raw_data['face_angle'] is not None and raw_data['face_angle'] < -6.0,
-        "face_slight_left": raw_data['face_angle'] is not None and -6.0 <= raw_data['face_angle'] < -3.0,
-        "face_straight": raw_data['face_angle'] is not None and -3.0 <= raw_data['face_angle'] < 3.0,
-        "face_slight_right": raw_data['face_angle'] is not None and 3.0 <= raw_data['face_angle'] < 6.0,
+        "face_slight_left": raw_data['face_angle'] is not None and -6.0 <= raw_data['face_angle'] < -2.0,
+        "face_straight": raw_data['face_angle'] is not None and -2.0 <= raw_data['face_angle'] < 2.0,
+        "face_slight_right": raw_data['face_angle'] is not None and 2.0 <= raw_data['face_angle'] < 6.0,
         "face_extreme_right": raw_data['face_angle'] is not None and 6.0 <= raw_data['face_angle'],
 
         # Path facts - with None checks

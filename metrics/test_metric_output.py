@@ -385,10 +385,11 @@ def remove_z_increasing_tail(frames, verbose=True, min_frames_required=3):
     return frames[:cutoff_idx]
 
 
-# Worst-case scenario: If we only have 2 frames, we must use finite difference
+# Worst case!
 def finite_difference_fallback(frames, verbose=True):
     """
     Calculate velocity using finite differences when fewer than 3 frames available.
+    Uses the last two frames where z is decreasing (object moving toward camera).
     
     Args:
         frames: List of 1-2 frames with 'time', 'x', 'y', 'z' keys
@@ -400,14 +401,34 @@ def finite_difference_fallback(frames, verbose=True):
     if len(frames) < 2:
         raise ValueError("Need at least 2 frames for finite difference velocity estimation.")
     
-    # Use last two frames for velocity estimate
-    dt = frames[-1]['time'] - frames[-2]['time']
-    if dt == 0:
-        raise ValueError("Last two frames have identical timestamps.")
+    # Find the last two frames where z is decreasing
+    last_decreasing_idx = None
+    second_last_decreasing_idx = None
     
-    x_rate = (frames[-1]['x'] - frames[-2]['x']) / dt
-    y_rate = (frames[-1]['y'] - frames[-2]['y']) / dt
-    z_rate = (frames[-1]['z'] - frames[-2]['z']) / dt
+    for i in range(len(frames) - 1, 0, -1):
+        z_change = frames[i]['z'] - frames[i-1]['z']
+        
+        # Found a decreasing pair
+        if z_change < 0:
+            last_decreasing_idx = i
+            second_last_decreasing_idx = i - 1
+            break
+    
+    # If no decreasing pair found, use last two frames
+    if last_decreasing_idx is None:
+        if verbose:
+            print("Warning: No decreasing z frames found, using last 2 frames for finite difference")
+        last_decreasing_idx = len(frames) - 1
+        second_last_decreasing_idx = len(frames) - 2
+    
+    # Calculate finite difference using the selected frames
+    dt = frames[last_decreasing_idx]['time'] - frames[second_last_decreasing_idx]['time']
+    if dt == 0:
+        raise ValueError("Selected frames have identical timestamps.")
+    
+    x_rate = (frames[last_decreasing_idx]['x'] - frames[second_last_decreasing_idx]['x']) / dt
+    y_rate = (frames[last_decreasing_idx]['y'] - frames[second_last_decreasing_idx]['y']) / dt
+    z_rate = (frames[last_decreasing_idx]['z'] - frames[second_last_decreasing_idx]['z']) / dt
     
     diagnostics = {
         'r2_x': None,
@@ -427,15 +448,16 @@ def finite_difference_fallback(frames, verbose=True):
     if verbose:
         print(f"\n=== Velocity Finite Difference Estimation ===")
         print(f"Frames used: {len(frames)} (insufficient for fitting)")
-        print(f"Method: Simple finite difference between last two frames")
+        print(f"Method: Finite difference between frames {second_last_decreasing_idx} and {last_decreasing_idx} (z decreasing)")
+        print(f"  Frame {second_last_decreasing_idx}: t={frames[second_last_decreasing_idx]['time']:.3f}, z={frames[second_last_decreasing_idx]['z']:.2f}")
+        print(f"  Frame {last_decreasing_idx}: t={frames[last_decreasing_idx]['time']:.3f}, z={frames[last_decreasing_idx]['z']:.2f}")
         print(f"\nVelocity components:")
         print(f"  x_rate: {x_rate:+.3f} units/sec")
         print(f"  y_rate: {y_rate:+.3f} units/sec")
         print(f"  z_rate: {z_rate:+.3f} units/sec")
         print(f"\nNote: No fit quality metrics available for finite difference method.")
 
-
-    # Lessen the extremity of the x and y rate of change
+    # Apply scaling factor to x and y
     x_rate = x_rate * FACTOR_BALL_X_Y_DELTA
     y_rate = y_rate * FACTOR_BALL_X_Y_DELTA
     

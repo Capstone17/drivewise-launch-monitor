@@ -7,7 +7,9 @@ import matplotlib.pyplot as plt
 from scipy.signal import savgol_filter
 
 
-FACTOR_X_Y_DELTA = 0.2  # Hardcoded factor to multiply dx and dy, since there is not enough time to fix it in the ball detector code
+FACTOR_BALL_X_Y_DELTA = 0.4  # Hardcoded factor to multiply dx and dy, since there is not enough time to fix it in the ball detector code
+FACTOR_CLUB_X_Y_DELTA = 0.2  # Hardcoded factor to multiply dx and dy, since there is not enough time to fix it in the ball detector code
+
 
 # -------------------------
 # Find Impact
@@ -267,8 +269,8 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
 
 
     # Lessen the extremity of the x and y rate of change
-    x_rate = x_rate * FACTOR_X_Y_DELTA
-    y_rate = y_rate * FACTOR_X_Y_DELTA
+    x_rate = x_rate * FACTOR_BALL_X_Y_DELTA
+    y_rate = y_rate * FACTOR_BALL_X_Y_DELTA
 
     return x_rate, y_rate, z_rate, diagnostics
 
@@ -383,10 +385,11 @@ def remove_z_increasing_tail(frames, verbose=True, min_frames_required=3):
     return frames[:cutoff_idx]
 
 
-# Worst-case scenario: If we only have 2 frames, we must use finite difference
+# Worst case!
 def finite_difference_fallback(frames, verbose=True):
     """
     Calculate velocity using finite differences when fewer than 3 frames available.
+    Uses the last two frames where z is decreasing (object moving toward camera).
     
     Args:
         frames: List of 1-2 frames with 'time', 'x', 'y', 'z' keys
@@ -398,14 +401,34 @@ def finite_difference_fallback(frames, verbose=True):
     if len(frames) < 2:
         raise ValueError("Need at least 2 frames for finite difference velocity estimation.")
     
-    # Use last two frames for velocity estimate
-    dt = frames[-1]['time'] - frames[-2]['time']
-    if dt == 0:
-        raise ValueError("Last two frames have identical timestamps.")
+    # Find the last two frames where z is decreasing
+    last_decreasing_idx = None
+    second_last_decreasing_idx = None
     
-    x_rate = (frames[-1]['x'] - frames[-2]['x']) / dt
-    y_rate = (frames[-1]['y'] - frames[-2]['y']) / dt
-    z_rate = (frames[-1]['z'] - frames[-2]['z']) / dt
+    for i in range(len(frames) - 1, 0, -1):
+        z_change = frames[i]['z'] - frames[i-1]['z']
+        
+        # Found a decreasing pair
+        if z_change < 0:
+            last_decreasing_idx = i
+            second_last_decreasing_idx = i - 1
+            break
+    
+    # If no decreasing pair found, use last two frames
+    if last_decreasing_idx is None:
+        if verbose:
+            print("Warning: No decreasing z frames found, using last 2 frames for finite difference")
+        last_decreasing_idx = len(frames) - 1
+        second_last_decreasing_idx = len(frames) - 2
+    
+    # Calculate finite difference using the selected frames
+    dt = frames[last_decreasing_idx]['time'] - frames[second_last_decreasing_idx]['time']
+    if dt == 0:
+        raise ValueError("Selected frames have identical timestamps.")
+    
+    x_rate = (frames[last_decreasing_idx]['x'] - frames[second_last_decreasing_idx]['x']) / dt
+    y_rate = (frames[last_decreasing_idx]['y'] - frames[second_last_decreasing_idx]['y']) / dt
+    z_rate = (frames[last_decreasing_idx]['z'] - frames[second_last_decreasing_idx]['z']) / dt
     
     diagnostics = {
         'r2_x': None,
@@ -425,12 +448,18 @@ def finite_difference_fallback(frames, verbose=True):
     if verbose:
         print(f"\n=== Velocity Finite Difference Estimation ===")
         print(f"Frames used: {len(frames)} (insufficient for fitting)")
-        print(f"Method: Simple finite difference between last two frames")
+        print(f"Method: Finite difference between frames {second_last_decreasing_idx} and {last_decreasing_idx} (z decreasing)")
+        print(f"  Frame {second_last_decreasing_idx}: t={frames[second_last_decreasing_idx]['time']:.3f}, z={frames[second_last_decreasing_idx]['z']:.2f}")
+        print(f"  Frame {last_decreasing_idx}: t={frames[last_decreasing_idx]['time']:.3f}, z={frames[last_decreasing_idx]['z']:.2f}")
         print(f"\nVelocity components:")
         print(f"  x_rate: {x_rate:+.3f} units/sec")
         print(f"  y_rate: {y_rate:+.3f} units/sec")
         print(f"  z_rate: {z_rate:+.3f} units/sec")
         print(f"\nNote: No fit quality metrics available for finite difference method.")
+
+    # Apply scaling factor to x and y
+    x_rate = x_rate * FACTOR_BALL_X_Y_DELTA
+    y_rate = y_rate * FACTOR_BALL_X_Y_DELTA
     
     return x_rate, y_rate, z_rate, diagnostics
 
@@ -448,6 +477,7 @@ def savgol_velocity(json_path, polyorder=2, max_window=13):
     Estimate velocity components (x, y, z) at the last time point in a JSON file
     using Savitzky-Golay smoothing/derivative, or finite difference if only two frames.
     Ensures dz is always negative (object moving toward camera).
+    Applies unit correction to x and y components.
 
     Args:
         json_path (str): Path to JSON file with position data (time, x, y, z).
@@ -456,6 +486,7 @@ def savgol_velocity(json_path, polyorder=2, max_window=13):
 
     Returns:
         tuple: (x_vel, y_vel, z_vel) at the last time point in units/sec.
+               x_vel and y_vel are scaled by FACTOR_CLUB_X_Y_DELTA.
 
     Raises:
         ValueError: If fewer than 2 frames in the file.
@@ -471,8 +502,8 @@ def savgol_velocity(json_path, polyorder=2, max_window=13):
         dt = frames[1]['time'] - frames[0]['time']
         if dt == 0:
             raise ValueError("Timestamps of the two frames are identical.")
-        x_vel = (frames[1]['x'] - frames[0]['x']) / dt
-        y_vel = (frames[1]['y'] - frames[0]['y']) / dt
+        x_vel = (frames[1]['x'] - frames[0]['x']) / dt * FACTOR_CLUB_X_Y_DELTA
+        y_vel = (frames[1]['y'] - frames[0]['y']) / dt * FACTOR_CLUB_X_Y_DELTA
         z_vel = (frames[1]['z'] - frames[0]['z']) / dt
         return x_vel, y_vel, z_vel
     
@@ -520,8 +551,8 @@ def savgol_velocity(json_path, polyorder=2, max_window=13):
 
         # Check if dz is negative (as expected)
         if z_deriv[-1] < 0:
-            # Good! Return velocities
-            return x_deriv[-1], y_deriv[-1], z_deriv[-1]
+            # Good! Return velocities with scaling applied to x and y
+            return x_deriv[-1] * FACTOR_CLUB_X_Y_DELTA, y_deriv[-1] * FACTOR_CLUB_X_Y_DELTA, z_deriv[-1]
         else:
             # dz is positive - remove one more frame from tail and retry
             frames_removed += 1
@@ -530,7 +561,8 @@ def savgol_velocity(json_path, polyorder=2, max_window=13):
 
     # If still positive after max removals, force it negative
     print(f"Warning: Could not achieve negative dz after removing {frames_removed} frames. Forcing sign.")
-    return x_deriv[-1], y_deriv[-1], -abs(z_deriv[-1])
+    return x_deriv[-1] * FACTOR_CLUB_X_Y_DELTA, y_deriv[-1] * FACTOR_CLUB_X_Y_DELTA, -abs(z_deriv[-1])
+
 
 
 # -------------------------
