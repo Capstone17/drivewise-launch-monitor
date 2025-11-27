@@ -50,6 +50,7 @@ BALL_SCORE_THRESHOLD = 0.4
 MOTION_WINDOW_SCORE_THRESHOLD = 0.1
 MOTION_WINDOW_MIN_ASPECT_RATIO = 0.65
 MAX_CENTER_JUMP_PX = 120.0
+MAX_BALL_DISTANCE_CM = 180.0  # drop detections once the ball is ~1.8 m away
 
 # ----------------------------
 # Motion window parameters
@@ -344,8 +345,8 @@ def check_head_for_stationary_ball(
             if score < score_threshold:
                 continue
             x1, y1, x2, y2 = det["bbox"]
-            cx, cy, radius, _ = bbox_to_ball_metrics(x1, y1, x2, y2)
-            if radius < MIN_BALL_RADIUS_PX:
+            cx, cy, radius, distance = bbox_to_ball_metrics(x1, y1, x2, y2)
+            if radius < MIN_BALL_RADIUS_PX or distance >= MAX_BALL_DISTANCE_CM:
                 continue
             if score > best_score:
                 best_score = score
@@ -1270,8 +1271,8 @@ def find_motion_window(
             inside = True
             if frame_width and frame_height:
                 inside = bbox_within_image(det["bbox"], float(frame_width), float(frame_height))
-            cx, cy, radius, _ = bbox_to_ball_metrics(x1, y1, x2, y2)
-            if radius < MIN_BALL_RADIUS_PX:
+            cx, cy, radius, distance = bbox_to_ball_metrics(x1, y1, x2, y2)
+            if radius < MIN_BALL_RADIUS_PX or distance >= MAX_BALL_DISTANCE_CM:
                 continue
             center = np.array([cx, cy], dtype=float)
             candidate = {
@@ -1588,7 +1589,7 @@ def process_video(
             if best_det["score"] >= BALL_SCORE_THRESHOLD:
                 x1, y1, x2, y2 = best_det["bbox"]
                 cx, cy, rad, distance = bbox_to_ball_metrics(x1, y1, x2, y2)
-                if rad >= MIN_BALL_RADIUS_PX:
+                if rad >= MIN_BALL_RADIUS_PX and distance < MAX_BALL_DISTANCE_CM:
                     center = np.array([cx, cy], dtype=float)
                     if last_ball_center is not None and np.linalg.norm(center - last_ball_center) > MAX_CENTER_JUMP_PX:
                         pass
