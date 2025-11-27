@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 from scipy.signal import savgol_filter
 
 
+FACTOR_X_Y_DELTA = 0.2  # Hardcoded factor to multiply dx and dy, since there is not enough time to fix it in the ball detector code
+
 # -------------------------
 # Find Impact
 # -------------------------
@@ -262,6 +264,11 @@ def ball_velocity_components(json_path, time_threshold, apply_filter=True,
             print(f"\nWARNING: Poor fit quality detected (min R² = {diagnostics['r2_min']:.3f} < {warn_threshold})")
         elif diagnostics['r2_min'] is not None:
             print(f"\nGood fit quality (all R² > {warn_threshold})")
+
+
+    # Lessen the extremity of the x and y rate of change
+    x_rate = x_rate * FACTOR_X_Y_DELTA
+    y_rate = y_rate * FACTOR_X_Y_DELTA
 
     return x_rate, y_rate, z_rate, diagnostics
 
