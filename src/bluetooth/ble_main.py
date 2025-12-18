@@ -1,0 +1,712 @@
+# ---------------------------------------
+#
+# To shut off script temporarily: sudo systemctl stop webcamgolf.service
+#
+# ---------------------------------------
+
+
+import logging
+
+import dbus
+import dbus.exceptions
+import dbus.mainloop.glib
+import dbus.service
+
+from ble import (
+    Advertisement,
+    Characteristic,
+    Service,
+    Application,
+    find_adapter,
+    Descriptor,
+    Agent,
+)
+
+import array
+import numpy as np
+import sys
+import subprocess
+import json
+import os
+import glob
+import time
+from datetime import datetime
+import threading
+
+from video_ball_detector import process_video, TFLiteBallDetector, check_tail_for_ball
+from metrics.ruleBasedSystem import rule_based_system
+from embedded.exposure_calibration import calibrate_exposure
+from embedded.crop_calibration import calibrate_crop
+from battery import return_battery_power
+from status_led import set_status_led_color
+
+MainLoop = None
+try:
+    from gi.repository import GLib
+
+    MainLoop = GLib.MainLoop
+except ImportError:
+    import gobject as GObject
+
+    MainLoop = GObject.MainLoop
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logHandler = logging.StreamHandler()
+filelogHandler = logging.FileHandler("logs.log")
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logHandler.setFormatter(formatter)
+filelogHandler.setFormatter(formatter)
+logger.addHandler(filelogHandler)
+logger.addHandler(logHandler)
+
+CALIBRATION_PATH = os.path.join(os.path.dirname(__file__), "calibration", "camera_calib.npz")
+try:
+    with np.load(CALIBRATION_PATH) as calib_file:
+        _camera_matrix = calib_file["camera_matrix"]
+        _dist_coeffs = calib_file["dist_coeffs"]
+except Exception:
+    _camera_matrix = np.eye(3, dtype=np.float32)
+    _dist_coeffs = np.zeros((1, 5), dtype=np.float32)
+
+if _dist_coeffs.ndim == 1:
+    _dist_coeffs = _dist_coeffs.reshape(1, -1)
+
+CALIBRATION_PARAMS = {
+    "camera_matrix": _camera_matrix.astype(np.float32, copy=True),
+    "dist_coeffs": _dist_coeffs.astype(np.float32, copy=True),
+    "focal_length": float(_camera_matrix[0, 0]),
+    "ball_radius": 2.38,
+    "fx": float(_camera_matrix[0, 0]),
+    "fy": float(_camera_matrix[1, 1]),
+    "cx": float(_camera_matrix[0, 2]),
+    "cy": float(_camera_matrix[1, 2]),
+}
+
+
+BaseUrl = "XXXXXXXXXXXX"
+
+mainloop = None
+
+BLUEZ_SERVICE_NAME = "org.bluez"
+GATT_MANAGER_IFACE = "org.bluez.GattManager1"
+LE_ADVERTISEMENT_IFACE = "org.bluez.LEAdvertisement1"
+LE_ADVERTISING_MANAGER_IFACE = "org.bluez.LEAdvertisingManager1"
+GATT_CHRC_IFACE =    'org.bluez.GattCharacteristic1'
+
+
+class InvalidArgsException(dbus.exceptions.DBusException):
+    _dbus_error_name = "org.freedesktop.DBus.Error.InvalidArgs"
+
+
+class NotSupportedException(dbus.exceptions.DBusException):
+    _dbus_error_name = "org.bluez.Error.NotSupported"
+
+
+class NotPermittedException(dbus.exceptions.DBusException):
+    _dbus_error_name = "org.bluez.Error.NotPermitted"
+
+
+class InvalidValueLengthException(dbus.exceptions.DBusException):
+    _dbus_error_name = "org.bluez.Error.InvalidValueLength"
+
+
+class FailedException(dbus.exceptions.DBusException):
+    _dbus_error_name = "org.bluez.Error.Failed"
+
+
+def register_app_cb():
+    logger.info("GATT application registered")
+
+
+def register_app_error_cb(error):
+    logger.critical("Failed to register application: " + str(error))
+    mainloop.quit()
+
+
+class rpiService(Service):
+    """
+    Dummy test service that provides characteristics and descriptors that
+    exercise various API functionality.
+    """
+
+    rpi_SVC_UUID = "96f0284d-8895-4c08-baaf-402a2f7e8c5b"
+
+    def __init__(self, bus, index):
+        Service.__init__(self, bus, index, self.rpi_SVC_UUID, True)
+        self.camera_event = threading.Event()
+        self.exposure = "200"
+        self.add_characteristic(SwingAnalysisCharacteristic(bus, 0, self))
+        self.add_characteristic(FindIPCharacteristic(bus, 2, self))
+        self.add_characteristic(CalibrationCharacteristic(bus, 3, self))
+        self.add_characteristic(BatteryMonitorCharacteristic(bus, 4, self))
+        self.add_characteristic(CancelSwingCharacteristic(bus, 5, self))
+
+
+class SwingAnalysisCharacteristic(Characteristic):
+    uuid = "d9c146d3-df83-49ec-801d-70494060d6d8"
+    description = b"Start analysis and get results!"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["write", "notify"], service,
+        )
+        self.notifying = False
+        self.value = {
+            "metrics": None,
+            "feedback": None
+        }
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 0, self))
+        
+        
+    def WriteValue(self, value, options):
+        logger.debug("Received write command")
+        if not self.service.camera_event.is_set():
+            self.service.camera_event.set()
+            threading.Thread(target=self.swingAnalysisLoop,daemon=True).start()
+            logger.info("started capture thread")
+        else:
+            logger.info("Capture already running")
+
+    def swingAnalysisLoop(self):
+        logger.info("swing analysis loop function entered")
+
+        while self.service.camera_event.is_set():
+            try:
+                set_status_led_color("yellow")
+                ball_detected = False
+
+                logger.info("STAGE1: before auto_capture is called")
+
+                while not ball_detected:
+                    logger.info("Capturing short burst of frames to detect ball...")
+                    try:
+                        subprocess.run(
+                            [
+                                'rpicam-vid',
+                                '-o', 'detect_ball.mp4',
+                                '--level', '4.2',
+                                '--camera', '0',
+                                '--width', '224',
+                                '--height', '128',
+                                '--no-raw',
+                                '-n',
+                                '--shutter', str(self.service.exposure),
+                                '--frames', '5',
+                            ],
+                            check=True,
+                            capture_output=True,
+                        )
+                    except subprocess.CalledProcessError as e:
+                        logger.exception("Ball detection capture command failed")
+                        self._reset_shared_data("Could not capture the ball")
+                        self.end_loop()
+                        return
+
+                    logger.info("Processing frames to check for ball...")
+                    detector = getattr(self, "_ball_detector", None)
+                    if detector is None:
+                        try:
+                            detector = TFLiteBallDetector(
+                                "golf_ball_detector.tflite",
+                                conf_threshold=0.05,
+                            )
+                        except Exception:
+                            logger.exception("Failed to initialise ball detector")
+                            self._reset_shared_data("Could not initialize the ball detector")
+                            self.end_loop()
+                            return
+                        self._ball_detector = detector
+
+                    try:
+                        tail_check = check_tail_for_ball(
+                            "detect_ball.mp4",
+                            detector=detector,
+                            calibration=CALIBRATION_PARAMS,
+                            frames_to_check=5,
+                            stride=1,
+                            score_threshold=0.25,
+                            min_hits=1,
+                        )
+                        ball_detected = tail_check.ball_present
+                    except Exception:
+                        logger.exception("Low-rate ball detection failed")
+                        ball_detected = False
+                        self._reset_shared_data("Ball detection failed")
+                        self.end_loop()
+                        return
+
+                    logger.info("STAGE2: low freq video recording started STATE: %s", ball_detected)
+
+                    time.sleep(1.5)  # Wait before next attempt
+                    if(not self.service.camera_event.is_set()):
+                        logger.debug("Swing capture canceled by user")
+                        self.end_loop()
+                        return
+
+                logger.info("Ball detected! Turning on green LED...")
+
+                logger.info("Starting full video capture...")
+                detector = getattr(self, "_ball_detector", None)
+                if detector is None:
+                    try:
+                        detector = TFLiteBallDetector(
+                            "golf_ball_detector.tflite",
+                            conf_threshold=0.05,
+                        )
+                    except Exception:
+                        logger.exception("Failed to initialise ball detector for high-rate capture")
+                        self._reset_shared_data("Unable to initialise ball detector.")
+                        if self.notifying:
+                            self.notify_client()
+                        return
+                    self._ball_detector = detector
+
+                output_dir = os.path.expanduser("~/Documents/webcamGolf")
+                ball_detected_high = True
+                latest_file = None
+                tail_check = None
+                high_attempt = 0
+                max_high_attempts = 20
+
+                while ball_detected_high and high_attempt < max_high_attempts:
+                    high_attempt += 1
+                    logger.info("STAGE3: high freq video recording started STATE: %s", ball_detected_high)
+                    set_status_led_color("green")
+
+                    try:
+
+                        # Get the current date and time for testing
+                        current_time = datetime.now()
+                        print(f"Time at video start: {current_time.time()}")
+
+                        # 5s and 7s commonly have misses where the user hits the ball in between videos
+                        subprocess.run(
+                            ["./embedded/rpicam_run.sh", "9s", str(self.service.exposure)],
+                            check=True,
+                            capture_output=True,
+                        )
+
+                        # Get the current date and time for testing
+                        current_time = datetime.now()
+                        print(f"Time at video end: {current_time.time()}")
+
+                    except subprocess.CalledProcessError:
+                        logger.exception("Full video capture failed")
+                        self._reset_shared_data("Script execution failed during capture")
+                        self.end_loop()
+                        return
+
+                    mp4_files = glob.glob(os.path.join(output_dir, "vid*.mp4"))
+                    if not mp4_files:
+                        logger.error("No vid*.mp4 found in webcamGolf after high-rate capture")
+                        break
+
+                    latest_file = max(mp4_files, key=os.path.getmtime)
+
+                    try:
+                        tail_check = check_tail_for_ball(
+                            latest_file,
+                            detector=detector,
+                            calibration=CALIBRATION_PARAMS,
+                            frames_to_check=5,
+                            stride=1,
+                            score_threshold=0.25,
+                            min_hits=1,
+                        )
+                        ball_detected_high = tail_check.ball_present
+                    except Exception:
+                        logger.exception("High-rate ball detection failed; assuming ball exited frame.")
+                        ball_detected_high = False
+                        self._reset_shared_data("High-rate ball detection failed; assuming ball exited frame.")
+                    
+                    if(not self.service.camera_event.is_set()):
+                        logger.debug("Swing capture canceled by user")
+                        self.end_loop()
+                        return
+
+                if ball_detected_high and high_attempt >= max_high_attempts:
+                    logger.warning(
+                        "High-rate capture limit reached (%d attempts) with ball still detected",
+                        max_high_attempts,
+                    )
+                    raise RuntimeError(
+                        f"High-rate capture limit reached after {max_high_attempts} attempts with ball still detected."
+                    )
+
+                logger.info("STAGE4: STATE: %s latest video is sent to video_ball_detector.py", ball_detected_high)
+                
+                set_status_led_color("red")
+
+                logger.info("Processing video data...")
+                try:
+                    if latest_file is None:
+                        raise FileNotFoundError("No vid*.mp4 found in webcamGolf")
+                    logger.info(f"Latest video file: {latest_file}")
+
+                    result = process_video(
+                        latest_file,
+                        "ball_coords.json",
+                        "sticker_coords.json",
+                        "ball_frames",
+                        calibration=CALIBRATION_PARAMS,
+                    )
+
+                    logger.info("Running rule-based analysis...")
+                    self.value = rule_based_system("mid-iron")
+                    # self.value = self.service.shared_data["metrics"]
+
+                except (FileNotFoundError, RuntimeError) as e:
+                    logger.exception(f"Video processing failed: {e}")
+                    self._reset_shared_data("Swing analysis failed! Please try again.")
+                    self.end_loop()
+                    return
+                else:
+                    logger.debug("Updated value after processing")
+                    if self.notifying:
+                        self.notify_client()
+
+            except Exception:
+                logger.exception("Low-rate ball detection failed")
+                self.end_loop()
+
+        
+    def StartNotify(self):
+        if self.notifying:
+            logger.debug("Already notifying")
+            return
+        logger.debug("StartNotify called for analyze swing")
+        self.notifying = True
+        # self.notify_client()
+
+    def StopNotify(self):
+        if not self.notifying:
+            logger.debug("Not currently notifying")
+            return
+        logger.debug("StopNotify called for analyze swing")
+        self.notifying = False
+
+    def notify_client(self):
+        if not self.notifying:
+            logger.debug("Not notifying, skipping notify_client")
+            return
+
+        result_bytes = json.dumps(self.value["metrics"]).encode("utf-8")
+        logger.debug("Notifying mobile app with metric values")
+        self.PropertiesChanged(
+            GATT_CHRC_IFACE,
+            {"Value": [dbus.Byte(b) for b in result_bytes]},
+            [],
+        )
+        result_bytes = json.dumps(self.value["feedback"]).encode("utf-8")
+        logger.debug("Notifying mobile app with feedback values")
+        self.PropertiesChanged(
+            GATT_CHRC_IFACE,
+            {"Value": [dbus.Byte(b) for b in result_bytes]},
+            [],
+        )
+
+    def _reset_shared_data(self, feedback_message):
+        logger.debug("Resetting shared data because of failure: %s", feedback_message)
+        self.value["metrics"] = None
+        self.value["feedback"] = feedback_message
+        # self.value = self.service.shared_data["metrics"]
+
+    def end_loop(self):
+        if self.notifying:
+            self.notify_client()
+        set_status_led_color("off")
+        self.service.camera_event.clear()
+        logger.info("Capture loop ended and event cleared")
+
+    
+class FindIPCharacteristic(Characteristic):
+    uuid = "2c75511d-11b8-407d-b275-a295ef2c199f"
+    description = b"Read to get IP!"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["read"], service,
+        )
+        self.value = "IP Failed"
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 2, self))
+
+    def ReadValue(self, options):
+        # 
+        self.value = subprocess.check_output(["hostname", "-I"], text=True, )
+        logger.debug("Hostname found: " + repr(self.value))
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        return [dbus.Byte(b) for b in result_bytes]
+
+
+class CalibrationCharacteristic(Characteristic):
+    uuid = "778c5d1a-315f-4baf-a23b-6429b84835e3"
+    description = b"Use to calibrate the exposure of the camera!"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["write", "notify"], service,
+        )
+        self.notifying = False
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 3, self))
+
+    def WriteValue(self, value, options):
+        logger.debug("received write command for calibration")
+        try: 
+            # Run calibration script
+            self.service.exposure = calibrate_exposure()
+            logger.info(f"Exposure from calibration: {self.service.exposure}")
+            # Run config script
+            subprocess.run(
+                [
+                    "./embedded/GS_config.sh",
+                    # , If we want to specify width or height we should do so here
+                    "224", # Width
+                    "128"  # Height
+                ],
+                check=True,
+            )
+            logger.info("Calibrating crop")
+            self.service.crop_offset = calibrate_crop(self.service.exposure)
+        except Exception as e:
+            logger.error(f"Calibration function failed: {e}")
+            if self.notifying:
+                self.notify_client()
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"GS crop script failed: {e}")
+            if self.notifying:
+                self.notify_client()
+
+        else:
+            # This block runs only if try block completes without exception
+            logger.debug("Calibration and GS_Crop successful")
+            if self.notifying:
+                self.notify_client()
+
+    def StartNotify(self):
+        if self.notifying:
+            logger.debug("Already notifying")
+            return
+        logger.debug("StartNotify called")
+        self.notifying = True
+        # self.notify_client()
+
+    def StopNotify(self):
+        if not self.notifying:
+            logger.debug("Not currently notifying")
+            return
+        logger.debug("StopNotify called")
+        self.notifying = False
+
+    def notify_client(self):
+        if not self.notifying:
+            logger.debug("Not notifying, skipping notify_client")
+            return
+
+        self.value = "success"
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        logger.debug("Notifying values changed")
+        self.PropertiesChanged(
+        GATT_CHRC_IFACE,
+        {"Value": [dbus.Byte(b) for b in result_bytes]},
+        []
+        )
+
+
+class BatteryMonitorCharacteristic(Characteristic):
+    uuid = "a834f0f7-89cc-453b-8be4-2905d27344bf"
+    description = b"Regularly send the battery status to the app!"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["read","notify"], service,
+        )
+        self.notifying = False
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 4, self))
+
+    def ReadValue(self, options):
+        # 
+        self.value = return_battery_power()
+        logger.debug("reading battery power: " + repr(self.value))
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        return [dbus.Byte(b) for b in result_bytes]
+
+    def StartNotify(self):
+        if self.notifying:
+            logger.debug("Already notifying")
+            return
+        logger.debug("StartNotify called for battery")
+        self.notifying = True
+
+        self.value = return_battery_power()
+        self.notify_client()
+
+        # start periodic updates every 5 seconds
+        self.notify_timer = GLib.timeout_add_seconds(60, self.check_battery)
+
+    def StopNotify(self):
+        if not self.notifying:
+            logger.debug("Not currently notifying")
+            return
+        logger.debug("StopNotify called for battery")
+        self.notifying = False
+
+        # stop the periodic update
+        if self.notify_timer:
+            GLib.source_remove(self.notify_timer)
+            self.notify_timer = None
+
+    def notify_client(self):
+        if not self.notifying:
+            logger.debug("Not notifying, skipping notify_client")
+            return
+
+        result_bytes = json.dumps(self.value).encode('utf-8')
+        logger.debug("Notifying values changed")
+        self.PropertiesChanged(
+        GATT_CHRC_IFACE,
+        {"Value": [dbus.Byte(b) for b in result_bytes]},
+        []
+        )
+
+    def check_battery(self):
+        if not self.notifying:
+            return False  # stops the GLib timer
+
+        self.value = return_battery_power()
+        logger.debug("Battery updated: %s", self.value)
+        self.notify_client()
+
+        return True  # continue calling periodically
+        
+
+class CancelSwingCharacteristic(Characteristic):
+    uuid = "8f1a5ff0-399b-4afe-9cb4-280c8310e388"
+    description = b"Write to cancel swing analysis/camera operation"
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+            self, bus, index, self.uuid, ["write"], service,
+        )
+        self.add_descriptor(CharacteristicUserDescriptionDescriptor(bus, 5, self))
+
+    def WriteValue(self, value, options):
+        logger.debug("received write command for cancel swing")
+        if hasattr(self.service, "camera_event"):
+            self.service.camera_event.clear()
+            logger.info("Stopped capture")
+
+
+class CharacteristicUserDescriptionDescriptor(Descriptor):
+    """
+    Writable CUD descriptor.
+    """
+
+    CUD_UUID = "2901"
+
+    def __init__(
+        self, bus, index, characteristic,
+    ):
+
+        self.value = array.array("B", characteristic.description)
+        self.value = self.value.tolist()
+        Descriptor.__init__(self, bus, index, self.CUD_UUID, ["read"], characteristic)
+
+    def ReadValue(self, options):
+        return self.value
+
+    def WriteValue(self, value, options):
+        if not self.writable:
+            raise NotPermittedException()
+        self.value = value
+
+
+class rpiAdvertisement(Advertisement):
+    def __init__(self, bus, index):
+        Advertisement.__init__(self, bus, index, "peripheral")
+
+        self.add_service_uuid(rpiService.rpi_SVC_UUID)
+
+        self.add_local_name("group17rpi")
+        self.include_tx_power = True
+
+
+def register_ad_cb():
+    logger.info("Advertisement registered")
+
+
+def register_ad_error_cb(error):
+    logger.critical("Failed to register advertisement: " + str(error))
+    mainloop.quit()
+
+AGENT_PATH = "/com/bluez/agent"
+
+
+def main():
+    global mainloop
+    
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+
+    bus = dbus.SystemBus()
+
+    adapter = find_adapter(bus)
+    if not adapter:
+        logger.critical('GattManager1 interface not found')
+        return
+
+    adapter_obj = bus.get_object(BLUEZ_SERVICE_NAME, adapter)
+
+    adapter_props = dbus.Interface(adapter_obj, "org.freedesktop.DBus.Properties")
+
+    # powered property on the controller to on
+    adapter_props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(1))
+
+    # Get manager objs
+    service_manager = dbus.Interface(adapter_obj, GATT_MANAGER_IFACE)
+    ad_manager = dbus.Interface(adapter_obj, LE_ADVERTISING_MANAGER_IFACE)
+
+    advertisement = rpiAdvertisement(bus, 0)
+    obj = bus.get_object(BLUEZ_SERVICE_NAME, "/org/bluez")
+
+    agent = Agent(bus, AGENT_PATH)
+
+    app = Application(bus)
+    app.add_service(rpiService(bus, 2))
+
+    mainloop = MainLoop()
+
+    agent_manager = dbus.Interface(obj, "org.bluez.AgentManager1")
+    agent_manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
+
+    ad_manager.RegisterAdvertisement(
+        advertisement.get_path(),
+        {},
+        reply_handler=register_ad_cb,
+        error_handler=register_ad_error_cb,
+    )
+
+    logger.info("Registering GATT application...")
+
+    service_manager.RegisterApplication(
+        app.get_path(),
+        {},
+        reply_handler=register_app_cb,
+        error_handler=register_app_error_cb,
+    )
+
+    agent_manager.RequestDefaultAgent(AGENT_PATH)
+
+    try:
+        mainloop.run()
+    except KeyboardInterrupt:
+        print("Interrupted. Cleaning up...")
+    finally:
+        ad_manager.UnregisterAdvertisement(advertisement)
+        dbus.service.Object.remove_from_connection(advertisement)
+        agent.Release()
+        mainloop.quit()
+
+
+if __name__ == "__main__":
+    main()
