@@ -222,12 +222,6 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 ---
 
-## Contributing
-
-Contributions and improvements are welcome. For guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md) (if available) or contact the team.
-
----
-
 ## Contact & Support
 
 For questions about setup, deployment, or the technical architecture, please reach out to:
