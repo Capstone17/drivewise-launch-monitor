@@ -189,13 +189,15 @@ Responsible for the circuit and enclosure design of the physical UI of the devic
 
 ## Project Images
 
-![Physical Device](docs/images/device_photo.png)
+![Team Photo](docs/images/team_photo.jpg)
 
-![DriveWise Mobile App Home Screen](docs/images/ui_homepage.png)
+![Physical Device](docs/images/device_photo.png)
 
 ![Physical Device Overview](docs/images/device_overview.png)
 
-![Team Photo](docs/images/team_photo.jpg)
+![DriveWise Mobile App Home Screen](docs/images/ui_homepage.png)
+
+![DriveWise Mobile App Shot Analysis Screen](docs/images/ui_metrics.png)
 
 ---
 
