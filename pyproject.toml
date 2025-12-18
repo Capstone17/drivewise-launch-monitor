@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drivewise-launch-monitor"
+version = "0.1.0"
+description = "Open-source golf launch monitor"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Noah Kremler" },
+  { name = "Daniyar Umuraliyev" },
+  { name = "Hugo Kwon" },
+  { name = "Ryan Martin" },
+  { name = "Husain Kanthawala" },
+  { name = "Sungmin Lee" }
+]
+
+# Copy the packages from requirements.txt into this list
+dependencies = [
+  "matplotlib",
+  "numpy",
+  "onnx",
+  "onnx2tf",
+  "onnxruntime",
+  "opencv-contrib-python",
+  "scipy",
+  "smbus2",
+  "tensorflow",
+  "tflite_runtime"
+]
